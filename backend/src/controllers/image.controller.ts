@@ -446,12 +446,98 @@ export const createCampaign = async (req: Request, res: Response) => {
       targetText,
     );
 
-    const textSuggestions = analysis.suggestions || [];
-    const componentSuggestions = analysis.components || [];
+    let textSuggestions = analysis.suggestions || [];
+    let componentSuggestions = analysis.components || [];
 
     console.log(
       `[Build-Up] Got ${textSuggestions.length} text + ${componentSuggestions.length} components`,
     );
+
+    // ───── Step 1.2: AI Self-Review / Design Feedback Loop (Iterative) ─────
+    console.log("[Build-Up] Step 1.2: AI is reviewing its own suggestion...");
+    const MAX_ITERATIONS = 3;
+    let currentIteration = 0;
+    let lastCritique: any = { status: "FAIL" };
+
+    try {
+      while (currentIteration < MAX_ITERATIONS) {
+        currentIteration++;
+        console.log(
+          `[Build-Up] Iteration ${currentIteration}/${MAX_ITERATIONS}`,
+        );
+
+        // Generate visual preview using SVG overlay (matches editor output)
+        const previewBuffer = await vertexService.generateLayoutPreview(
+          imageBuffer,
+          textSuggestions,
+          componentSuggestions,
+        );
+
+        // Save preview for debugging
+        const previewFilename = `preview-iter${currentIteration}-${Date.now()}.png`;
+        fs.writeFileSync(path.join(uploadDir, previewFilename), previewBuffer);
+
+        // AI Critique as a Professional Graphic Designer
+        const critique = await vertexService.critiqueLayout(
+          imageBuffer,
+          previewBuffer,
+          mimeType,
+          targetText,
+        );
+
+        lastCritique = critique;
+        console.log(`[Build-Up] AI Critique Result: ${critique.status}`);
+
+        if (critique.status === "PASS") {
+          console.log("[Build-Up] ✅ Layout approved by AI Creative Director!");
+          break;
+        }
+
+        // FAIL - needs refinement
+        console.log(
+          `[Build-Up] ❌ AI found issues: ${critique.feedback}. Refining...`,
+        );
+
+        if (currentIteration >= MAX_ITERATIONS) {
+          console.log(
+            "[Build-Up] ⚠️ Max iterations reached. Using best available layout.",
+          );
+          break;
+        }
+
+        // Refine the layout based on critique
+        const refinedAnalysis = await vertexService.refineLayout(
+          imageBuffer,
+          mimeType,
+          targetText,
+          analysis,
+          critique,
+        );
+
+        // Update local variables with refined data
+        if (refinedAnalysis.suggestions) {
+          textSuggestions = refinedAnalysis.suggestions;
+          analysis.suggestions = refinedAnalysis.suggestions;
+        }
+        if (refinedAnalysis.components) {
+          componentSuggestions = refinedAnalysis.components;
+          analysis.components = refinedAnalysis.components;
+        }
+        console.log(
+          `[Build-Up] Layout refined (iteration ${currentIteration}).`,
+        );
+      }
+
+      // Add iteration metadata to response
+      analysis.critique_iterations = currentIteration;
+      analysis.final_critique_status = lastCritique.status;
+      analysis.final_critique_feedback = lastCritique.feedback;
+    } catch (err) {
+      console.error(
+        "[Build-Up] Feedback loop failed, continuing with initial analysis:",
+        err,
+      );
+    }
 
     // ───── Step 1.5: Inpaint Clean Background Image ─────
     let generatedBackgroundImageUrl: string | null = null;

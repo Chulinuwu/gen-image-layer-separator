@@ -120,9 +120,13 @@ export class AIService {
     aspect_ratio?: string;
     resolution?: string;
     inputImages?: Array<{ buffer: Buffer; mimeType: string }>;
+    model?: string;
   }) {
     const model =
-      process.env.GEMINI_IMAGE_ENDPOINT || "gemini-3-pro-image-preview";
+      params.model ||
+      process.env.GEMINI_IMAGE_ENDPOINT ||
+      process.env.GEMINI_IMAGE_ENDPOINT_2 ||
+      "gemini-3-pro-image-preview";
 
     const parts: any[] = [];
     if (params.inputImages) {
@@ -267,7 +271,10 @@ export class AIService {
     mimeType: string,
     targetText: string,
   ) {
-    const model = process.env.GEMINI_MODEL_ENDPOINT || "gemini-3-flash-preview";
+    const model =
+      process.env.GEMINI_MODEL_ENDPOINT_2 ||
+      process.env.GEMINI_MODEL_ENDPOINT ||
+      "gemini-3-flash-preview";
 
     const prompt = `
       Act as a professional graphic designer and advertising specialist.
@@ -278,14 +285,26 @@ export class AIService {
       ${targetText}
       """
       
+      CRITICAL: The AD BRIEF above contains the TEXT CONTENT that MUST appear in the final ad.
+      Even if the reference image doesn't show all text clearly, you MUST extract and suggest
+      placement for ALL text elements mentioned in the brief.
+      
       TASKS:
-      1. TEXT EXTRACTION: Read every text element in the image as it visually appears.
+      1. TEXT EXTRACTION (MANDATORY):
+         - Read EVERY text element from the AD BRIEF above
+         - Also read any visible text in the reference image
          - If multiple text lines are VISUALLY GROUPED TOGETHER (same area, similar style), 
            combine them into ONE suggestion with '\n' (newline character) separating the lines.
          - Example: "ชวนลูกค้าแอป SCB EASY\nและ Robinhood มาสนุก" should be ONE text layer.
          - Only split into separate suggestions if text elements are clearly in different locations or serve different purposes.
+         - YOU MUST RETURN AT LEAST ONE TEXT SUGGESTION. If the brief contains text, it MUST be in 'suggestions'.
+      
       2. Cross-reference the AD BRIEF for correct spelling and intent.
+      
       3. FOR EACH text element/group: provide exact position (bounding box that covers ALL lines), style, and hierarchy.
+         - Use the reference image as a DESIGN GUIDE for placement
+         - If text is not visible in the image, suggest a logical placement based on design principles
+      
       4. COMPONENT EXTRACTION: Identify ALL non-text visual elements in the image that are
          overlaid on the background (NOT the background itself). Examples:
          - Ribbons, banners, tags, price badges
@@ -333,7 +352,7 @@ export class AIService {
       }
       
       IMPORTANT:
-      - 'suggestions' = ONLY text elements
+      - 'suggestions' = ONLY text elements (MUST NOT BE EMPTY if brief contains text)
       - 'components' = ONLY visual/graphic elements (NO text)
       - Position: Be EXTREMELY accurate. The values must be PIXEL-PERFECT so that if I place the components using these percentages, they overlap the reference image EXACTLY.
       - Rotation: Specify the rotation in degrees if the element is not perfectly horizontal.
@@ -388,13 +407,240 @@ export class AIService {
     }
   }
 
+  /**
+   * Render a visual preview of the layout for AI self-review
+   */
+  async generateLayoutPreview(
+    baseImageBuffer: Buffer,
+    suggestions: any[],
+    components: any[],
+  ): Promise<Buffer> {
+    const metadata = await sharp(baseImageBuffer).metadata();
+    const width = metadata.width || 800;
+    const height = metadata.height || 600;
+
+    let svgOverlay = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">`;
+
+    // 1. Draw Components
+    for (const c of components) {
+      if (!c.position || typeof c.position.top === "undefined") continue;
+
+      const top = (c.position.top / 1000) * height;
+      const left = (c.position.left / 1000) * width;
+      const w = (c.position.width / 1000) * width;
+      const h = (c.position.height / 1000) * height;
+
+      svgOverlay += `
+        <rect x="${left}" y="${top}" width="${w}" height="${h}" fill="rgba(0, 255, 0, 0.15)" stroke="#00FF00" stroke-width="2" />
+        <text x="${left + 5}" y="${top + 15}" fill="#00FF00" font-size="12" font-family="sans-serif" font-weight="bold">${c.label || "Component"}</text>
+      `;
+    }
+
+    // 2. Draw Text Layers
+    for (const s of suggestions) {
+      if (!s.position || typeof s.position.top === "undefined") continue;
+
+      const top = (s.position.top / 1000) * height;
+      const left = (s.position.left / 1000) * width;
+      const w = (s.position.width / 1000) * width;
+      const h = (s.position.height / 1000) * height;
+      const fontSize = s.style?.font_size_normalized || 40;
+      const color = s.style?.color_hex || "#FFFFFF";
+
+      svgOverlay += `
+        <rect x="${left}" y="${top}" width="${w}" height="${h}" fill="rgba(255, 255, 255, 0.05)" stroke="#FFFFFF" stroke-dasharray="4" />
+      `;
+
+      const lines = (s.part || "").split("\n");
+      lines.forEach((line: string, i: number) => {
+        const yLine =
+          top + fontSize * 0.8 + i * (fontSize * (s.style?.line_height || 1.2));
+        svgOverlay += `
+          <text 
+            x="${left}" 
+            y="${yLine}" 
+            fill="${color}" 
+            font-size="${fontSize}px" 
+            font-family="${s.style?.font_family || "sans-serif"}" 
+            font-weight="${s.style?.font_weight || "normal"}"
+          >${line}</text>
+        `;
+      });
+    }
+
+    svgOverlay += "</svg>";
+
+    return sharp(baseImageBuffer)
+      .composite([{ input: Buffer.from(svgOverlay), top: 0, left: 0 }])
+      .png()
+      .toBuffer();
+  }
+
+  /**
+   * Step 1.2: AI reviews its own suggestions (as a Professional Graphic Designer)
+   */
+  async critiqueLayout(
+    originalBuffer: Buffer,
+    previewBuffer: Buffer,
+    mimeType: string,
+    targetText: string,
+  ) {
+    const model =
+      process.env.GEMINI_MODEL_ENDPOINT_2 ||
+      process.env.GEMINI_MODEL_ENDPOINT ||
+      "gemini-3-flash-preview";
+
+    const prompt = `
+      You are a SENIOR GRAPHIC DESIGNER reviewing a proposed advertisement layout.
+      You have been given:
+      1. The ORIGINAL reference image
+      2. A PREVIEW showing the proposed text and component placement (with colored overlays)
+      
+      AD BRIEF: "${targetText}"
+      
+      YOUR JOB: Critique this layout with PROFESSIONAL STANDARDS. Be STRICT.
+      
+      CRITICAL CHECKS (ALL must pass):
+      ✓ READABILITY: Is EVERY text element clearly readable?
+         - Check contrast against background (especially on patterns/gradients)
+         - Text on busy areas MUST have shadows/outlines
+         - No text should blend into the background
+      
+      ✓ VISUAL HIERARCHY: Is the most important text (headline) the most prominent?
+         - Size, color, and position should guide the eye correctly
+         - Secondary text should be clearly secondary
+      
+      ✓ COMPOSITION: Are visual elements placed intelligently?
+         - Text must NOT cover faces, eyes, or key product features
+         - Text must NOT be cut off at edges
+         - Components (mascots, people) should not be obscured by text
+      
+      ✓ BALANCE: Is the layout professional and balanced?
+         - Not too cluttered, not too empty
+         - Proper use of white space
+      
+      ✓ INTENT: Does it match the brief and convey the message clearly?
+      
+      PASS CRITERIA: Only return "PASS" if you would be PROUD to show this to a client.
+      If there are ANY issues with readability, placement, or professionalism, return "FAIL".
+      
+      Return as STRICT JSON:
+      {
+        "status": "PASS" | "FAIL",
+        "feedback": "Detailed explanation of what's wrong or what's good",
+        "actionable_steps": ["Specific instruction 1", "Specific instruction 2", ...]
+      }
+      
+      Be specific in actionable_steps. Use coordinate adjustments (e.g., "Move headline down by 100 units"),
+      color changes (e.g., "Change Body text to #FFFFFF"), or style additions (e.g., "Add 'strong' shadow to all headline text").
+    `;
+
+    try {
+      const response = await this.withRetry(() =>
+        this.client.models.generateContent({
+          model,
+          contents: [
+            {
+              role: "user",
+              parts: [
+                {
+                  inlineData: {
+                    data: originalBuffer.toString("base64"),
+                    mimeType,
+                  },
+                },
+                {
+                  inlineData: {
+                    data: previewBuffer.toString("base64"),
+                    mimeType: "image/png",
+                  },
+                },
+                { text: prompt },
+              ],
+            },
+          ],
+        }),
+      );
+
+      const text = response.text || "";
+      const jsonStr = text.match(/\{[\s\S]*\}/)?.[0] || '{"status": "PASS"}';
+      return JSON.parse(jsonStr);
+    } catch (e) {
+      console.error("[GenAI] Critique parsing error:", e);
+      return { status: "PASS" }; // Fail-safe
+    }
+  }
+
+  /**
+   * Step 1.3: Refine layout based on critique
+   */
+  async refineLayout(
+    imageBuffer: Buffer,
+    mimeType: string,
+    targetText: string,
+    previousAnalysis: any,
+    critique: any,
+  ) {
+    const model =
+      process.env.GEMINI_MODEL_ENDPOINT_2 ||
+      process.env.GEMINI_MODEL_ENDPOINT ||
+      "gemini-3-flash-preview";
+    const prompt = `
+      You are a UI/UX expert refining an ad layout based on a Creative Director's critique.
+      
+      ORIGINAL BRIEF: "${targetText}"
+      PREVIOUS PROPOSAL: ${JSON.stringify(previousAnalysis, null, 2)}
+      
+      CRITIQUE & FEEDBACK: 
+      - Status: ${critique.status}
+      - Feedback: ${critique.feedback}
+      - Steps: ${JSON.stringify(critique.actionable_steps)}
+      
+      TASK:
+      Generate an IMPROVED version of the layout JSON. Fix ALL issues mentioned in the critique.
+      Ensure coordinates are 0-1000 and the JSON structure is preserved perfectly.
+      
+      Return as STRICT JSON (no markdown):
+      {
+        "background_description": "...",
+        "campaign_vibe": "...",
+        "suggestions": [...],
+        "components": [...]
+      }
+    `;
+
+    const result = await this.withRetry(() =>
+      this.client.models.generateContent({
+        model,
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                inlineData: { data: imageBuffer.toString("base64"), mimeType },
+              },
+              { text: prompt },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const text = result.text || "";
+    const jsonStr = text.match(/\{[\s\S]*\}/)?.[0] || "";
+    return JSON.parse(jsonStr);
+  }
+
   async separateLayers(
     imageBuffer: Buffer,
     mimeType: string,
     backgroundImageBuffer?: Buffer,
     hintText?: string,
   ) {
-    const model = process.env.GEMINI_MODEL_ENDPOINT || "gemini-3-flash-preview";
+    const model =
+      process.env.GEMINI_MODEL_ENDPOINT_2 ||
+      process.env.GEMINI_MODEL_ENDPOINT ||
+      "gemini-3-flash-preview";
 
     const parts: any[] = [
       { inlineData: { data: imageBuffer.toString("base64"), mimeType } },
@@ -493,7 +739,10 @@ export class AIService {
     mimeType: string,
     backgroundImageBuffer?: Buffer,
   ) {
-    const model = process.env.GEMINI_MODEL_ENDPOINT || "gemini-3-flash-preview";
+    const model =
+      process.env.GEMINI_MODEL_ENDPOINT_2 ||
+      process.env.GEMINI_MODEL_ENDPOINT ||
+      "gemini-3-flash-preview";
 
     const parts: any[] = [
       { inlineData: { data: imageBuffer.toString("base64"), mimeType } },
@@ -623,7 +872,9 @@ export class AIService {
     gridImage: Buffer | null;
   }> {
     const model =
-      process.env.GEMINI_IMAGE_ENDPOINT || "gemini-3-pro-image-preview";
+      process.env.GEMINI_IMAGE_ENDPOINT ||
+      process.env.GEMINI_IMAGE_ENDPOINT_2 ||
+      "gemini-3-pro-image-preview";
 
     const n = batch.length;
     const cols = n > 3 ? 3 : n; // Max 3 columns
