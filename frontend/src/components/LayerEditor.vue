@@ -253,6 +253,60 @@ const deleteLayer = () => {
     selectedLayerId.value = null;
   }
 };
+
+const downloadAsSvg = async () => {
+  const bgImgElement = document.querySelector(".bg-img") as HTMLImageElement;
+  if (!bgImgElement) return;
+
+  const width = bgImgElement.naturalWidth;
+  const height = bgImgElement.naturalHeight;
+
+  // Convert background to base64 for embedding
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.drawImage(bgImgElement, 0, 0);
+  const base64Bg = canvas.toDataURL("image/png");
+
+  let svgContent = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">`;
+
+  // Background
+  svgContent += `<image href="${base64Bg}" width="${width}" height="${height}" x="0" y="0" />`;
+
+  // Layers
+  layers.value.forEach((l) => {
+    const x = (l.x / 100) * width;
+    const y = (l.y / 100) * height + l.style.font_size_normalized * 0.8; // Offset baseline roughly
+
+    // Simple sanitization for XML
+    const escapedContent = l.content
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+
+    svgContent += `
+      <text 
+        x="${x}" 
+        y="${y}" 
+        fill="${l.style.color_hex}" 
+        font-family="${l.style.font_family}, sans-serif" 
+        font-size="${l.style.font_size_normalized}px" 
+        font-weight="${l.style.font_weight}"
+      >${escapedContent}</text>`;
+  });
+
+  svgContent += "</svg>";
+
+  const blob = new Blob([svgContent], { type: "image/svg+xml" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "ad-layout.svg";
+  link.click();
+  URL.revokeObjectURL(url);
+};
 </script>
 
 <template>
@@ -385,11 +439,18 @@ const deleteLayer = () => {
       <div v-else class="placeholder">Upload an image to start editing</div>
     </div>
 
-    <div v-if="layers.length" class="layer-actions mt-4">
+    <div v-if="layers.length" class="layer-actions mt-4 flex gap-4">
       <button :disabled="rendering" @click="renderImage" class="btn-primary">
         {{
           rendering ? "Rendering Final Image..." : "Save & Render Final Image"
         }}
+      </button>
+      <button
+        @click="downloadAsSvg"
+        class="btn-primary"
+        style="background-color: #059669 !important"
+      >
+        Export as SVG (Editable)
       </button>
     </div>
 
@@ -401,13 +462,22 @@ const deleteLayer = () => {
           class="result-img"
         />
       </div>
-      <div class="mt-4">
+      <div class="mt-4 flex gap-4">
         <a
+          v-if="renderedImage"
           :href="`http://localhost:5001${renderedImage}`"
           download
           class="btn-download"
-          >Download Result</a
+          >Download PNG</a
         >
+        <button
+          v-if="layers.length > 0"
+          @click="downloadAsSvg"
+          class="btn-primary"
+          style="background-color: #059669 !important"
+        >
+          Download SVG (Editable)
+        </button>
       </div>
     </div>
   </div>
