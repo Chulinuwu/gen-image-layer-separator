@@ -6,6 +6,7 @@ import {
   generateAndSeprate,
   suggestCampaign,
   renderCampaign,
+  createCampaign,
 } from "../controllers/image.controller";
 
 const router = Router();
@@ -46,6 +47,16 @@ router.post(
     { name: "background", maxCount: 1 },
   ]),
   renderCampaign,
+);
+
+// NEW: Build-Up Pipeline (reference → suggest → die-cut → editor)
+router.post(
+  "/create-campaign",
+  upload.fields([
+    { name: "image", maxCount: 1 },
+    { name: "background", maxCount: 1 },
+  ]),
+  createCampaign,
 );
 
 export default router;

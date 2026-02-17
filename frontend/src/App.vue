@@ -8,16 +8,14 @@ const activeTab = ref("generate");
 
 // Shared Assets State
 const sharedBackgroundUrl = ref<string | undefined>(undefined);
-const sharedCampaignUrl = ref<string | undefined>(undefined);
-const sharedCampaignText = ref<string>("");
+const sharedCampaignData = ref<any>(null);
 
 const onBackgroundGenerated = (url: string) => {
   sharedBackgroundUrl.value = url;
 };
 
-const onCampaignRendered = (data: { url: string; text: string }) => {
-  sharedCampaignUrl.value = data.url;
-  sharedCampaignText.value = data.text;
+const onCampaignCreated = (data: any) => {
+  sharedCampaignData.value = data;
 };
 </script>
 
@@ -38,7 +36,7 @@ const onCampaignRendered = (data: { url: string; text: string }) => {
         :class="{ active: activeTab === 'campaign' }"
         @click="activeTab = 'campaign'"
       >
-        2. Ad Campaign Layout
+        2. Create Campaign
       </button>
       <button
         :class="{ active: activeTab === 'editor' }"
@@ -57,14 +55,13 @@ const onCampaignRendered = (data: { url: string; text: string }) => {
       <CampaignLayout
         v-if="activeTab === 'campaign'"
         :initialBackgroundUrl="sharedBackgroundUrl"
-        @rendered="onCampaignRendered"
+        @created="onCampaignCreated"
         @proceed="activeTab = 'editor'"
       />
       <LayerEditor
         v-if="activeTab === 'editor'"
-        :initialImage="sharedCampaignUrl"
         :initialBackground="sharedBackgroundUrl"
-        :initialHint="sharedCampaignText"
+        :campaignData="sharedCampaignData"
       />
     </main>
   </div>

@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from "vue";
+import { ref, reactive, watch } from "vue";
 
 const props = defineProps({
-  initialImage: String,
   initialBackground: String,
-  initialHint: String,
+  campaignData: Object as () => any,
 });
 
 const loading = ref(false);
@@ -19,37 +18,117 @@ const canvasContainer = ref<HTMLElement | null>(null);
 const renderedImage = ref<string | null>(null);
 const hintText = ref("");
 
-onMounted(async () => {
-  if (props.initialHint) hintText.value = props.initialHint;
-
-  if (props.initialImage) {
+// Watch for background prop
+watch(
+  () => props.initialBackground,
+  async (bgUrl) => {
+    if (!bgUrl) return;
     try {
-      const response = await fetch(
-        `http://localhost:5001${props.initialImage}`,
-      );
-      const blob = await response.blob();
-      selectedFile.value = new File([blob], "campaign.png", {
-        type: blob.type,
-      });
-      previewUrl.value = URL.createObjectURL(selectedFile.value);
-    } catch (e) {
-      console.error("Editor: Failed to load initial image", e);
-    }
-  }
-
-  if (props.initialBackground) {
-    try {
-      const response = await fetch(
-        `http://localhost:5001${props.initialBackground}`,
-      );
+      const response = await fetch(`http://localhost:5001${bgUrl}`);
       const blob = await response.blob();
       bgFile.value = new File([blob], "background.png", { type: blob.type });
       bgPreviewUrl.value = URL.createObjectURL(bgFile.value);
+      console.log("[Editor] Background loaded from prop:", bgUrl);
     } catch (e) {
       console.error("Editor: Failed to load initial background", e);
     }
-  }
-});
+  },
+  { immediate: true },
+);
+
+// Watch for campaign data prop — loads layers immediately when available
+watch(
+  () => props.campaignData,
+  async (data) => {
+    if (!data) return;
+
+    console.log(
+      "[Editor] Campaign data received:",
+      JSON.stringify({
+        referenceImage: data.referenceImage,
+        textLayers: data.textLayers?.length || 0,
+        visualComponents: data.visualComponents?.length || 0,
+      }),
+    );
+
+    // Load background (prefer generated clean background if available)
+    const bgToUse = data.generatedBackgroundImageUrl || data.referenceImage;
+    if (bgToUse) {
+      try {
+        const response = await fetch(`http://localhost:5001${bgToUse}`);
+        const blob = await response.blob();
+        bgFile.value = new File([blob], "background.png", { type: blob.type });
+        bgPreviewUrl.value = URL.createObjectURL(bgFile.value);
+        console.log("[Editor] Background loaded:", bgToUse);
+      } catch (e) {
+        console.error("Editor: Failed to load background", e);
+      }
+    }
+
+    // Load reference image as preview overlay
+    if (data.referenceImage) {
+      try {
+        const response = await fetch(
+          `http://localhost:5001${data.referenceImage}`,
+        );
+        const blob = await response.blob();
+        selectedFile.value = new File([blob], "reference.png", {
+          type: blob.type,
+        });
+        previewUrl.value = URL.createObjectURL(selectedFile.value);
+        console.log("[Editor] Reference image loaded as overlay");
+      } catch (e) {
+        console.error("Editor: Failed to load reference image", e);
+      }
+    }
+
+    // Convert campaign data directly into layers
+    const imageLayers: any[] = [];
+    const textLayers: any[] = [];
+
+    // Visual components → image layers
+    if (data.visualComponents?.length) {
+      data.visualComponents.forEach((comp: any) => {
+        imageLayers.push({
+          type: "image",
+          label: comp.label,
+          imageUrl: `http://localhost:5001${comp.imageUrl}`,
+          id: imageLayers.length,
+          x: comp.position.left / 10,
+          y: comp.position.top / 10,
+          w: comp.position.width / 10,
+          h: comp.position.height / 10,
+          rotation: comp.position.rotation || 0,
+          z_index: comp.z_index || 1,
+        });
+      });
+    }
+
+    // Text suggestions → text layers
+    if (data.textLayers?.length) {
+      data.textLayers.forEach((t: any) => {
+        textLayers.push({
+          type: "text",
+          content: t.part,
+          style: t.style || {},
+          id: imageLayers.length + textLayers.length,
+          x: t.position.left / 10,
+          y: t.position.top / 10,
+          w: t.position.width / 10,
+          h: t.position.height / 10,
+          rotation: t.position.rotation || 0,
+          z_index: t.z_index || 10,
+        });
+      });
+    }
+
+    layers.value = [...imageLayers, ...textLayers];
+    console.log(
+      `[Editor] Loaded ${imageLayers.length} image + ${textLayers.length} text layers from campaign data`,
+    );
+  },
+  { immediate: true },
+);
 
 // Selected Layer for UI
 const selectedLayerId = ref<number | null>(null);
@@ -57,6 +136,19 @@ const selectedLayerId = ref<number | null>(null);
 // Dragging state
 const dragItem = ref<number | null>(null);
 const dragOffset = reactive({ x: 0, y: 0 });
+
+const getShadowStyle = (shadow: string) => {
+  switch (shadow) {
+    case "subtle":
+      return "0 2px 4px rgba(0,0,0,0.5)";
+    case "strong":
+      return "0 4px 12px rgba(0,0,0,0.8), 0 0 10px rgba(0,0,0,0.4)";
+    case "outline":
+      return "1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 0 0 8px rgba(0,0,0,0.5)";
+    default:
+      return "none";
+  }
+};
 
 const onFileChange = (e: any) => {
   const file = e.target.files[0];
@@ -101,14 +193,38 @@ const processImage = async () => {
 
     const data = await response.json();
     if (data.success && data.data.analysis.layers) {
-      layers.value = data.data.analysis.layers.map((l: any, idx: number) => ({
-        ...l,
-        id: idx,
-        x: l.position.left / 10,
-        y: l.position.top / 10,
-        w: l.position.width / 10,
-        h: l.position.height / 10,
-      }));
+      // Worker 1: Text layers
+      const textLayers = data.data.analysis.layers.map(
+        (l: any, idx: number) => ({
+          ...l,
+          type: "text",
+          id: idx,
+          x: l.position.left / 10,
+          y: l.position.top / 10,
+          w: l.position.width / 10,
+          h: l.position.height / 10,
+        }),
+      );
+
+      // Worker 2: Visual component layers (die-cut PNGs from server)
+      const imageLayers: any[] = [];
+      if (data.data.visualComponents && data.data.visualComponents.length > 0) {
+        for (const comp of data.data.visualComponents) {
+          imageLayers.push({
+            type: "image",
+            label: comp.label,
+            imageUrl: `http://localhost:5001${comp.imageUrl}`,
+            id: textLayers.length + imageLayers.length,
+            x: comp.position.left / 10,
+            y: comp.position.top / 10,
+            w: comp.position.width / 10,
+            h: comp.position.height / 10,
+            z_index: comp.z_index || 1,
+          });
+        }
+      }
+
+      layers.value = [...imageLayers, ...textLayers];
     } else {
       error.value = "No layers detected or failed to process";
     }
@@ -132,15 +248,18 @@ const renderImage = async () => {
     }
 
     const suggestions = layers.value.map((l) => ({
-      part: l.content,
+      part: l.type === "text" ? l.content : `[COMPONENT: ${l.label}]`,
+      type: l.type,
+      imageUrl: l.imageUrl,
       position: {
         top: Math.round(l.y * 10),
         left: Math.round(l.x * 10),
         width: Math.round(l.w * 10),
         height: Math.round(l.h * 10),
-        explanation: "Manual manual adjustment",
+        rotation: l.rotation || 0,
+        explanation: "Manual adjustment",
       },
-      style: l.style,
+      style: l.style || {},
     }));
 
     formData.append("suggestions", JSON.stringify(suggestions));
@@ -168,6 +287,7 @@ const renderImage = async () => {
 
 // Dragging Logic
 const startDrag = (e: MouseEvent, idx: number) => {
+  e.stopPropagation();
   selectedLayerId.value = idx;
   dragItem.value = idx;
 
@@ -276,26 +396,55 @@ const downloadAsSvg = async () => {
   svgContent += `<image href="${base64Bg}" width="${width}" height="${height}" x="0" y="0" />`;
 
   // Layers
-  layers.value.forEach((l) => {
+  for (const l of layers.value) {
     const x = (l.x / 100) * width;
-    const y = (l.y / 100) * height + l.style.font_size_normalized * 0.8; // Offset baseline roughly
+    const y = (l.y / 100) * height;
+    const w = (l.w / 100) * width;
+    const h = (l.h / 100) * height;
+    const rotation = l.rotation || 0;
+    const rotateStr = `rotate(${rotation}, ${x + w / 2}, ${y + h / 2})`;
 
-    // Simple sanitization for XML
-    const escapedContent = l.content
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
+    if (l.type === "image") {
+      // Embedding image base64
+      try {
+        const resp = await fetch(l.imageUrl);
+        const blob = await resp.blob();
+        const reader = new FileReader();
+        const base64Img = await new Promise((resolve) => {
+          reader.onloadend = () => resolve(reader.result);
+          reader.readAsDataURL(blob);
+        });
+        svgContent += `
+          <image 
+            href="${base64Img}" 
+            width="${w}" 
+            height="${h}" 
+            x="${x}" 
+            y="${y}" 
+            transform="${rotateStr}" 
+          />`;
+      } catch (e) {
+        console.error("SVG Export: Failed to embed component image", e);
+      }
+    } else {
+      const escapedContent = (l.content || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+      const fontSize = l.style.font_size_normalized || 40;
 
-    svgContent += `
-      <text 
-        x="${x}" 
-        y="${y}" 
-        fill="${l.style.color_hex}" 
-        font-family="${l.style.font_family}, sans-serif" 
-        font-size="${l.style.font_size_normalized}px" 
-        font-weight="${l.style.font_weight}"
-      >${escapedContent}</text>`;
-  });
+      svgContent += `
+        <text 
+          x="${x}" 
+          y="${y + fontSize * 0.8}" 
+          fill="${l.style.color_hex || "#000"}" 
+          font-family="${l.style.font_family || "sans-serif"}" 
+          font-size="${fontSize}px" 
+          font-weight="${l.style.font_weight || "normal"}"
+          transform="${rotateStr}"
+        >${escapedContent}</text>`;
+    }
+  }
 
   svgContent += "</svg>";
 
@@ -345,65 +494,192 @@ const downloadAsSvg = async () => {
     <!-- Active Layer Bar (Moves to top or follows selection) -->
     <div v-if="selectedLayerId !== null" class="property-bar mb-4">
       <div class="flex align-center gap-4 w-full">
+        <!-- Text layer controls -->
+        <template v-if="layers[selectedLayerId]?.type !== 'image'">
+          <div class="prop-item">
+            <label>Text Content</label>
+            <input v-model="layers[selectedLayerId].content" type="text" />
+          </div>
+          <div class="prop-item">
+            <label>Font</label>
+            <select v-model="layers[selectedLayerId].style.font_family">
+              <option value="Inter">Inter (Clean)</option>
+              <option value="Kanit">Kanit (Thai)</option>
+              <option value="Playfair Display">Playfair (Lux)</option>
+              <option value="Roboto Mono">Mono</option>
+              <option value="sans-serif">System Sans</option>
+            </select>
+          </div>
+          <div class="prop-item">
+            <label>Size</label>
+            <div class="flex no-gap">
+              <button
+                class="mini-btn left"
+                @click="layers[selectedLayerId].style.font_size_normalized -= 5"
+              >
+                -
+              </button>
+              <input
+                v-model="layers[selectedLayerId].style.font_size_normalized"
+                type="number"
+                class="w-16"
+              />
+              <button
+                class="mini-btn right"
+                @click="layers[selectedLayerId].style.font_size_normalized += 5"
+              >
+                +
+              </button>
+            </div>
+          </div>
+          <div class="prop-item">
+            <label>Color</label>
+            <div class="color-picker-wrapper">
+              <input
+                v-model="layers[selectedLayerId].style.color_hex"
+                type="color"
+              />
+            </div>
+          </div>
+          <div class="prop-item">
+            <label>Letter Spacing</label>
+            <div class="flex no-gap">
+              <button
+                class="mini-btn left"
+                @click="
+                  layers[selectedLayerId].style.letter_spacing =
+                    (Number(layers[selectedLayerId].style.letter_spacing) ||
+                      0) - 1
+                "
+              >
+                -
+              </button>
+              <input
+                v-model.number="layers[selectedLayerId].style.letter_spacing"
+                type="number"
+                class="w-16"
+              />
+              <button
+                class="mini-btn right"
+                @click="
+                  layers[selectedLayerId].style.letter_spacing =
+                    (Number(layers[selectedLayerId].style.letter_spacing) ||
+                      0) + 1
+                "
+              >
+                +
+              </button>
+            </div>
+          </div>
+          <div class="prop-item">
+            <label>Line Height</label>
+            <div class="flex no-gap">
+              <button
+                class="mini-btn left"
+                @click="
+                  layers[selectedLayerId].style.line_height =
+                    (Number(layers[selectedLayerId].style.line_height) || 1.2) -
+                    0.1
+                "
+              >
+                -
+              </button>
+              <input
+                v-model.number="layers[selectedLayerId].style.line_height"
+                type="number"
+                step="0.1"
+                class="w-16"
+              />
+              <button
+                class="mini-btn right"
+                @click="
+                  layers[selectedLayerId].style.line_height =
+                    (Number(layers[selectedLayerId].style.line_height) || 1.2) +
+                    0.1
+                "
+              >
+                +
+              </button>
+            </div>
+          </div>
+          <div class="prop-item">
+            <label>Effect (Shadow)</label>
+            <select
+              v-model="layers[selectedLayerId].style.shadow"
+              class="w-full"
+            >
+              <option value="none">None</option>
+              <option value="subtle">Subtle Shadow</option>
+              <option value="strong">Strong Shadow</option>
+              <option value="outline">Outline</option>
+            </select>
+          </div>
+        </template>
+        <!-- Mixed controls (Rotation, Opacity) -->
         <div class="prop-item">
-          <label>Text Content</label>
-          <input v-model="layers[selectedLayerId].content" type="text" />
-        </div>
-        <div class="prop-item">
-          <label>Font</label>
-          <select v-model="layers[selectedLayerId].style.font_family">
-            <option value="Inter">Inter (Clean)</option>
-            <option value="Kanit">Kanit (Thai)</option>
-            <option value="Playfair Display">Playfair (Lux)</option>
-            <option value="Roboto Mono">Mono</option>
-            <option value="sans-serif">System Sans</option>
-          </select>
-        </div>
-        <div class="prop-item">
-          <label>Size</label>
+          <label>Rotation</label>
           <div class="flex no-gap">
             <button
               class="mini-btn left"
-              @click="layers[selectedLayerId].style.font_size_normalized -= 5"
+              @click="layers[selectedLayerId].rotation -= 5"
             >
               -
             </button>
             <input
-              v-model="layers[selectedLayerId].style.font_size_normalized"
+              v-model.number="layers[selectedLayerId].rotation"
               type="number"
               class="w-16"
             />
             <button
               class="mini-btn right"
-              @click="layers[selectedLayerId].style.font_size_normalized += 5"
+              @click="layers[selectedLayerId].rotation += 5"
             >
               +
             </button>
           </div>
         </div>
-        <div class="prop-item">
-          <label>Color</label>
-          <div class="color-picker-wrapper">
+        <!-- Scale controls for images -->
+        <template v-if="layers[selectedLayerId].type === 'image'">
+          <div class="prop-item">
+            <label>Width (%)</label>
             <input
-              v-model="layers[selectedLayerId].style.color_hex"
-              type="color"
+              v-model.number="layers[selectedLayerId].w"
+              type="number"
+              step="0.5"
+              class="w-16"
             />
           </div>
-        </div>
+          <div class="prop-item">
+            <label>Height (%)</label>
+            <input
+              v-model.number="layers[selectedLayerId].h"
+              type="number"
+              step="0.5"
+              class="w-16"
+            />
+          </div>
+        </template>
         <div class="prop-item ml-auto">
           <button class="btn-danger" @click="deleteLayer">Delete</button>
         </div>
       </div>
     </div>
 
-    <div class="editor-view" ref="canvasContainer">
+    <div
+      class="editor-view"
+      ref="canvasContainer"
+      @mousedown="selectedLayerId = null"
+    >
       <div
-        v-if="previewUrl"
+        v-if="previewUrl || bgPreviewUrl || layers.length > 0"
         class="canvas"
-        @mousedown.self="selectedLayerId = null"
       >
         <img
-          :src="layers.length > 0 ? bgPreviewUrl || previewUrl : previewUrl"
+          v-if="bgPreviewUrl || previewUrl"
+          :src="
+            (layers.length > 0 ? bgPreviewUrl || previewUrl : previewUrl) ??
+            undefined
+          "
           class="bg-img"
         />
 
@@ -412,17 +688,44 @@ const downloadAsSvg = async () => {
           :key="idx"
           class="text-layer"
           :class="{ active: selectedLayerId === idx }"
-          :style="{
-            top: layer.y + '%',
-            left: layer.x + '%',
-            color: layer.style.color_hex,
-            fontSize: layer.style.font_size_normalized + 'px',
-            fontFamily: `${layer.style.font_family}, sans-serif`,
-            fontWeight: layer.style.font_weight,
-          }"
+          :style="
+            layer.type === 'image'
+              ? {
+                  top: layer.y + '%',
+                  left: layer.x + '%',
+                  width: layer.w + '%',
+                  height: layer.h + '%',
+                  transform: `rotate(${layer.rotation || 0}deg)`,
+                  zIndex: layer.z_index,
+                }
+              : {
+                  top: layer.y + '%',
+                  left: layer.x + '%',
+                  color: layer.style.color_hex,
+                  fontSize: layer.style.font_size_normalized + 'px',
+                  fontFamily: `${layer.style.font_family}, sans-serif`,
+                  fontWeight: layer.style.font_weight,
+                  letterSpacing: (layer.style.letter_spacing || 0) + 'px',
+                  lineHeight: layer.style.line_height || 1.2,
+                  textShadow: getShadowStyle(layer.style.shadow),
+                  transform: `rotate(${layer.rotation || 0}deg)`,
+                  zIndex: layer.z_index,
+                }
+          "
           @mousedown="startDrag($event, idx)"
         >
+          <!-- Image layer -->
+          <img
+            v-if="layer.type === 'image'"
+            :src="layer.imageUrl"
+            :alt="layer.label"
+            :title="layer.label"
+            class="component-img"
+            draggable="false"
+          />
+          <!-- Text layer -->
           <span
+            v-else
             contenteditable="true"
             @input="updateText(idx, $event)"
             @focus="selectAll"
@@ -555,6 +858,17 @@ const downloadAsSvg = async () => {
   transition: all 0.2s;
 }
 
+select {
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: white;
+  font-size: 0.9rem;
+  color: #344054;
+  outline: none;
+}
+
 .mini-btn.left {
   border-radius: 8px 0 0 8px;
   border-right: none;
@@ -627,6 +941,30 @@ const downloadAsSvg = async () => {
   outline-offset: 4px;
 }
 
+.component-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+}
+
+.component-label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #344054;
+  padding: 6px 12px;
+  background: #f2f4f7;
+  border-radius: 8px;
+  display: inline-block;
+}
+
+.editable-text {
+  white-space: pre-wrap;
+  min-width: 20px;
+  outline: none;
+}
+
 .resize-handle {
   position: absolute;
   bottom: -5px;
@@ -675,6 +1013,13 @@ const downloadAsSvg = async () => {
 }
 .bg-img {
   width: 100%;
+  display: block;
+}
+
+.component-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
   display: block;
 }
 
