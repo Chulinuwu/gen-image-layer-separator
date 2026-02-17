@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { vertexService } from "../services/vertex.service";
 import fs from "fs";
 import path from "path";
+import sharp from "sharp";
 
 export const processImage = async (req: Request, res: Response) => {
   try {
@@ -344,7 +345,16 @@ export const renderCampaign = async (req: Request, res: Response) => {
     const files = req.files as { [fieldname: string]: Express.Multer.File[] };
     let backgroundBuffer: Buffer | undefined;
 
-    if (files && files.image && files.image.length > 0) {
+    const mode = req.body.mode || "ai";
+
+    if (
+      mode === "pre-rendered" ||
+      (files && files.rendered_image && files.rendered_image.length > 0)
+    ) {
+      // Pre-rendered mode doesn't strictly need the source image buffer for AI
+      imageBuffer = Buffer.alloc(0);
+      mimeType = "image/png";
+    } else if (files && files.image && files.image.length > 0) {
       imageBuffer = fs.readFileSync(files.image[0]!.path);
       mimeType = files.image[0]!.mimetype;
 
@@ -362,12 +372,33 @@ export const renderCampaign = async (req: Request, res: Response) => {
         .json({ error: "Image and suggestions are required" });
     }
 
-    const result = await vertexService.renderCampaignImage(
-      imageBuffer,
-      mimeType,
-      suggestions,
-      backgroundBuffer,
-    );
+    let result: any;
+    if (
+      mode === "pre-rendered" &&
+      files.rendered_image &&
+      files.rendered_image.length > 0
+    ) {
+      console.log("[Controller] Using pre-rendered image from client");
+      const buffer = fs.readFileSync(files.rendered_image[0]!.path);
+      result = { buffer, text: "Client-side render saved", prompt: "none" };
+    } else if (mode === "simple") {
+      console.log(
+        "[Controller] Performing SEARCH-FREE SIMPLE RENDER (Sharp only)",
+      );
+      const buffer = await vertexService.renderSimpleComposite(
+        backgroundBuffer || imageBuffer,
+        suggestions,
+      );
+      result = { buffer, text: "Simple render completed", prompt: "none" };
+    } else {
+      console.log("[Controller] Performing AI PRODUCTION RENDER (Gemini)");
+      result = await vertexService.renderCampaignImage(
+        imageBuffer,
+        mimeType,
+        suggestions,
+        backgroundBuffer,
+      );
+    }
 
     if (result.buffer) {
       const filename = `rendered-${Date.now()}.png`;
@@ -449,6 +480,9 @@ export const createCampaign = async (req: Request, res: Response) => {
 
     // ───── Step 1: AI Suggest Text + Components ─────
     const { mode } = req.body;
+    console.log("[DEBUG] Received mode from frontend:", mode);
+    console.log("[DEBUG] Full req.body:", req.body);
+
     sendSSE("progress", {
       step: "initial_analysis",
       message: "AI is analyzing the reference image...",
@@ -458,10 +492,19 @@ export const createCampaign = async (req: Request, res: Response) => {
       imageBuffer,
       mimeType,
       targetText,
+      mode || "full",
     );
 
     let textSuggestions = analysis.suggestions || [];
     let componentSuggestions = analysis.components || [];
+
+    // FORCE: Strip components if mode is 'text' — don't trust AI to follow the prompt
+    if ((mode || "full") === "text" && componentSuggestions.length > 0) {
+      console.warn(
+        `[WARNING] AI returned ${componentSuggestions.length} components in text-only mode! Stripping them.`,
+      );
+      componentSuggestions = [];
+    }
 
     sendSSE("progress", {
       step: "initial_analysis_complete",
@@ -490,6 +533,7 @@ export const createCampaign = async (req: Request, res: Response) => {
           imageBuffer,
           textSuggestions,
           componentSuggestions,
+          analysis.no_go_zones || [],
         );
 
         // Save preview for debugging and frontend display
@@ -500,16 +544,132 @@ export const createCampaign = async (req: Request, res: Response) => {
         sendSSE("preview_ready", {
           iteration: currentIteration,
           previewUrl: `/uploads/${previewFilename}`,
-          message: "Preview generated, AI is reviewing...",
+          message: "Preview generated, checking for overlaps...",
         });
 
-        // AI Critique as a Professional Graphic Designer
-        const critique = await vertexService.critiqueLayout(
-          imageBuffer,
-          previewBuffer,
-          mimeType,
-          targetText,
-        );
+        // ═══════════════════════════════════════════
+        // DETERMINISTIC OVERLAP CHECK (code-based, not AI!)
+        // ═══════════════════════════════════════════
+        const noGoZones = analysis.no_go_zones || [];
+        let overlapFound = false;
+        const overlapDetails: string[] = [];
+
+        // Get actual image dimensions for text width calculation
+        const imgMeta = await sharp(imageBuffer).metadata();
+        const imgW = imgMeta.width || 1000;
+        const imgH = imgMeta.height || 1000;
+
+        // Helper: compute REAL text bounding box from text content + fontSize
+        const computeTextBBox = (s: any) => {
+          const fontSize = s.style?.font_size_normalized || 40;
+          const lines = (s.part || "").split("\n");
+          const longestLine = Math.max(...lines.map((l: string) => l.length));
+          const lineHeight = s.style?.line_height || 1.2;
+          // fontSize is in PIXELS; compute pixel dimensions then convert to 0-1000
+          const textWidthPx = longestLine * fontSize * 0.55;
+          const textHeightPx = lines.length * fontSize * lineHeight;
+          const computedW = (textWidthPx / imgW) * 1000;
+          const computedH = (textHeightPx / imgH) * 1000;
+          // Use LARGER of AI prediction vs computed (be conservative)
+          const w = Math.max(s.position?.width || 0, computedW);
+          const h = Math.max(s.position?.height || 0, computedH);
+          const top = s.position?.top || 0;
+          const left = s.position?.left || 0;
+          return {
+            top,
+            left,
+            width: w,
+            height: h,
+            right: left + w,
+            bottom: top + h,
+          };
+        };
+
+        if (noGoZones.length > 0) {
+          for (const s of textSuggestions) {
+            if (!s.position) continue;
+            const t = computeTextBBox(s);
+
+            for (const zone of noGoZones) {
+              if (!zone.area) continue;
+              const zTop = zone.area.top || 0;
+              const zLeft = zone.area.left || 0;
+              const zRight = zLeft + (zone.area.width || 0);
+              const zBottom = zTop + (zone.area.height || 0);
+
+              const overlaps = !(
+                t.right <= zLeft ||
+                t.left >= zRight ||
+                t.bottom <= zTop ||
+                t.top >= zBottom
+              );
+
+              if (overlaps) {
+                overlapFound = true;
+                const textSnippet = (s.part || "").substring(0, 30);
+                overlapDetails.push(
+                  `Text "${textSnippet}..." (top:${t.top}, left:${t.left}, computed_w:${Math.round(t.width)}, h:${Math.round(t.height)}) overlaps PERSON "${zone.label}" (top:${zTop}, left:${zLeft}, w:${zone.area.width}, h:${zone.area.height}). Move text COMPLETELY OUTSIDE.`,
+                );
+                console.log(
+                  `[OVERLAP] ❌ "${textSnippet}..." overlaps "${zone.label}" | text_right:${Math.round(t.right)} > zone_left:${zLeft}`,
+                );
+              }
+            }
+          }
+        }
+
+        // TEXT-VS-TEXT overlap check
+        for (let i = 0; i < textSuggestions.length; i++) {
+          for (let j = i + 1; j < textSuggestions.length; j++) {
+            const a = textSuggestions[i];
+            const b = textSuggestions[j];
+            if (!a.position || !b.position) continue;
+
+            const boxA = computeTextBBox(a);
+            const boxB = computeTextBBox(b);
+
+            const overlaps = !(
+              boxA.right <= boxB.left ||
+              boxA.left >= boxB.right ||
+              boxA.bottom <= boxB.top ||
+              boxA.top >= boxB.bottom
+            );
+
+            if (overlaps) {
+              overlapFound = true;
+              const snippetA = (a.part || "").substring(0, 20);
+              const snippetB = (b.part || "").substring(0, 20);
+              overlapDetails.push(
+                `TEXT-TEXT OVERLAP: "${snippetA}..." (top:${boxA.top}, left:${boxA.left}, w:${Math.round(boxA.width)}) overlaps "${snippetB}..." (top:${boxB.top}, left:${boxB.left}, w:${Math.round(boxB.width)}). Separate them.`,
+              );
+              console.log(
+                `[OVERLAP] ❌ TEXT-TEXT: "${snippetA}..." overlaps "${snippetB}..."`,
+              );
+            }
+          }
+        }
+
+        let critique;
+
+        if (overlapFound) {
+          // AUTO-FAIL: Code detected overlap, skip AI critique entirely
+          console.log(
+            `[OVERLAP CHECK] Found ${overlapDetails.length} overlaps. Auto-FAIL.`,
+          );
+          critique = {
+            status: "FAIL",
+            feedback: `CODE-DETECTED OVERLAP: ${overlapDetails.length} text block(s) overlap with people/characters. This was detected by geometric intersection, not AI vision.`,
+            actionable_steps: overlapDetails,
+          };
+        } else {
+          // No code-detected overlap, proceed with AI critique for other checks
+          critique = await vertexService.critiqueLayout(
+            imageBuffer,
+            previewBuffer,
+            mimeType,
+            targetText,
+          );
+        }
 
         lastCritique = critique;
 
@@ -546,23 +706,49 @@ export const createCampaign = async (req: Request, res: Response) => {
           message: "Refining layout based on feedback...",
         });
 
-        // Refine the layout based on critique
+        // Refine the layout based on critique — pass previewBuffer so AI can SEE the problems
         const refinedAnalysis = await vertexService.refineLayout(
           imageBuffer,
           mimeType,
           targetText,
           analysis,
           critique,
+          previewBuffer,
         );
 
-        // Update local variables with refined data
-        if (refinedAnalysis.suggestions) {
+        // Update local variables with refined data — but VALIDATE first!
+        const prevCount = textSuggestions.length;
+        const newCount = refinedAnalysis.suggestions?.length || 0;
+
+        if (newCount === 0) {
+          // AI deleted all text — reject completely
+          console.warn(
+            `[WARNING] Refine returned 0 suggestions (had ${prevCount}). Keeping previous layout.`,
+          );
+          sendSSE("refine_rejected", {
+            iteration: currentIteration,
+            message: `⚠️ Refinement rejected: AI returned 0 text elements (had ${prevCount}). Keeping previous layout.`,
+          });
+        } else if (newCount < Math.ceil(prevCount * 0.5)) {
+          // AI deleted too many texts — reject
+          console.warn(
+            `[WARNING] Refine dropped from ${prevCount} to ${newCount} suggestions. Keeping previous layout.`,
+          );
+          sendSSE("refine_rejected", {
+            iteration: currentIteration,
+            message: `⚠️ Refinement rejected: Too many text elements removed (${prevCount} → ${newCount}).`,
+          });
+        } else {
           textSuggestions = refinedAnalysis.suggestions;
           analysis.suggestions = refinedAnalysis.suggestions;
         }
-        if (refinedAnalysis.components) {
+        if (refinedAnalysis.components && (mode || "full") !== "text") {
           componentSuggestions = refinedAnalysis.components;
           analysis.components = refinedAnalysis.components;
+        } else if ((mode || "full") === "text") {
+          // Force clear components in text-only mode
+          componentSuggestions = [];
+          analysis.components = [];
         }
         sendSSE("iteration_end", {
           iteration: currentIteration,

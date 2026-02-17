@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
+import AIRefinementPreview from "./AIRefinementPreview.vue";
 
 const props = defineProps({
   initialBackgroundUrl: String,
@@ -14,6 +15,8 @@ const selectedFile = ref<File | null>(null);
 const previewUrl = ref<string | null>(null);
 const progressMessage = ref("");
 const mode = ref("full"); // "full" or "text"
+const showRefinement = ref(false);
+const refinementPreview = ref<any>(null);
 
 onMounted(async () => {
   if (props.initialBackgroundUrl) {
@@ -47,41 +50,27 @@ const createCampaign = async () => {
     return;
   }
 
-  loading.value = true;
   error.value = "";
-  progressMessage.value = "Analyzing reference image...";
+  const formData = new FormData();
+  formData.append("image", selectedFile.value);
+  formData.append("text", targetText.value);
+  formData.append("mode", mode.value);
 
-  try {
-    const formData = new FormData();
-    formData.append("image", selectedFile.value);
-    formData.append("text", targetText.value);
-    formData.append("mode", mode.value);
+  showRefinement.value = true;
 
-    progressMessage.value =
-      mode.value === "full"
-        ? "AI is extracting text + components..."
-        : "AI is extracting text only...";
-
-    const response = await fetch(
-      "http://localhost:5001/api/image/create-campaign",
-      { method: "POST", body: formData },
-    );
-
-    const data = await response.json();
-    if (data.success) {
-      analysis.value = data.data;
-      progressMessage.value = `✅ Done! ${data.data.textLayers?.length || 0} text layers found.`;
-
-      // Emit the full data so App.vue can pass to LayerEditor
-      emit("created", data.data);
-    } else {
-      error.value = data.error || "Failed to create campaign";
-    }
-  } catch (err: any) {
-    error.value = err.message;
-  } finally {
-    loading.value = false;
+  // Connect SSE via the component
+  if (refinementPreview.value) {
+    refinementPreview.value.connectSSE(formData);
   }
+};
+
+const handleComplete = (data: any) => {
+  analysis.value = data;
+  loading.value = false;
+  progressMessage.value = `✅ Done! ${data.textLayers?.length || 0} text layers found.`;
+
+  // Emit the full data so App.vue can pass to LayerEditor
+  emit("created", data);
 };
 
 const goToEditor = () => {
@@ -131,175 +120,187 @@ const useGeneratedBg = () => {
 </style>
 
 <template>
-  <div class="grid">
-    <div class="card">
-      <h2>1. Reference Image + Brief</h2>
-      <div class="mb-4">
-        <label class="label">Upload Reference Ad Image</label>
-        <input
-          type="file"
-          ref="fileInput"
-          @change="onFileChange"
-          accept="image/*"
-          class="file-input"
-        />
-        <div v-if="previewUrl" class="mini-preview mt-4">
-          <img :src="previewUrl" />
-        </div>
-      </div>
-
-      <div class="mb-4">
-        <label class="label">Processing Mode</label>
-        <div class="mode-toggle">
-          <button
-            type="button"
-            :class="{ active: mode === 'full' }"
-            @click="mode = 'full'"
-          >
-            Full Separation (Text + Components)
-          </button>
-          <button
-            type="button"
-            :class="{ active: mode === 'text' }"
-            @click="mode = 'text'"
-          >
-            Text & Background Only
-          </button>
-        </div>
-      </div>
-
-      <div class="mb-4">
-        <label class="label">Campaign Text Brief</label>
-        <textarea
-          v-model="targetText"
-          placeholder="Paste your ad brief, headlines, bullet points, or fine print here..."
-          rows="6"
-        ></textarea>
-        <p class="small">
-          AI จะวิเคราะห์ภาพ แนะนำ text + สร้าง die-cut components ให้อัตโนมัติ
-        </p>
-      </div>
-
-      <button :disabled="loading" @click="createCampaign">
-        {{ loading ? progressMessage : "Create Campaign Layers" }}
-      </button>
-
-      <div v-if="error" class="error mt-4">{{ error }}</div>
-    </div>
-
-    <div class="card" v-if="analysis">
-      <h2>2. AI Analysis Results</h2>
-
-      <div class="analysis-info mb-4">
-        <p><strong>Vibe:</strong> {{ analysis.campaignVibe }}</p>
-        <p class="secondary">{{ analysis.backgroundDescription }}</p>
-      </div>
-
-      <!-- Generated Background Preview -->
-      <div
-        v-if="analysis.generatedBackgroundImageUrl"
-        class="bg-preview-section mt-4 mb-6"
-      >
-        <h3>AI Generated Clean Background</h3>
-        <div class="bg-card">
-          <img
-            :src="`http://localhost:5001${analysis.generatedBackgroundImageUrl}`"
-            class="bg-thumb"
-            alt="Generated Background"
+  <div>
+    <div class="grid">
+      <div class="card">
+        <h2>1. Reference Image + Brief</h2>
+        <div class="mb-4">
+          <label class="label">Upload Reference Ad Image</label>
+          <input
+            type="file"
+            ref="fileInput"
+            @change="onFileChange"
+            accept="image/*"
+            class="file-input"
           />
-          <div class="bg-actions mt-2">
-            <button @click="useGeneratedBg" class="btn-outline-small">
-              Use as Editor Background
+          <div v-if="previewUrl" class="mini-preview mt-4">
+            <img :src="previewUrl" />
+          </div>
+        </div>
+
+        <div class="mb-4">
+          <label class="label">Processing Mode</label>
+          <div class="mode-toggle">
+            <button
+              type="button"
+              :class="{ active: mode === 'full' }"
+              @click="mode = 'full'"
+            >
+              Full Separation (Text + Components)
+            </button>
+            <button
+              type="button"
+              :class="{ active: mode === 'text' }"
+              @click="mode = 'text'"
+            >
+              Text & Background Only
             </button>
           </div>
         </div>
-      </div>
 
-      <!-- Text suggestions -->
-      <h3 v-if="analysis.textLayers?.length">
-        Text Layers ({{ analysis.textLayers.length }})
-      </h3>
-      <div class="suggestions-list">
-        <div
-          v-for="(s, idx) in analysis.textLayers"
-          :key="'t' + idx"
-          class="suggestion-item"
-        >
-          <div class="suggestion-header">
-            <span
-              class="hierarchy-badge"
-              :class="(s.hierarchy || '').toLowerCase()"
-            >
-              {{ s.hierarchy || "Text" }}
-            </span>
-            <span class="position-info">
-              x:{{ s.position?.left }} y:{{ s.position?.top }} ({{
-                s.position?.width
-              }}x{{ s.position?.height }})
-            </span>
-          </div>
-          <h4 class="text-preview">{{ s.part }}</h4>
-          <div class="style-tag">
-            {{ s.style?.font_family }} | {{ s.style?.font_weight }} |
-            <span :style="{ color: s.style?.color_hex }">{{
-              s.style?.color_hex
-            }}</span>
-          </div>
-          <div class="style-details">
-            <span class="detail-badge"
-              >Size: {{ s.style?.font_size_normalized }}</span
-            >
-            <span
-              class="detail-badge"
-              v-if="s.style?.letter_spacing !== undefined"
-            >
-              Letter: {{ s.style?.letter_spacing }}px
-            </span>
-            <span class="detail-badge" v-if="s.style?.line_height">
-              Line: {{ s.style?.line_height }}
-            </span>
-          </div>
+        <div class="mb-4">
+          <label class="label">Campaign Text Brief</label>
+          <textarea
+            v-model="targetText"
+            placeholder="Paste your ad brief, headlines, bullet points, or fine print here..."
+            rows="6"
+          ></textarea>
+          <!-- <p class="small">
+          AI จะวิเคราะห์ภาพ แนะนำ text + สร้าง die-cut components ให้อัตโนมัติ
+        </p> -->
         </div>
-      </div>
 
-      <!-- Raw stack preview -->
-      <div v-if="analysis.stackImageUrls?.length" class="stack-preview mt-4">
-        <h3>AI Generated Stacks (raw)</h3>
-        <div class="stack-images-grid">
-          <img
-            v-for="(url, idx) in analysis.stackImageUrls"
-            :key="idx"
-            :src="`http://localhost:5001${url}`"
-            alt="Stack preview"
-            class="stack-img mb-2"
-          />
-        </div>
-      </div>
-
-      <!-- Visual components -->
-      <h3 v-if="analysis.visualComponents?.length" class="mt-4">
-        Components ({{ analysis.visualComponents.length }})
-      </h3>
-      <div class="component-grid">
-        <div
-          v-for="(c, idx) in analysis.visualComponents"
-          :key="'c' + idx"
-          class="component-card"
-        >
-          <img :src="`http://localhost:5001${c.imageUrl}`" :alt="c.label" />
-          <span class="component-label">{{ c.label }}</span>
-          <span class="position-info small">
-            x:{{ c.position?.left }} y:{{ c.position?.top }} | z:{{ c.z_index }}
-          </span>
-        </div>
-      </div>
-
-      <div class="mt-4">
-        <button @click="goToEditor" class="btn-primary">
-          Open in Layer Editor &rarr;
+        <button :disabled="loading" @click="createCampaign">
+          {{ loading ? progressMessage : "Create Campaign Layers" }}
         </button>
+
+        <div v-if="error" class="error mt-4">{{ error }}</div>
+      </div>
+
+      <div class="card" v-if="analysis">
+        <h2>2. AI Analysis Results</h2>
+
+        <div class="analysis-info mb-4">
+          <p><strong>Vibe:</strong> {{ analysis.campaignVibe }}</p>
+          <p class="secondary">{{ analysis.backgroundDescription }}</p>
+        </div>
+
+        <!-- Generated Background Preview -->
+        <div
+          v-if="analysis.generatedBackgroundImageUrl"
+          class="bg-preview-section mt-4 mb-6"
+        >
+          <h3>AI Generated Clean Background</h3>
+          <div class="bg-card">
+            <img
+              :src="`http://localhost:5001${analysis.generatedBackgroundImageUrl}`"
+              class="bg-thumb"
+              alt="Generated Background"
+            />
+            <div class="bg-actions mt-2">
+              <button @click="useGeneratedBg" class="btn-outline-small">
+                Use as Editor Background
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Text suggestions -->
+        <h3 v-if="analysis.textLayers?.length">
+          Text Layers ({{ analysis.textLayers.length }})
+        </h3>
+        <div class="suggestions-list">
+          <div
+            v-for="(s, idx) in analysis.textLayers"
+            :key="'t' + idx"
+            class="suggestion-item"
+          >
+            <div class="suggestion-header">
+              <span
+                class="hierarchy-badge"
+                :class="(s.hierarchy || '').toLowerCase()"
+              >
+                {{ s.hierarchy || "Text" }}
+              </span>
+              <span class="position-info">
+                x:{{ s.position?.left }} y:{{ s.position?.top }} ({{
+                  s.position?.width
+                }}x{{ s.position?.height }})
+              </span>
+            </div>
+            <h4 class="text-preview">{{ s.part }}</h4>
+            <div class="style-tag">
+              {{ s.style?.font_family }} | {{ s.style?.font_weight }} |
+              <span :style="{ color: s.style?.color_hex }">{{
+                s.style?.color_hex
+              }}</span>
+            </div>
+            <div class="style-details">
+              <span class="detail-badge"
+                >Size: {{ s.style?.font_size_normalized }}</span
+              >
+              <span
+                class="detail-badge"
+                v-if="s.style?.letter_spacing !== undefined"
+              >
+                Letter: {{ s.style?.letter_spacing }}px
+              </span>
+              <span class="detail-badge" v-if="s.style?.line_height">
+                Line: {{ s.style?.line_height }}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Raw stack preview -->
+        <div v-if="analysis.stackImageUrls?.length" class="stack-preview mt-4">
+          <h3>AI Generated Stacks (raw)</h3>
+          <div class="stack-images-grid">
+            <img
+              v-for="(url, idx) in analysis.stackImageUrls"
+              :key="idx"
+              :src="`http://localhost:5001${url}`"
+              alt="Stack preview"
+              class="stack-img mb-2"
+            />
+          </div>
+        </div>
+
+        <!-- Visual components -->
+        <h3 v-if="analysis.visualComponents?.length" class="mt-4">
+          Components ({{ analysis.visualComponents.length }})
+        </h3>
+        <div class="component-grid">
+          <div
+            v-for="(c, idx) in analysis.visualComponents"
+            :key="'c' + idx"
+            class="component-card"
+          >
+            <img :src="`http://localhost:5001${c.imageUrl}`" :alt="c.label" />
+            <span class="component-label">{{ c.label }}</span>
+            <span class="position-info small">
+              x:{{ c.position?.left }} y:{{ c.position?.top }} | z:{{
+                c.z_index
+              }}
+            </span>
+          </div>
+        </div>
+
+        <div class="mt-4">
+          <button @click="goToEditor" class="btn-primary">
+            Open in Layer Editor &rarr;
+          </button>
+        </div>
       </div>
     </div>
+
+    <!-- Final AI Review Workspace -->
+    <AIRefinementPreview
+      :show="showRefinement"
+      ref="refinementPreview"
+      @close="showRefinement = false"
+      @complete="handleComplete"
+    />
   </div>
 </template>
 

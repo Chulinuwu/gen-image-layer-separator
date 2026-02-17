@@ -45,6 +45,7 @@ router.post(
   upload.fields([
     { name: "image", maxCount: 1 },
     { name: "background", maxCount: 1 },
+    { name: "rendered_image", maxCount: 1 },
   ]),
   renderCampaign,
 );

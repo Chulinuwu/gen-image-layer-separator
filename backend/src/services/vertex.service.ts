@@ -7,6 +7,8 @@
 
 import { GoogleGenAI } from "@google/genai";
 import sharp from "sharp";
+import fs from "fs";
+import path from "path";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -122,51 +124,53 @@ export class AIService {
     inputImages?: Array<{ buffer: Buffer; mimeType: string }>;
     model?: string;
   }) {
-    const model =
+    // Primary: User provided -> Configured primary -> Default 3pro preview
+    const primaryModel =
       params.model ||
       process.env.GEMINI_IMAGE_ENDPOINT ||
-      process.env.GEMINI_IMAGE_ENDPOINT_2 ||
       "gemini-3-pro-image-preview";
 
-    const parts: any[] = [];
-    if (params.inputImages) {
-      params.inputImages.forEach((img) => {
-        parts.push({
-          inlineData: {
-            data: img.buffer.toString("base64"),
-            mimeType: img.mimeType,
-          },
+    // Fallback: Secondary endpoint only if primary fails
+    const fallbackModel = process.env.GEMINI_IMAGE_ENDPOINT_2;
+
+    const executeGen = async (targetModel: string) => {
+      const parts: any[] = [];
+      if (params.inputImages) {
+        params.inputImages.forEach((img) => {
+          parts.push({
+            inlineData: {
+              data: img.buffer.toString("base64"),
+              mimeType: img.mimeType,
+            },
+          });
         });
-      });
-    }
+      }
 
-    // Prepend no-text instruction to keep backgrounds clean
-    const cleanPrompt = `IMPORTANT: Do NOT include any text, typography, letters, words, numbers, logos with text, watermarks, or any written content in the generated image. The image must be completely free of any text elements. Only generate visual/graphical elements.\n\n${params.prompt}`;
-    parts.push({ text: cleanPrompt });
+      const cleanPrompt = `IMPORTANT: Do NOT include any text, typography, letters, words, numbers, logos with text, watermarks, or any written content in the generated image. The image must be completely free of any text elements. Only generate visual/graphical elements.\n\n${params.prompt}`;
+      parts.push({ text: cleanPrompt });
 
-    console.log(`[GenAI] Generating image with model: ${model}`);
+      console.log(`[GenAI] Generating image with model: ${targetModel}`);
 
-    const config: any = {
-      maxOutputTokens: 32768,
-      temperature: 1,
-      topP: 0.95,
-      responseModalities: ["TEXT", "IMAGE"],
-      imageConfig: {
-        aspectRatio: params.aspect_ratio || "1:1",
-        imageSize: params.resolution || "1K",
-      },
-      safetySettings: [
-        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "OFF" },
-        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "OFF" },
-        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "OFF" },
-        { category: "HARM_CATEGORY_HARASSMENT", threshold: "OFF" },
-      ],
-    };
+      const config: any = {
+        maxOutputTokens: 32768,
+        temperature: 1,
+        topP: 0.95,
+        responseModalities: ["TEXT", "IMAGE"],
+        imageConfig: {
+          aspectRatio: params.aspect_ratio || "1:1",
+          imageSize: params.resolution || "1K",
+        },
+        safetySettings: [
+          { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "OFF" },
+          { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "OFF" },
+          { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "OFF" },
+          { category: "HARM_CATEGORY_HARASSMENT", threshold: "OFF" },
+        ],
+      };
 
-    try {
       const streamingResp = await this.withRetry(() =>
         this.client.models.generateContentStream({
-          model,
+          model: targetModel,
           contents: [{ role: "user", parts }],
           config,
         }),
@@ -196,8 +200,17 @@ export class AIService {
         text: responseText,
         prompt: params.prompt,
       };
+    };
+
+    try {
+      return await executeGen(primaryModel);
     } catch (error: any) {
-      console.error("[GenAI] Image Generation Error:", error);
+      if (fallbackModel && primaryModel !== fallbackModel) {
+        console.warn(
+          `⚠️ [GenAI] Primary model ${primaryModel} failed. Attempting fallback to ${fallbackModel}...`,
+        );
+        return await executeGen(fallbackModel);
+      }
       throw error;
     }
   }
@@ -270,6 +283,7 @@ export class AIService {
     imageBuffer: Buffer,
     mimeType: string,
     targetText: string,
+    mode: string = "full",
   ) {
     const model =
       process.env.GEMINI_MODEL_ENDPOINT_2 ||
@@ -289,6 +303,30 @@ export class AIService {
       Even if the reference image doesn't show all text clearly, you MUST extract and suggest
       placement for ALL text elements mentioned in the brief.
       
+      ═══════════════════════════════════════
+      TASK 0: PERSON & CHARACTER DETECTION (DO THIS FIRST!)
+      ═══════════════════════════════════════
+      
+      Before placing ANY text, you MUST:
+      1. Identify ALL people, mascots, and characters in the image
+      2. For each person/character, create MULTIPLE no-go zones — one per BODY PART:
+         - Head/Face area
+         - Torso/Upper body
+         - Left arm (if visible)
+         - Right arm (if visible)
+         - Left leg (if visible)
+         - Right leg (if visible)
+         - For mascots: Head area, Body area
+      3. Each zone should have its own tight bounding box (top, left, width, height in 0-1000)
+      4. Do NOT use one big box for the entire person — that wastes too much space!
+         Instead, break them into 4-8 separate body-part boxes.
+      5. People's legs extend DOWN into colored bands/banners — include those areas!
+      
+      CRITICAL RULE: NO text may overlap with any body-part zone.
+      Even if there is a solid-color banner BEHIND the person, the person is IN FRONT of it.
+      
+      ═══════════════════════════════════════
+      
       TASKS:
       1. TEXT EXTRACTION (MANDATORY):
          - Read EVERY text element from the AD BRIEF above
@@ -301,22 +339,35 @@ export class AIService {
       
       2. Cross-reference the AD BRIEF for correct spelling and intent.
       
-      3. FOR EACH text element/group: provide exact position (bounding box that covers ALL lines), style, and hierarchy.
+      3. FOR EACH text element/group: provide exact position (TIGHT bounding box that covers ALL lines), style, and hierarchy.
          - Use the reference image as a DESIGN GUIDE for placement
          - If text is not visible in the image, suggest a logical placement based on design principles
+         - CRITICAL: The bounding box (top, left, width, height) MUST BE TIGHT. Do not leave large empty margins.
+         - The 'top' value MUST represent the very top edge of the first line of text.
       
-      4. COMPONENT EXTRACTION: Identify ALL non-text visual elements in the image that are
+      ${
+        mode === "full"
+          ? `4. COMPONENT EXTRACTION: Identify ALL non-text visual elements in the image that are
          overlaid on the background (NOT the background itself). Examples:
          - Ribbons, banners, tags, price badges
          - Mascots, cartoon characters, stickers
          - Person cutouts, product images
          - Decorative shapes, frames, boxes, logos
-         For each component, provide a DETAILED visual description so it can be recreated.
+         For each component, provide a DETAILED visual description so it can be recreated.`
+          : `4. SKIP COMPONENT EXTRACTION: For this request (MODE: ${mode}), do NOT suggest any components. Return an empty array [] for 'components'.`
+      }
       
       Return the result as a STRICT JSON object:
       {
         "background_description": "Describe the background scene (without any overlaid elements)",
         "campaign_vibe": "Energetic, Minimalist, Luxury, etc.",
+        "no_go_zones": [
+          {
+            "label": "Woman in denim jacket",
+            "area": { "top": 50, "left": 200, "width": 400, "height": 650 },
+            "reason": "Person's full body including legs"
+          }
+        ],
         "suggestions": [
           {
             "part": "The exact text (e.g. 'SUMMER SALE')",
@@ -338,27 +389,43 @@ export class AIService {
             "hierarchy": "Headline | Body | FinePrint"
           }
         ],
-        "components": [
+        "components": ${
+          mode === "full"
+            ? `[
           {
-            "label": "Short label (e.g. 'Thai boy mascot', 'yellow ribbon banner')",
-            "description": "Detailed visual description for image generation (e.g. 'A cute 3D chibi-style Thai boy character wearing traditional gold and red Thai costume (ชุดไทย), waving hand happily, cartoon render style')",
-            "position": {
-              "top": 0, "left": 0, "width": 0, "height": 0, "rotation": 0,
-              "explanation": "Normalized coordinates 0-1000. Rotation in degrees."
-            },
+            "label": "Short label (e.g. 'Thai boy mascot')",
+            "description": "Visual description for recreation",
+            "position": { "top": 0, "left": 0, "width": 0, "height": 0, "rotation": 0 },
             "z_index": 1
           }
-        ]
+        ]`
+            : "[]"
+        }
       }
       
       IMPORTANT:
-      - 'suggestions' = ONLY text elements (MUST NOT BE EMPTY if brief contains text)
-      - 'components' = ONLY visual/graphic elements (NO text)
-      - Position: Be EXTREMELY accurate. The values must be PIXEL-PERFECT so that if I place the components using these percentages, they overlap the reference image EXACTLY.
-      - Rotation: Specify the rotation in degrees if the element is not perfectly horizontal.
-      - Scale: Do NOT guess. Compare the component's size to the full image carefully.
-      - Position uses normalized coordinates 0-1000.
-      - Component descriptions must be detailed enough to recreate the element in isolation.
+      - MODE is currently: ${mode}.
+      - If mode is 'text', the 'components' array MUST be empty [].
+      - If mode is 'full', you MUST extract both text elements and visual components.
+      
+      ✓ FINEPRINT (Legal disclaimers, terms & conditions, policy text, footer):
+        - font_size_normalized: 8-16 (VERY SMALL)
+        - Examples: "Terms apply", "*See details"
+        - These are NOT meant to be prominent. They can be TINY.
+        - DO NOT make fine print larger than 16. It's OKAY if it's hard to read.
+        - Better to be TOO SMALL than too large for fine print.
+        - If in doubt whether text is fine print: check if it's legal/policy/disclaimer → YES = make it SMALL (8-12)
+
+      CRITICAL BOUNDING BOX RULES:
+      1. TIGHT WIDTH: For text 'suggestions', the 'width' must be as TIGHT as possible to the actual characters. Do NOT span the whole image width if the text only takes up a small portion.
+      2. PRECISE COMPONENTS: For 'components', ensure the width and height cover the visual item (like a mascot or icon) with MINIMAL padding.
+      3. AVOID BLOCKING: The goal is to make layers easy to click in an editor. Large, mostly-empty boxes are FORBIDDEN.
+
+      DESIGNER MINDSET (ANTI-BORING RULES):
+      - FILL THE SPACE: If there's a large solid background (like a purple block), DO NOT leave it empty. Scale the text (Headline) up to 120-180 to OWN the space.
+      - USE GRAPHIC CONTAINERS: Suggest visual elements like 'yellow_tag', 'red_ribbon', 'glassmorphism_card', or 'neon_banner' in 'visual_container' property to anchor the text.
+      - COMPOSITION DENSITY: An ad should look 'Full' and 'High-End'. If it looks 'empty', add more decorative components or increase font sizes significantly.
+      - TEXT STYLING: Use professional combinations. E.g., a huge number '2' with a smaller 'ต่อ' next to it, not just a flat line.
     `;
 
     const config: any = {
@@ -374,9 +441,11 @@ export class AIService {
     };
 
     try {
-      console.log(
-        `[GenAI] Suggesting Layout + Components with model: ${model}`,
-      );
+      const modeLabel =
+        mode === "text"
+          ? "Text Layout (text-only mode)"
+          : "Layout + Components";
+      console.log(`[GenAI] Suggesting ${modeLabel} with model: ${model}`);
       const response = await this.withRetry(() =>
         this.client.models.generateContent({
           model,
@@ -399,8 +468,53 @@ export class AIService {
       );
 
       const responseText = response.text ? response.text.trim() : "";
+      console.log(
+        "[GenAI] Layout suggestion raw response:",
+        responseText.substring(0, 500),
+      );
+
       const jsonString = responseText.replace(/```json|```/g, "").trim();
-      return JSON.parse(jsonString || "{}");
+
+      let parsed;
+      try {
+        parsed = JSON.parse(jsonString || "{}");
+      } catch (parseErr) {
+        console.error(
+          "[GenAI] Layout JSON parse failed, attempting cleanup...",
+        );
+        const cleaned = jsonString
+          .replace(/\\'/g, "'")
+          .replace(/\\([^"\\\/bfnrtu])/g, "$1")
+          .replace(/[\x00-\x1F\x7F]/g, " ");
+        parsed = JSON.parse(cleaned);
+      }
+
+      // Log summary of suggestions
+      if (parsed.suggestions) {
+        console.log(
+          `[GenAI] Got ${parsed.suggestions.length} text suggestions:`,
+        );
+        parsed.suggestions.forEach((s: any, i: number) => {
+          console.log(
+            `  [${i}] "${(s.part || "").substring(0, 40)}..." → top:${s.position?.top} left:${s.position?.left} size:${s.style?.font_size_normalized} hierarchy:${s.hierarchy}`,
+          );
+        });
+      }
+      if (parsed.components?.length) {
+        console.log(`[GenAI] Got ${parsed.components.length} components`);
+      }
+      if (parsed.no_go_zones?.length) {
+        console.log(
+          `[GenAI] Detected ${parsed.no_go_zones.length} no-go zones:`,
+        );
+        parsed.no_go_zones.forEach((z: any, i: number) => {
+          console.log(
+            `  [${i}] "${z.label}" → top:${z.area?.top} left:${z.area?.left} w:${z.area?.width} h:${z.area?.height} - ${z.reason}`,
+          );
+        });
+      }
+
+      return parsed;
     } catch (error: any) {
       console.error("[GenAI] Suggest Layout Error:", error);
       throw error;
@@ -414,12 +528,41 @@ export class AIService {
     baseImageBuffer: Buffer,
     suggestions: any[],
     components: any[],
+    noGoZones?: any[],
   ): Promise<Buffer> {
     const metadata = await sharp(baseImageBuffer).metadata();
     const width = metadata.width || 800;
     const height = metadata.height || 600;
 
     let svgOverlay = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">`;
+
+    // Draw NO-GO ZONES first (behind text) — green semi-transparent boxes
+    if (noGoZones && noGoZones.length > 0) {
+      for (const zone of noGoZones) {
+        if (!zone.area) continue;
+        const zTop = (zone.area.top / 1000) * height;
+        const zLeft = (zone.area.left / 1000) * width;
+        const zW = (zone.area.width / 1000) * width;
+        const zH = (zone.area.height / 1000) * height;
+        svgOverlay += `
+          <rect x="${zLeft}" y="${zTop}" width="${zW}" height="${zH}" 
+                fill="rgba(0, 255, 0, 0.15)" stroke="#00FF00" stroke-width="2" stroke-dasharray="6,3" />
+          <text x="${zLeft + 4}" y="${zTop + 14}" fill="#00FF00" font-size="12px" font-family="sans-serif" font-weight="bold">${zone.label || "NO-GO"}</text>
+        `;
+      }
+    }
+
+    // Define shadow filters
+    svgOverlay += `
+      <defs>
+        <filter id="shadow-subtle" x="-5%" y="-5%" width="110%" height="110%">
+          <feDropShadow dx="1" dy="1" stdDeviation="2" flood-color="#000000" flood-opacity="0.5"/>
+        </filter>
+        <filter id="shadow-strong" x="-10%" y="-10%" width="120%" height="120%">
+          <feDropShadow dx="2" dy="2" stdDeviation="4" flood-color="#000000" flood-opacity="0.8"/>
+        </filter>
+      </defs>
+    `;
 
     // 1. Draw Components
     for (const c of components) {
@@ -429,14 +572,22 @@ export class AIService {
       const left = (c.position.left / 1000) * width;
       const w = (c.position.width / 1000) * width;
       const h = (c.position.height / 1000) * height;
+      const rotation = c.position.rotation || 0;
+
+      const transform =
+        rotation !== 0
+          ? ` transform="rotate(${rotation}, ${left + w / 2}, ${top + h / 2})"`
+          : "";
 
       svgOverlay += `
-        <rect x="${left}" y="${top}" width="${w}" height="${h}" fill="rgba(0, 255, 0, 0.15)" stroke="#00FF00" stroke-width="2" />
-        <text x="${left + 5}" y="${top + 15}" fill="#00FF00" font-size="12" font-family="sans-serif" font-weight="bold">${c.label || "Component"}</text>
+        <g${transform}>
+          <rect x="${left}" y="${top}" width="${w}" height="${h}" fill="rgba(0, 255, 0, 0.15)" stroke="#00FF00" stroke-width="2" />
+          <text x="${left + 5}" y="${top + 15}" fill="#00FF00" font-size="12" font-family="sans-serif" font-weight="bold">${c.label || "Component"}</text>
+        </g>
       `;
     }
 
-    // 2. Draw Text Layers
+    // 2. Draw Text Layers with shadow + rotation support
     for (const s of suggestions) {
       if (!s.position || typeof s.position.top === "undefined") continue;
 
@@ -446,26 +597,79 @@ export class AIService {
       const h = (s.position.height / 1000) * height;
       const fontSize = s.style?.font_size_normalized || 40;
       const color = s.style?.color_hex || "#FFFFFF";
-
-      svgOverlay += `
-        <rect x="${left}" y="${top}" width="${w}" height="${h}" fill="rgba(255, 255, 255, 0.05)" stroke="#FFFFFF" stroke-dasharray="4" />
-      `;
+      const rotation = s.position?.rotation || 0;
+      const shadow = s.style?.shadow || "none";
+      const fontStyle = s.style?.font_style || "normal";
+      const textAnchor =
+        s.style?.text_align === "center"
+          ? "middle"
+          : s.style?.text_align === "right"
+            ? "end"
+            : "start";
+      const textX =
+        s.style?.text_align === "center"
+          ? left + w / 2
+          : s.style?.text_align === "right"
+            ? left + w
+            : left;
 
       const lines = (s.part || "").split("\n");
+      const lineHeight = s.style?.line_height || 1.2;
+
+      // Build filter attribute
+      const filterAttr =
+        shadow === "strong"
+          ? ' filter="url(#shadow-strong)"'
+          : shadow === "subtle"
+            ? ' filter="url(#shadow-subtle)"'
+            : "";
+
+      // Build rotation transform
+      const computedH = lines.length * fontSize * lineHeight;
+      const transform =
+        rotation !== 0
+          ? ` transform="rotate(${rotation}, ${left + w / 2}, ${top + computedH / 2})"`
+          : "";
+
+      svgOverlay += `<g${transform}>`;
+
       lines.forEach((line: string, i: number) => {
-        const yLine =
-          top + fontSize * 0.8 + i * (fontSize * (s.style?.line_height || 1.2));
+        const yLine = top + i * (fontSize * lineHeight);
+        // Layer 1: Thick RED STROKE behind text — hugs exact character shapes
         svgOverlay += `
           <text 
-            x="${left}" 
-            y="${yLine}" 
+            x="${textX}" y="${yLine}" 
+            fill="rgba(255, 0, 0, 0.35)" 
+            stroke="rgba(255, 0, 0, 0.25)" 
+            stroke-width="${fontSize * 0.4}" 
+            paint-order="stroke"
+            font-size="${fontSize}px" 
+            font-family="${s.style?.font_family || "sans-serif"}" 
+            font-weight="${s.style?.font_weight || "normal"}"
+            font-style="${fontStyle}"
+            text-anchor="${textAnchor}"
+            dominant-baseline="hanging"
+            letter-spacing="${s.style?.letter_spacing || 0}"
+          >${line}</text>
+        `;
+        // Layer 2: Actual text on top
+        svgOverlay += `
+          <text 
+            x="${textX}" y="${yLine}" 
             fill="${color}" 
             font-size="${fontSize}px" 
             font-family="${s.style?.font_family || "sans-serif"}" 
             font-weight="${s.style?.font_weight || "normal"}"
+            font-style="${fontStyle}"
+            text-anchor="${textAnchor}"
+            dominant-baseline="hanging"
+            letter-spacing="${s.style?.letter_spacing || 0}"
+            ${filterAttr}
           >${line}</text>
         `;
       });
+
+      svgOverlay += `</g>`;
     }
 
     svgOverlay += "</svg>";
@@ -491,48 +695,98 @@ export class AIService {
       "gemini-3-flash-preview";
 
     const prompt = `
-      You are a SENIOR GRAPHIC DESIGNER reviewing a proposed advertisement layout.
-      You have been given:
-      1. The ORIGINAL reference image
-      2. A PREVIEW showing the proposed text and component placement (with colored overlays)
-      
+      You are the STRICTEST ART DIRECTOR in the advertising industry.
+      You have been given TWO images:
+      - IMAGE 1: The ORIGINAL reference image (the raw background photo)
+      - IMAGE 2: The PREVIEW showing text overlays placed on top of the background
+
       AD BRIEF: "${targetText}"
       
-      YOUR JOB: Critique this layout with PROFESSIONAL STANDARDS. Be STRICT.
+      ═══════════════════════════════════════
+      MANDATORY VISUAL INSPECTION (YOU MUST DO THIS FIRST):
+      ═══════════════════════════════════════
       
-      CRITICAL CHECKS (ALL must pass):
-      ✓ READABILITY: Is EVERY text element clearly readable?
-         - Check contrast against background (especially on patterns/gradients)
-         - Text on busy areas MUST have shadows/outlines
-         - No text should blend into the background
+      Before making ANY judgment, you MUST examine IMAGE 2 (the PREVIEW) and answer these questions for EACH visible text block:
       
-      ✓ VISUAL HIERARCHY: Is the most important text (headline) the most prominent?
-         - Size, color, and position should guide the eye correctly
-         - Secondary text should be clearly secondary
+      For each text overlay you see in IMAGE 2:
+        Q1: "What is DIRECTLY BEHIND this text?" (e.g., sky, person's legs, purple banner, trees, etc.)
+        Q2: "Is any part of a human body behind this text?" (yes/no)
+        Q3: "Is any part of a mascot/character behind this text?" (yes/no)
+        Q4: "Can I read this text easily, or does the color blend with the background?"
       
-      ✓ COMPOSITION: Are visual elements placed intelligently?
-         - Text must NOT cover faces, eyes, or key product features
-         - Text must NOT be cut off at edges
-         - Components (mascots, people) should not be obscured by text
+      You MUST list your findings for EACH text block in your feedback. Do NOT skip this step.
       
-      ✓ BALANCE: Is the layout professional and balanced?
-         - Not too cluttered, not too empty
-         - Proper use of white space
+      ═══════════════════════════════════════
+      HARD FAIL CONDITIONS (ANY ONE = INSTANT FAIL):
+      ═══════════════════════════════════════
       
-      ✓ INTENT: Does it match the brief and convey the message clearly?
+      ✗ NO TEXT OR MISSING TEXT:
+        - If IMAGE 2 has NO visible text at all → FAIL
+        - If key text from the AD BRIEF is missing (headline, offer, fine print) → FAIL
+        - An ad with no text is not an ad. Automatic FAIL.
       
-      PASS CRITERIA: Only return "PASS" if you would be PROUD to show this to a client.
-      If there are ANY issues with readability, placement, or professionalism, return "FAIL".
+      ✗ TEXT BLOCKS OVERLAP EACH OTHER:
+        - If two different text elements overlap or are placed on top of each other → FAIL
+        - Each text block must have its own clear, separate space
+      
+      ✗ TEXT OVERLAPS A PERSON'S BODY:
+        - Look at IMAGE 2. Every text block has a SEMI-TRANSPARENT RED tint behind it.
+        - If that RED tint touches or covers ANY part of a human (legs, arms, hair, clothes, face) → FAIL
+        - This is non-negotiable. RED on PERSON = REJECT.
+        - PAY SPECIAL ATTENTION to the center and lower portions of the image where people typically stand.
+        - In this ad, there is likely a woman standing. If you see RED covering any part of her denim shirt, jeans, or skin → FAIL.
+      
+      ✗ TEXT OVERLAPS A MASCOT OR CHARACTER:
+        - If text covers any cartoon/mascot figure → FAIL
+      
+      ✗ TEXT COLOR BLENDS WITH BACKGROUND:
+        - If text color is too similar to the area directly behind it → FAIL
+        - Light text (white/yellow/light green) on a photo of sky/trees/plants = FAIL (not enough contrast)
+        - The text MUST contrast sharply with whatever photo/pattern is behind it
+      
+      ✗ TEXT OVER PHOTO WITHOUT SHADOW:
+        - If text sits on top of a photograph (not a solid color band) and has no shadow → FAIL
+        - Only text on a SOLID, HIGH-CONTRAST block of color can skip shadow
+      
+      ✗ TEXT CUT OFF AT EDGES:
+        - Any text going past the image boundary → FAIL
+      
+      ✗ TEXT TOO CLOSE TO EDGE (SAFE ZONE):
+        - ALL text (except FinePrint) must have at least 3% margin from ANY edge of the image
+        - In normalized coordinates (0-1000): text must not start before 30 or extend past 970
+        - Text crammed against the edge looks cheap and unprofessional → FAIL
+        - FinePrint is allowed to be closer to the bottom edge (min 1.5% / 15 in normalized coords)
+      
+      NOTE ON FINE PRINT: Legal disclaimers, terms, and conditions (hierarchy="FinePrint") are ALLOWED to be very small (font_size 8-16). Do NOT fail them for being small. That is intentional.
+      
+      ═══════════════════════════════════════
+      QUALITY CHECKS:
+      ═══════════════════════════════════════
+      
+      ○ VISUAL HIERARCHY: Is headline the largest? Is fine print the smallest?
+      ○ BALANCE: Professional layout, not cluttered?
+      ○ INTENT: Does it match the brief?
+      
+      ═══════════════════════════════════════
+      YOUR DEFAULT SHOULD BE "FAIL":
+      ═══════════════════════════════════════
+      
+      Assume the layout FAILS unless you can prove every single text block passes ALL checks.
+      DO NOT be generous. DO NOT give benefit of the doubt.
+      If you are even slightly unsure whether text overlaps a person → FAIL.
       
       Return as STRICT JSON:
       {
         "status": "PASS" | "FAIL",
-        "feedback": "Detailed explanation of what's wrong or what's good",
-        "actionable_steps": ["Specific instruction 1", "Specific instruction 2", ...]
+        "feedback": "Start by listing what you see behind EACH text block. Then explain your verdict.",
+        "actionable_steps": ["Specific fix 1", "Specific fix 2", ...]
       }
       
-      Be specific in actionable_steps. Use coordinate adjustments (e.g., "Move headline down by 100 units"),
-      color changes (e.g., "Change Body text to #FFFFFF"), or style additions (e.g., "Add 'strong' shadow to all headline text").
+      In actionable_steps, be VERY specific:
+      - "Move 'ชวนลูกค้า...' text from top:400 to top:50 to clear the woman's body"
+      - "Change text color from #FFFFFF to #FFD700 for contrast"
+      - "Add shadow='strong' to headline text over photograph area"
+      - "Move ALL text below top:700 into the solid purple band"
     `;
 
     try {
@@ -563,11 +817,48 @@ export class AIService {
       );
 
       const text = response.text || "";
-      const jsonStr = text.match(/\{[\s\S]*\}/)?.[0] || '{"status": "PASS"}';
-      return JSON.parse(jsonStr);
+      console.log("[GenAI] Critique raw response:", text.substring(0, 500));
+
+      const jsonStr =
+        text.match(/\{[\s\S]*\}/)?.[0] ||
+        '{"status": "FAIL", "feedback": "Could not extract JSON from response", "actionable_steps": []}';
+
+      try {
+        return JSON.parse(jsonStr);
+      } catch (parseErr) {
+        // Try to fix common JSON issues: bad escape characters
+        console.error(
+          "[GenAI] Critique JSON parse failed, attempting cleanup...",
+        );
+        console.log("[GenAI] Raw JSON string:", jsonStr.substring(0, 1000));
+
+        const cleaned = jsonStr
+          .replace(/\\'/g, "'") // fix escaped single quotes
+          .replace(/\\([^"\\\/bfnrtu])/g, "$1") // remove invalid escape sequences
+          .replace(/[\x00-\x1F\x7F]/g, " "); // remove control characters
+
+        try {
+          return JSON.parse(cleaned);
+        } catch (e2) {
+          console.error("[GenAI] Critique cleanup also failed:", e2);
+          // FAIL-SAFE: If we can't parse, assume FAIL (not PASS!)
+          return {
+            status: "FAIL",
+            feedback:
+              "AI critique response could not be parsed. Treating as FAIL for safety.",
+            actionable_steps: ["Re-run the critique with cleaner output"],
+          };
+        }
+      }
     } catch (e) {
-      console.error("[GenAI] Critique parsing error:", e);
-      return { status: "PASS" }; // Fail-safe
+      console.error("[GenAI] Critique error:", e);
+      // FAIL-SAFE: Network/API errors should also FAIL (not PASS!)
+      return {
+        status: "FAIL",
+        feedback:
+          "Critique failed due to an error. Treating as FAIL for safety.",
+        actionable_steps: [],
+      };
     }
   }
 
@@ -580,55 +871,111 @@ export class AIService {
     targetText: string,
     previousAnalysis: any,
     critique: any,
+    previewBuffer?: Buffer,
   ) {
     const model =
       process.env.GEMINI_MODEL_ENDPOINT_2 ||
       process.env.GEMINI_MODEL_ENDPOINT ||
       "gemini-3-flash-preview";
+
+    // Extract no-go zones from previous analysis if available
+    const noGoZones = previousAnalysis.no_go_zones || [];
+    const noGoZonesStr =
+      noGoZones.length > 0
+        ? `\nNO-GO ZONES (areas occupied by people/characters — text MUST NOT overlap these):\n${JSON.stringify(noGoZones, null, 2)}\n`
+        : "";
+
     const prompt = `
       You are a UI/UX expert refining an ad layout based on a Creative Director's critique.
+      You can see TWO images:
+      - IMAGE 1: The ORIGINAL reference image
+      - IMAGE 2: The CURRENT PREVIEW with text overlays (what needs fixing)
       
       ORIGINAL BRIEF: "${targetText}"
-      PREVIOUS PROPOSAL: ${JSON.stringify(previousAnalysis, null, 2)}
+      
+      ${noGoZonesStr}
+      
+      PREVIOUS LAYOUT:
+      ${JSON.stringify(previousAnalysis.suggestions, null, 2)}
       
       CRITIQUE & FEEDBACK: 
       - Status: ${critique.status}
       - Feedback: ${critique.feedback}
-      - Steps: ${JSON.stringify(critique.actionable_steps)}
+      - Actionable Steps: ${JSON.stringify(critique.actionable_steps)}
       
-      TASK:
-      Generate an IMPROVED version of the layout JSON. Fix ALL issues mentioned in the critique.
-      Ensure coordinates are 0-1000 and the JSON structure is preserved perfectly.
+      CRITICAL RULES FOR REFINEMENT:
+      1. Fix ALL issues mentioned in the critique's actionable_steps
+      2. NO text may overlap with any person, mascot, or character in the image
+         - Look at IMAGE 2: if text is on top of a person's body, MOVE IT AWAY
+         - Even if there's a colored banner behind the person, the person is IN FRONT
+      3. Keep the same text content — only change positions, sizes, colors, and styles
+      4. Maintain at least 3% margin from image edges (30 in 0-1000 coords)
+      5. Coordinates must be 0-1000 normalized
       
-      Return as STRICT JSON (no markdown):
+      Return as STRICT JSON (no markdown, no explanation):
       {
-        "background_description": "...",
-        "campaign_vibe": "...",
-        "suggestions": [...],
-        "components": [...]
+        "background_description": "${previousAnalysis.background_description || ""}",
+        "campaign_vibe": "${previousAnalysis.campaign_vibe || ""}",
+        "no_go_zones": ${JSON.stringify(noGoZones)},
+        "suggestions": [same structure as before with fixed positions],
+        "components": []
       }
     `;
+
+    console.log("[GenAI] Refining layout based on critique...");
+
+    const parts: any[] = [
+      { inlineData: { data: imageBuffer.toString("base64"), mimeType } },
+    ];
+
+    // Include preview image so AI can SEE what's wrong
+    if (previewBuffer) {
+      parts.push({
+        inlineData: {
+          data: previewBuffer.toString("base64"),
+          mimeType: "image/png",
+        },
+      });
+    }
+
+    parts.push({ text: prompt });
 
     const result = await this.withRetry(() =>
       this.client.models.generateContent({
         model,
-        contents: [
-          {
-            role: "user",
-            parts: [
-              {
-                inlineData: { data: imageBuffer.toString("base64"), mimeType },
-              },
-              { text: prompt },
-            ],
-          },
-        ],
+        contents: [{ role: "user", parts }],
       }),
     );
 
     const text = result.text || "";
+    console.log("[GenAI] Refine raw response:", text.substring(0, 500));
+
     const jsonStr = text.match(/\{[\s\S]*\}/)?.[0] || "";
-    return JSON.parse(jsonStr);
+
+    let parsed;
+    try {
+      parsed = JSON.parse(jsonStr);
+    } catch (parseErr) {
+      const cleaned = jsonStr
+        .replace(/\\'/g, "'")
+        .replace(/\\([^"\\\/bfnrtu])/g, "$1")
+        .replace(/[\x00-\x1F\x7F]/g, " ");
+      parsed = JSON.parse(cleaned);
+    }
+
+    // Log what changed
+    if (parsed.suggestions) {
+      console.log(
+        `[GenAI] Refined to ${parsed.suggestions.length} suggestions:`,
+      );
+      parsed.suggestions.forEach((s: any, i: number) => {
+        console.log(
+          `  [${i}] "${(s.part || "").substring(0, 30)}..." → top:${s.position?.top} left:${s.position?.left} size:${s.style?.font_size_normalized}`,
+        );
+      });
+    }
+
+    return parsed;
   }
 
   async separateLayers(
@@ -1137,6 +1484,140 @@ export class AIService {
       console.error("[GenAI] Generate Die-cut Components Error:", error);
       return { results: [], gridImage: null };
     }
+  }
+
+  /**
+   * SIMPLE RENDER: Composites layers directly onto background without AI
+   */
+  async renderSimpleComposite(
+    baseImageBuffer: Buffer,
+    suggestions: any[],
+  ): Promise<Buffer> {
+    const metadata = await sharp(baseImageBuffer).metadata();
+    const width = metadata.width || 800;
+    const height = metadata.height || 600;
+
+    let svgOverlay = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">`;
+
+    // Define shadow filters (matches preview)
+    svgOverlay += `
+      <defs>
+        <filter id="shadow-subtle" x="-5%" y="-5%" width="110%" height="110%">
+          <feDropShadow dx="1" dy="1" stdDeviation="2" flood-color="#000000" flood-opacity="0.5"/>
+        </filter>
+        <filter id="shadow-strong" x="-10%" y="-10%" width="120%" height="120%">
+          <feDropShadow dx="2" dy="2" stdDeviation="4" flood-color="#000000" flood-opacity="0.8"/>
+        </filter>
+      </defs>
+    `;
+
+    const compositeItems: any[] = [];
+
+    for (const s of suggestions) {
+      if (!s.position || typeof s.position.top === "undefined") continue;
+
+      const top = (s.position.top / 1000) * height;
+      const left = (s.position.left / 1000) * width;
+      const w = (s.position.width / 1000) * width;
+      const h = (s.position.height / 1000) * height;
+      const rotation = s.position.rotation || 0;
+
+      if (s.type === "image" && s.imageUrl) {
+        // We'll handle images via Sharp composite for better quality/transparency
+        try {
+          // Extract local filename from URL
+          const filename = s.imageUrl.split("/").pop();
+          const localPath = path.join(__dirname, "../../uploads", filename);
+          if (fs.existsSync(localPath)) {
+            const imgBuffer = fs.readFileSync(localPath);
+            const resizedImg = await sharp(imgBuffer)
+              .resize({
+                width: Math.round(w),
+                height: Math.round(h),
+                fit: "contain",
+                background: { r: 0, g: 0, b: 0, alpha: 0 },
+              })
+              .rotate(rotation, { background: { r: 0, g: 0, b: 0, alpha: 0 } })
+              .toBuffer();
+
+            compositeItems.push({
+              input: resizedImg,
+              top: Math.round(top),
+              left: Math.round(left),
+            });
+          }
+        } catch (err) {
+          console.error(
+            `[SimpleRender] Failed to include component: ${s.imageUrl}`,
+            err,
+          );
+        }
+        continue;
+      }
+
+      // Draw Text Layers in SVG
+      const fontSize = s.style?.font_size_normalized || 40;
+      const color = s.style?.color_hex || "#FFFFFF";
+      const shadow = s.style?.shadow || "none";
+      const fontStyle = s.style?.font_style || "normal";
+      const textAnchor =
+        s.style?.text_align === "center"
+          ? "middle"
+          : s.style?.text_align === "right"
+            ? "end"
+            : "start";
+      const textX =
+        s.style?.text_align === "center"
+          ? left + w / 2
+          : s.style?.text_align === "right"
+            ? left + w
+            : left;
+
+      const lines = (s.part || "").split("\n");
+      const lineHeight = s.style?.line_height || 1.2;
+
+      const filterAttr =
+        shadow === "strong"
+          ? ' filter="url(#shadow-strong)"'
+          : shadow === "subtle"
+            ? ' filter="url(#shadow-subtle)"'
+            : "";
+      const computedH = lines.length * fontSize * lineHeight;
+      const transform =
+        rotation !== 0
+          ? ` transform="rotate(${rotation}, ${left + w / 2}, ${top + computedH / 2})"`
+          : "";
+
+      svgOverlay += `<g${transform}${filterAttr}>`;
+      lines.forEach((line: string, i: number) => {
+        const yLine = top + i * (fontSize * lineHeight);
+        svgOverlay += `
+          <text 
+            x="${textX}" y="${yLine}" 
+            fill="${color}" 
+            font-size="${fontSize}px" 
+            font-family="${s.style?.font_family || "sans-serif"}" 
+            font-weight="${s.style?.font_weight || "normal"}"
+            font-style="${fontStyle}"
+            text-anchor="${textAnchor}"
+            dominant-baseline="hanging"
+            letter-spacing="${s.style?.letter_spacing || 0}"
+          >${line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</text>
+        `;
+      });
+      svgOverlay += `</g>`;
+    }
+
+    svgOverlay += `</svg>`;
+
+    // Layer SVG over background
+    compositeItems.push({
+      input: Buffer.from(svgOverlay),
+      top: 0,
+      left: 0,
+    });
+
+    return sharp(baseImageBuffer).composite(compositeItems).png().toBuffer();
   }
 }
 

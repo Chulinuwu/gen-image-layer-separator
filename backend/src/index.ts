@@ -16,7 +16,14 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Static files (for uploads and generated assets)
-app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
+app.use(
+  "/uploads",
+  express.static(path.join(__dirname, "../uploads"), {
+    setHeaders: (res, path) => {
+      res.setHeader("Content-Disposition", "attachment");
+    },
+  }),
+);
 
 // API Routes
 app.use("/api/image", imageRoutes);

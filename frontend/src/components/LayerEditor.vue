@@ -17,6 +17,7 @@ const bgPreviewUrl = ref<string | null>(null);
 const canvasContainer = ref<HTMLElement | null>(null);
 const renderedImage = ref<string | null>(null);
 const hintText = ref("");
+const renderMode = ref("ai"); // 'ai' or 'simple'
 
 // Watch for background prop
 watch(
@@ -123,6 +124,17 @@ watch(
     }
 
     layers.value = [...imageLayers, ...textLayers];
+
+    // Initial sync of text content to DOM refs
+    setTimeout(() => {
+      layers.value.forEach((layer) => {
+        if (layer.type === "text") {
+          const el = textRefs.value[layer.id];
+          if (el) el.innerText = layer.content;
+        }
+      });
+    }, 0);
+
     console.log(
       `[Editor] Loaded ${imageLayers.length} image + ${textLayers.length} text layers from campaign data`,
     );
@@ -136,6 +148,26 @@ const selectedLayerId = ref<number | null>(null);
 // Dragging state
 const dragItem = ref<number | null>(null);
 const dragOffset = reactive({ x: 0, y: 0 });
+const focusedLayerId = ref<number | null>(null);
+const textRefs = ref<Record<number, HTMLElement>>({});
+
+// Watch for model changes and sync to DOM only if not focused
+watch(
+  () => layers.value,
+  (newLayers) => {
+    newLayers.forEach((layer) => {
+      if (layer.type === "text") {
+        const el = textRefs.value[layer.id];
+        if (el && focusedLayerId.value !== layers.value.indexOf(layer)) {
+          if (el.innerText !== layer.content) {
+            el.innerText = layer.content;
+          }
+        }
+      }
+    });
+  },
+  { deep: true },
+);
 
 const getShadowStyle = (shadow: string) => {
   switch (shadow) {
@@ -235,6 +267,78 @@ const processImage = async () => {
   }
 };
 
+const renderOnClient = async (): Promise<Blob | null> => {
+  const bgImg = document.querySelector(".bg-img") as HTMLImageElement;
+  if (!bgImg || !layers.value.length) return null;
+
+  const width = bgImg.naturalWidth;
+  const height = bgImg.naturalHeight;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  // 1. Draw Background
+  ctx.drawImage(bgImg, 0, 0);
+
+  // 2. Draw Layers
+  for (const l of layers.value) {
+    const x = (l.x / 100) * width;
+    const y = (l.y / 100) * height;
+    const w = (l.w / 100) * width;
+    const h = (l.h / 100) * height;
+    const rotation = l.rotation || 0;
+
+    ctx.save();
+    ctx.translate(x + w / 2, y + h / 2);
+    ctx.rotate((rotation * Math.PI) / 180);
+    ctx.translate(-(x + w / 2), -(y + h / 2));
+
+    if (l.type === "image") {
+      try {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.src = l.imageUrl;
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = reject;
+        });
+        ctx.drawImage(img, x, y, w, h);
+      } catch (e) {
+        console.error("Client Render: Failed to draw image layer", e);
+      }
+    } else {
+      const fontSize = l.style.font_size_normalized || 40;
+      // Use natural scaling for font
+      const pxFontSize = (fontSize / 1000) * height;
+
+      ctx.font = `${l.style.font_weight || "normal"} ${pxFontSize}px ${l.style.font_family || "sans-serif"}`;
+      ctx.fillStyle = l.style.color_hex || "#FFFFFF";
+      ctx.textBaseline = "top";
+
+      // Shadow
+      if (l.style.shadow !== "none") {
+        ctx.shadowColor = "rgba(0,0,0,0.8)";
+        ctx.shadowBlur = l.style.shadow === "strong" ? 12 : 4;
+        ctx.shadowOffsetX = 2;
+        ctx.shadowOffsetY = 2;
+      }
+
+      const lines = (l.content || "").split("\n");
+      const lineHeight = (l.style.line_height || 1.2) * pxFontSize;
+
+      lines.forEach((line: string, i: number) => {
+        ctx.fillText(line, x, y + i * lineHeight);
+      });
+    }
+    ctx.restore();
+  }
+
+  return new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+};
+
 const renderImage = async () => {
   if (!selectedFile.value || !layers.value.length) return;
   rendering.value = true;
@@ -242,9 +346,18 @@ const renderImage = async () => {
 
   try {
     const formData = new FormData();
-    formData.append("image", selectedFile.value);
-    if (bgFile.value) {
-      formData.append("background", bgFile.value);
+
+    if (renderMode.value === "simple") {
+      const blob = await renderOnClient();
+      if (!blob) throw new Error("Client rendering failed");
+      formData.append("rendered_image", blob, "final.png");
+      formData.append("mode", "pre-rendered");
+    } else {
+      formData.append("image", selectedFile.value);
+      if (bgFile.value) {
+        formData.append("background", bgFile.value);
+      }
+      formData.append("mode", "ai");
     }
 
     const suggestions = layers.value.map((l) => ({
@@ -287,6 +400,16 @@ const renderImage = async () => {
 
 // Dragging Logic
 const startDrag = (e: MouseEvent, idx: number) => {
+  const layer = layers.value[idx];
+  const isEditable = (e.target as HTMLElement).classList.contains(
+    "editable-text",
+  );
+
+  // Prevent browser default ghost drag for images or clicking outside editable span
+  if (layer.type === "image" || !isEditable) {
+    e.preventDefault();
+  }
+
   e.stopPropagation();
   selectedLayerId.value = idx;
   dragItem.value = idx;
@@ -294,7 +417,6 @@ const startDrag = (e: MouseEvent, idx: number) => {
   const clientX = e.clientX;
   const clientY = e.clientY;
 
-  const layer = layers.value[idx];
   const rect = canvasContainer.value?.getBoundingClientRect();
   if (!rect) return;
 
@@ -354,16 +476,19 @@ const stopResize = () => {
 
 const updateText = (idx: number, e: Event) => {
   const target = e.target as HTMLElement;
-  layers.value[idx].content = target.innerText;
+  const newContent = target.innerText;
+  if (layers.value[idx].content !== newContent) {
+    layers.value[idx].content = newContent;
+  }
 };
 
-// Fix Focus Cursor at end
-const selectAll = (e: FocusEvent) => {
-  selectedLayerId.value = layers.value.findIndex(
-    (l) => (e.target as HTMLElement).innerText === l.content,
-  );
-  // Optional: auto select all text
-  // window.getSelection()?.selectAllChildren(e.target as HTMLElement);
+const selectAll = (idx: number) => {
+  selectedLayerId.value = idx;
+  focusedLayerId.value = idx;
+};
+
+const onBlurText = () => {
+  focusedLayerId.value = null;
 };
 
 // Selection layer finding
@@ -681,11 +806,13 @@ const downloadAsSvg = async () => {
             undefined
           "
           class="bg-img"
+          draggable="false"
+          style="user-select: none; pointer-events: none"
         />
 
         <div
           v-for="(layer, idx) in layers"
-          :key="idx"
+          :key="layer.id"
           class="text-layer"
           :class="{ active: selectedLayerId === idx }"
           :style="
@@ -726,11 +853,16 @@ const downloadAsSvg = async () => {
           <!-- Text layer -->
           <span
             v-else
+            :ref="
+              (el) => {
+                if (el) textRefs[layer.id] = el as HTMLElement;
+              }
+            "
             contenteditable="true"
             @input="updateText(idx, $event)"
-            @focus="selectAll"
+            @focus="selectAll(idx)"
+            @blur="onBlurText"
             class="editable-text"
-            v-text="layer.content"
           ></span>
           <div
             v-if="selectedLayerId === idx"
@@ -742,18 +874,30 @@ const downloadAsSvg = async () => {
       <div v-else class="placeholder">Upload an image to start editing</div>
     </div>
 
-    <div v-if="layers.length" class="layer-actions mt-4 flex gap-4">
-      <button :disabled="rendering" @click="renderImage" class="btn-primary">
-        {{
-          rendering ? "Rendering Final Image..." : "Save & Render Final Image"
-        }}
-      </button>
+    <div
+      v-if="layers.length"
+      class="layer-actions mt-4 flex gap-4 align-center"
+    >
+      <div class="render-controls flex gap-2">
+        <select v-model="renderMode" class="render-mode-select">
+          <option value="ai">AI Production (Quality)</option>
+          <option value="simple">Raw PNG (Dumb/Speed)</option>
+        </select>
+        <button
+          :disabled="rendering"
+          @click="renderImage"
+          class="btn-primary"
+          style="margin-top: 0"
+        >
+          {{ rendering ? "Rendering..." : "Save & Render" }}
+        </button>
+      </div>
       <button
         @click="downloadAsSvg"
         class="btn-primary"
-        style="background-color: #059669 !important"
+        style="background-color: #059669 !important; margin-top: 0; width: auto"
       >
-        Export as SVG (Editable)
+        Export as SVG
       </button>
     </div>
 
@@ -1070,8 +1214,31 @@ select {
   border-radius: 8px;
 }
 
+.render-controls {
+  background: #f8fafc;
+  padding: 4px;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+}
+
+.render-mode-select {
+  border: none;
+  background: transparent;
+  font-weight: 600;
+  color: #475569;
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+.render-mode-select:focus {
+  outline: none;
+}
+
 .align-center {
   align-items: center;
+}
+.gap-2 {
+  gap: 8px;
 }
 .gap-4 {
   gap: 16px;
