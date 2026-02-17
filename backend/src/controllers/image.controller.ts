@@ -5,22 +5,34 @@ import path from "path";
 
 export const processImage = async (req: Request, res: Response) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: "Image file is required" });
+    const files = req.files as { [fieldname: string]: Express.Multer.File[] };
+
+    if (!files || !files.image || files.image.length === 0) {
+      return res.status(400).json({ error: "Main image file is required" });
     }
 
-    const imageBuffer = fs.readFileSync(req.file.path);
-    const mimeType = req.file.mimetype;
+    const mainImageFile = files.image[0]!;
+    const imageBuffer = fs.readFileSync(mainImageFile.path);
+    const mimeType = mainImageFile.mimetype;
+
+    let backgroundBuffer: Buffer | undefined;
+    if (files.background && files.background.length > 0) {
+      backgroundBuffer = fs.readFileSync(files.background[0]!.path);
+    }
+
+    const { hintText } = req.body;
 
     const layersData = await vertexService.separateLayers(
       imageBuffer,
       mimeType,
+      backgroundBuffer,
+      hintText,
     );
 
     res.json({
       success: true,
       data: {
-        original: `/uploads/${req.file.filename}`,
+        original: `/uploads/${mainImageFile.filename}`,
         analysis: layersData,
       },
     });
@@ -144,19 +156,63 @@ export const suggestCampaign = async (req: Request, res: Response) => {
 
 export const renderCampaign = async (req: Request, res: Response) => {
   try {
-    const { suggestions: suggestionsRaw, image: base64Image } = req.body;
+    const { image: base64Image } = req.body;
+    let suggestionsRaw = req.body.suggestions;
+
+    // Logic: If suggestions field is missing, check if the whole body is the result object
+    if (!suggestionsRaw) {
+      if (req.body.data?.suggestions) {
+        suggestionsRaw = req.body.data.suggestions;
+      } else if (req.body.suggestions) {
+        suggestionsRaw = req.body.suggestions;
+      }
+    }
+
+    if (!suggestionsRaw) {
+      return res.status(400).json({
+        error: "suggestions are required.",
+        hint: "In Postman form-data, use key 'suggestions'. Or send JSON body with a 'suggestions' array.",
+      });
+    }
+
     let imageBuffer: Buffer;
     let mimeType: string;
 
-    // Handle suggestions being sent as string or object
-    const suggestions =
-      typeof suggestionsRaw === "string"
-        ? JSON.parse(suggestionsRaw)
-        : suggestionsRaw;
+    // Handle suggestions being sent as string (from form-data) or object (from JSON)
+    let suggestions: any;
+    try {
+      suggestions =
+        typeof suggestionsRaw === "string"
+          ? JSON.parse(suggestionsRaw)
+          : suggestionsRaw;
 
-    if (req.file) {
-      imageBuffer = fs.readFileSync(req.file.path);
-      mimeType = req.file.mimetype;
+      // extraction logic: handle nested data or plain array
+      if (suggestions.data?.suggestions) {
+        suggestions = suggestions.data.suggestions;
+      } else if (suggestions.suggestions) {
+        suggestions = suggestions.suggestions;
+      }
+    } catch (e) {
+      return res.status(400).json({ error: "Invalid suggestions JSON format" });
+    }
+
+    if (!Array.isArray(suggestions)) {
+      return res.status(400).json({
+        error:
+          "suggestions must be an array (or a response object containing a suggestions array)",
+      });
+    }
+
+    const files = req.files as { [fieldname: string]: Express.Multer.File[] };
+    let backgroundBuffer: Buffer | undefined;
+
+    if (files && files.image && files.image.length > 0) {
+      imageBuffer = fs.readFileSync(files.image[0]!.path);
+      mimeType = files.image[0]!.mimetype;
+
+      if (files.background && files.background.length > 0) {
+        backgroundBuffer = fs.readFileSync(files.background[0]!.path);
+      }
     } else if (base64Image) {
       const match = base64Image.match(/^data:(image\/\w+);base64,/);
       mimeType = match ? match[1]! : "image/png";
@@ -172,6 +228,7 @@ export const renderCampaign = async (req: Request, res: Response) => {
       imageBuffer,
       mimeType,
       suggestions,
+      backgroundBuffer,
     );
 
     if (result.buffer) {

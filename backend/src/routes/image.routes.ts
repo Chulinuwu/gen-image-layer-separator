@@ -29,9 +29,23 @@ const storage = multer.diskStorage({
 const upload = multer({ storage: storage });
 
 // Routes
-router.post("/process", upload.single("image"), processImage);
+router.post(
+  "/process",
+  upload.fields([
+    { name: "image", maxCount: 1 },
+    { name: "background", maxCount: 1 },
+  ]),
+  processImage,
+);
 router.post("/generate", upload.array("images", 10), generateAndSeprate);
 router.post("/add-text", upload.single("image"), suggestCampaign);
-router.post("/render-text", upload.single("image"), renderCampaign);
+router.post(
+  "/render-text",
+  upload.fields([
+    { name: "image", maxCount: 1 },
+    { name: "background", maxCount: 1 },
+  ]),
+  renderCampaign,
+);
 
 export default router;

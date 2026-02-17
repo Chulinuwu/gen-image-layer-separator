@@ -162,28 +162,36 @@ export class AIService {
     imageBuffer: Buffer,
     mimeType: string,
     suggestions: any[],
+    backgroundBuffer?: Buffer,
   ) {
     const textDescriptions = suggestions
       .map(
         (s: any) =>
           `- Text: "${s.part}"
        - Style: ${s.style.font_family}, ${s.style.font_weight}, Color ${s.style.color_hex}
-       - Placement: ${s.position.explanation}`,
+       - Character size: ${s.style.font_size_normalized} (relative scale)
+       - Placement description: ${s.position.explanation || `Place at top:${s.position.top}, left:${s.position.left}`}`,
       )
       .join("\n");
 
+    // Use background as base if provided to avoid ghosting of original text
+    const baseImage = backgroundBuffer || imageBuffer;
+
     const prompt = `
-      Create a high-quality advertisement based on the attached image.
-      Place the following text elements exactly as described:
+      Create a high-quality advertisement based on the attached reference image.
+      YOU MUST RENDER THE FOLLOWING TEXT ELEMENTS ONTO THE IMAGE:
       ${textDescriptions}
       
-      Make sure the text is crisp, legible, and artistically integrated into the scene.
-      Maintain the original background and the people's expressions.
+      CRITICAL INSTRUCTIONS:
+      1. Use a high-quality ${suggestions[0]?.style.font_family || "modern"} font style that matches professional graphic design standards.
+      2. The text must be crisp, high-contrast, and perfectly integrated.
+      3. Maintain the background visual elements from the reference.
+      4. Ensure all text is spelled correctly and placed according to instructions.
     `;
 
     return this.generateImage({
       prompt,
-      inputImages: [{ buffer: imageBuffer, mimeType }],
+      inputImages: [{ buffer: baseImage, mimeType }],
     });
   }
 
@@ -271,13 +279,73 @@ export class AIService {
     }
   }
 
-  async separateLayers(imageBuffer: Buffer, mimeType: string) {
+  async separateLayers(
+    imageBuffer: Buffer,
+    mimeType: string,
+    backgroundImageBuffer?: Buffer,
+    hintText?: string,
+  ) {
     const model = process.env.GEMINI_MODEL_ENDPOINT || "gemini-3-flash-preview";
 
+    const parts: any[] = [
+      { inlineData: { data: imageBuffer.toString("base64"), mimeType } },
+    ];
+
+    let comparisonInstruction = "";
+    if (backgroundImageBuffer) {
+      parts.push({
+        inlineData: {
+          data: backgroundImageBuffer.toString("base64"),
+          mimeType,
+        },
+      });
+      comparisonInstruction = `
+        I have provided TWO images:
+        1. The FIRST image is the composite/final image.
+        2. The SECOND image is the original background.
+        
+        Compare them and identify ONLY the text elements that were added on top of the background.
+      `;
+    }
+
+    let hintInstruction = "";
+    if (hintText) {
+      hintInstruction = `
+        IMPORTANT HINT: The user intended or used the following text in this image: "${hintText}".
+        Use this hint to improve your detection and correct any visual OCR artifacts.
+      `;
+    }
+
     const prompt = `
-      Analyze this image. I want to separate it into layers for editing.
-      Identify text elements and background features.
-      Return JSON with a "layers" array.
+      ${comparisonInstruction}
+      ${hintInstruction}
+      Analyze the image(s) and identify all individual text layers.
+      For each text element found, provide its content, position, and style.
+      
+      Return the result as a STRICT JSON object:
+      {
+        "layers": [
+          {
+            "type": "text",
+            "content": "The exact text as it appears",
+            "position": {
+              "top": 0, "left": 0, "width": 0, "height": 0,
+              "explanation": "Normalized coordinates 0-1000"
+            },
+            "style": {
+              "font_family": "Choose closest from: Inter, Kanit, Playfair Display, Roboto Mono",
+              "font_weight": "normal | bold",
+              "color_hex": "#FFFFFF",
+              "font_size_normalized": "Relative size (e.g. 10-100)"
+            }
+          }
+        ],
+        "background": {
+          "description": "Describe the main background visual components"
+        }
+      }
+      
+      NOTE: For 'font_family', pick the specific name from the list that MOST CLOSELY resembles the text in the image.
     `;
 
     try {
@@ -286,12 +354,7 @@ export class AIService {
         contents: [
           {
             role: "user",
-            parts: [
-              {
-                inlineData: { data: imageBuffer.toString("base64"), mimeType },
-              },
-              { text: prompt },
-            ],
+            parts: [...parts, { text: prompt }],
           },
         ],
       });
