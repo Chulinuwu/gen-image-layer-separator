@@ -107,6 +107,93 @@ curl -X POST http://localhost:5001/api/image/process \
 
 ---
 
+## 3. Add Text (Campaign Suggest)
+
+Suggests optimal placement and styling for campaign text on a given image.
+
+- **URL**: `/add-text`
+- **Method**: `POST`
+- **Content-Type**: `multipart/form-data` or `application/json` (Base64)
+
+### Request Body
+
+| Field   | Type   | Required | Description                                                          |
+| :------ | :----- | :------- | :------------------------------------------------------------------- |
+| `text`  | string | Yes      | The advertisement text you want to add.                              |
+| `image` | file   | Yes\*    | The image file to analyze (if using Form-data).                      |
+| `image` | string | Yes\*    | Base64 string of the image (if using JSON, format: `data:image...`). |
+
+### Example Request (JSON)
+
+```json
+{
+  "text": "SUMMER SALE 50%",
+  "image": "data:image/png;base64,iVBORw0KGgo..."
+}
+```
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "background_analysis": "Description of focal points...",
+    "campaign_vibe": "Modern...",
+    "suggestions": [
+      {
+        "part": "SUMMER SALE 50%",
+        "position": { "top": 100, "left": 100, "width": 400, "height": 100 },
+        "style": {
+          "font_family": "sans-serif",
+          "color_hex": "#FF0000",
+          "font_size_normalized": 60
+        },
+        "rationale": "Why it's placed here..."
+      }
+    ]
+  }
+}
+```
+
+---
+
+## 4. Render Text
+
+Takes the output from `/add-text` and renders the final image with text included.
+
+- **URL**: `/render-text`
+- **Method**: `POST`
+- **Content-Type**: `multipart/form-data`
+
+### Request Body
+
+| Field         | Type   | Required | Description                                            |
+| :------------ | :----- | :------- | :----------------------------------------------------- |
+| `image`       | file   | Yes\*    | The original base image.                               |
+| `image`       | string | Yes\*    | Base64 string of the original image.                   |
+| `suggestions` | array  | Yes      | The `suggestions` array from the `/add-text` response. |
+
+### Example Request (Form Data)
+
+- `image`: [File]
+- `suggestions`: `[{"part": "SALE", "position": {...}, "style": {...}}]`
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "imageUrl": "/uploads/rendered-123456.png",
+    "text": "Final metadata/desc from AI",
+    "prompt": "The prompt sent to AI"
+  }
+}
+```
+
+---
+
 ## Technical Details
 
 - **Framework**: Express.js with TypeScript

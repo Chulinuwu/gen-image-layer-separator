@@ -1,76 +1,77 @@
+/**
+ * AI Service using @google/genai SDK (Vertex AI mode)
+ * Billing goes to GCP Vertex AI
+ *
+ * Key: location must be "global" for Gemini 3 preview models
+ */
+
 import { GoogleGenAI } from "@google/genai";
-import { VertexAI } from "@google-cloud/vertexai";
 import dotenv from "dotenv";
 
 dotenv.config();
 
-const project_id =
-  process.env.GOOGLE_SERVICE_ACCOUNT_PROJECT_ID || "chulinmain";
-const location = "us-central1";
+let genAIInstance: GoogleGenAI | null = null;
 
 /**
- * AI Service using the new @google/genai (Unified SDK)
+ * Get or create Google GenAI client singleton (Vertex AI mode)
  */
-export class AIService {
-  private ai: any;
-  private vertexAI: VertexAI; // Kept for legacy if needed
+function getGenAIClient(): GoogleGenAI {
+  if (genAIInstance) {
+    return genAIInstance;
+  }
 
-  constructor() {
-    console.log("Initializing Unified Google Gen AI SDK...");
+  const projectId = process.env.GOOGLE_SERVICE_ACCOUNT_PROJECT_ID;
+  // Gemini 3 requires location="global" (not us-central1)
+  const location = process.env.GOOGLE_CLOUD_LOCATION || "global";
 
-    const private_key = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.replace(
+  // Build credentials from environment variables
+  const credentials = {
+    type: process.env.GOOGLE_SERVICE_ACCOUNT_TYPE || "service_account",
+    project_id: process.env.GOOGLE_SERVICE_ACCOUNT_PROJECT_ID,
+    private_key_id: process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY_ID,
+    private_key: process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.replace(
       /\\n/g,
       "\n",
-    );
-    const client_email = process.env.GOOGLE_SERVICE_ACCOUNT_CLIENT_EMAIL;
-    const locationOverride =
-      process.env.GOOGLE_SERVICE_ACCOUNT_LOCATION || "us-central1";
-    const apiKey = process.env.GOOGLE_API_KEY;
+    ),
+    client_email: process.env.GOOGLE_SERVICE_ACCOUNT_CLIENT_EMAIL,
+    client_id: process.env.GOOGLE_SERVICE_ACCOUNT_CLIENT_ID,
+    auth_uri: "https://accounts.google.com/o/oauth2/auth",
+    token_uri: "https://oauth2.googleapis.com/token",
+    auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+    client_x509_cert_url: `https://www.googleapis.com/robot/v1/metadata/x509/${encodeURIComponent(
+      process.env.GOOGLE_SERVICE_ACCOUNT_CLIENT_EMAIL || "",
+    )}`,
+    universe_domain: "googleapis.com",
+  };
 
-    // ERROR FIX: Project/location and API key are mutually exclusive in this SDK.
-    // If API key is present, we try using it. Otherwise, use Service Account.
-    const options: any = {
-      vertexai: true,
-    };
+  if (!credentials.client_email || !credentials.private_key) {
+    throw new Error("Missing required Google Cloud credentials for Vertex AI.");
+  }
 
-    if (apiKey) {
-      console.log("Using API Key for GenAI (Vertex mode)...");
-      // ERROR FIX: Project/location and API key are mutually exclusive in the client initializer.
-      // If we use an API Key, we must NOT pass project or location in the options.
-      // Note: When using an API key, this defaults to the 'global' Google AI mode, not Vertex AI.
-      this.ai = new GoogleGenAI({
-        apiKey: apiKey,
-        vertexai: true,
-      });
-    } else {
-      console.log(
-        "Using Service Account for GenAI (Vertex mode) in",
-        locationOverride,
-      );
-      this.ai = new GoogleGenAI({
-        vertexai: true,
-        project: project_id,
-        location: locationOverride,
-        googleAuthOptions:
-          private_key && client_email
-            ? {
-                credentials: { client_email, private_key, project_id },
-              }
-            : undefined,
-      });
-    }
+  // Create GoogleGenAI client in Vertex AI mode
+  genAIInstance = new GoogleGenAI({
+    vertexai: true,
+    project: projectId!,
+    location,
+    googleAuthOptions: {
+      credentials,
+    },
+  });
 
-    // Keeping standalone VertexAI SDK just in case
-    this.vertexAI = new VertexAI({
-      project: project_id,
-      location: locationOverride,
-      googleAuthOptions:
-        private_key && client_email
-          ? {
-              credentials: { client_email, private_key, project_id },
-            }
-          : undefined,
-    });
+  console.log(
+    `✅ Google GenAI client initialized (Vertex AI mode, location=${location})`,
+  );
+  return genAIInstance;
+}
+
+/**
+ * AI Service class
+ */
+export class AIService {
+  private client: GoogleGenAI;
+
+  constructor() {
+    this.client = getGenAIClient();
   }
 
   /**
@@ -86,8 +87,6 @@ export class AIService {
       process.env.GEMINI_IMAGE_ENDPOINT || "gemini-3-pro-image-preview";
 
     const parts: any[] = [];
-
-    // Add reference images
     if (params.inputImages) {
       params.inputImages.forEach((img) => {
         parts.push({
@@ -98,13 +97,11 @@ export class AIService {
         });
       });
     }
-
-    // Add text prompt
     parts.push({ text: params.prompt });
 
-    console.log(`[GenAI] Generating with model: ${model}`);
+    console.log(`[GenAI] Generating image with model: ${model}`);
 
-    const generationConfig = {
+    const config: any = {
       maxOutputTokens: 32768,
       temperature: 1,
       topP: 0.95,
@@ -112,9 +109,6 @@ export class AIService {
       imageConfig: {
         aspectRatio: params.aspect_ratio || "1:1",
         imageSize: params.resolution || "1K",
-        // Note: outputMimeType sometimes causes 400 in Vertex SDK if not supported by the specific model version
-        // We will include it as the user's snippet had it, but be wary of 400 errors.
-        outputMimeType: "image/png",
       },
       safetySettings: [
         { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "OFF" },
@@ -125,11 +119,10 @@ export class AIService {
     };
 
     try {
-      // Use generateContentStream as per user request
-      const streamingResp = await this.ai.models.generateContentStream({
-        model: model,
+      const streamingResp = await this.client.models.generateContentStream({
+        model,
         contents: [{ role: "user", parts }],
-        config: generationConfig,
+        config,
       });
 
       let generatedImageBuffer: Buffer | null = null;
@@ -139,13 +132,11 @@ export class AIService {
         if (chunk.text) {
           responseText += chunk.text;
         }
-
-        // Handle parts in the response chunk
         if (chunk.candidates?.[0]?.content?.parts) {
           for (const part of chunk.candidates[0].content.parts) {
-            if (part.inlineData) {
+            if (part.inlineData?.data) {
               generatedImageBuffer = Buffer.from(
-                part.inlineData.data,
+                part.inlineData.data as string,
                 "base64",
               );
             }
@@ -159,31 +150,139 @@ export class AIService {
         prompt: params.prompt,
       };
     } catch (error: any) {
-      console.error("[GenAI] SDK Error:", error);
+      console.error("[GenAI] Image Generation Error:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Renders the final campaign image by combining the original image with the suggested text layout
+   */
+  async renderCampaignImage(
+    imageBuffer: Buffer,
+    mimeType: string,
+    suggestions: any[],
+  ) {
+    const textDescriptions = suggestions
+      .map(
+        (s: any) =>
+          `- Text: "${s.part}"
+       - Style: ${s.style.font_family}, ${s.style.font_weight}, Color ${s.style.color_hex}
+       - Placement: ${s.position.explanation}`,
+      )
+      .join("\n");
+
+    const prompt = `
+      Create a high-quality advertisement based on the attached image.
+      Place the following text elements exactly as described:
+      ${textDescriptions}
+      
+      Make sure the text is crisp, legible, and artistically integrated into the scene.
+      Maintain the original background and the people's expressions.
+    `;
+
+    return this.generateImage({
+      prompt,
+      inputImages: [{ buffer: imageBuffer, mimeType }],
+    });
+  }
+
+  /**
+   * Suggests text placement and styling for an advertising campaign
+   */
+  async suggestCampaignLayout(
+    imageBuffer: Buffer,
+    mimeType: string,
+    targetText: string,
+  ) {
+    const model = process.env.GEMINI_MODEL_ENDPOINT || "gemini-3-flash-preview";
+
+    const prompt = `
+      Act as a professional graphic designer and advertising specialist.
+      Analyze this image for an advertising campaign.
+      
+      Target Text to include: "${targetText}"
+      
+      Suggest the best placement and styling for this text to make a stunning and effective advertisement.
+      Consider focal points, empty space (negative space), and color contrast.
+      
+      Return the result as a STRICT JSON object:
+      {
+        "background_analysis": "Brief description of focal points and colors",
+        "campaign_vibe": "Energetic, Minimalist, Luxury, etc.",
+        "suggestions": [
+          {
+            "part": "Specific chunk of the text (if split, else full text)",
+            "position": {
+              "top": 0, "left": 0, "width": 0, "height": 0,
+              "explanation": "Normalized coordinates 0-1000"
+            },
+            "style": {
+              "font_family": "serif | sans-serif | display | script",
+              "font_weight": "normal | bold",
+              "color_hex": "#FFFFFF",
+              "font_size_normalized": "Relative size (e.g. 10-100)",
+              "text_align": "left | center | right",
+              "letter_spacing": "normal | wide",
+              "shadow": "none | subtle | strong"
+            },
+            "rationale": "Why this placement and style works for this specific image"
+          }
+        ]
+      }
+    `;
+
+    const config: any = {
+      maxOutputTokens: 65535,
+      temperature: 1,
+      topP: 0.95,
+      safetySettings: [
+        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "OFF" },
+        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "OFF" },
+        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "OFF" },
+        { category: "HARM_CATEGORY_HARASSMENT", threshold: "OFF" },
+      ],
+    };
+
+    try {
+      console.log(`[GenAI] Suggesting Layout with model: ${model}`);
+      const response = await this.client.models.generateContent({
+        model,
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                inlineData: { data: imageBuffer.toString("base64"), mimeType },
+              },
+              { text: prompt },
+            ],
+          },
+        ],
+        config,
+      });
+
+      const responseText = response.text ? response.text.trim() : "";
+      const jsonString = responseText.replace(/```json|```/g, "").trim();
+      return JSON.parse(jsonString || "{}");
+    } catch (error: any) {
+      console.error("[GenAI] Suggest Layout Error:", error);
       throw error;
     }
   }
 
   async separateLayers(imageBuffer: Buffer, mimeType: string) {
-    const modelName =
-      process.env.GEMINI_MODEL_ENDPOINT || "gemini-3-flash-preview";
+    const model = process.env.GEMINI_MODEL_ENDPOINT || "gemini-3-flash-preview";
 
     const prompt = `
       Analyze this image. I want to separate it into layers for editing.
-      1. Identify all text elements.
-      2. Identify the main background.
-      3. For each text element, provide:
-         - The exact text content.
-         - The bounding box [ymin, xmin, ymax, xmax] in normalized coordinates (0-1000).
-         - Likely font style (serif, sans-serif, script).
-         - Color in hex.
-      
-      Return the result as a JSON object with a "layers" array.
+      Identify text elements and background features.
+      Return JSON with a "layers" array.
     `;
 
     try {
-      const result = await this.ai.models.generateContent({
-        model: modelName,
+      const response = await this.client.models.generateContent({
+        model,
         contents: [
           {
             role: "user",
@@ -197,13 +296,12 @@ export class AIService {
         ],
       });
 
-      const text = result.response.candidates?.[0]?.content.parts[0].text;
-      const jsonString = text?.replace(/```json|```/g, "").trim();
-
+      const responseText = response.text ? response.text.trim() : "";
+      const jsonString = responseText.replace(/```json|```/g, "").trim();
       try {
         return JSON.parse(jsonString || "{}");
       } catch (e) {
-        return { raw: text };
+        return { raw: responseText };
       }
     } catch (error: any) {
       console.error("[GenAI] Separate Layers Error:", error);

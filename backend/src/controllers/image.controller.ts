@@ -100,3 +100,98 @@ export const generateAndSeprate = async (req: Request, res: Response) => {
     res.status(500).json({ error: error.message });
   }
 };
+export const suggestCampaign = async (req: Request, res: Response) => {
+  try {
+    const { text: targetText, image: base64Image } = req.body;
+    let imageBuffer: Buffer;
+    let mimeType: string;
+
+    if (req.file) {
+      imageBuffer = fs.readFileSync(req.file.path);
+      mimeType = req.file.mimetype;
+    } else if (base64Image) {
+      const match = base64Image.match(/^data:(image\/\w+);base64,/);
+      mimeType = match ? match[1]! : "image/png";
+      const cleanB64 = base64Image.replace(/^data:image\/\w+;base64,/, "");
+      imageBuffer = Buffer.from(cleanB64, "base64");
+    } else {
+      return res
+        .status(400)
+        .json({ error: "Image (file or base64) and text are required" });
+    }
+
+    if (!targetText) {
+      return res
+        .status(400)
+        .json({ error: "Text is required for campaign analysis" });
+    }
+
+    const analysis = await vertexService.suggestCampaignLayout(
+      imageBuffer,
+      mimeType,
+      targetText,
+    );
+
+    res.json({
+      success: true,
+      data: analysis,
+    });
+  } catch (error: any) {
+    console.error("Campaign Suggest error:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const renderCampaign = async (req: Request, res: Response) => {
+  try {
+    const { suggestions: suggestionsRaw, image: base64Image } = req.body;
+    let imageBuffer: Buffer;
+    let mimeType: string;
+
+    // Handle suggestions being sent as string or object
+    const suggestions =
+      typeof suggestionsRaw === "string"
+        ? JSON.parse(suggestionsRaw)
+        : suggestionsRaw;
+
+    if (req.file) {
+      imageBuffer = fs.readFileSync(req.file.path);
+      mimeType = req.file.mimetype;
+    } else if (base64Image) {
+      const match = base64Image.match(/^data:(image\/\w+);base64,/);
+      mimeType = match ? match[1]! : "image/png";
+      const cleanB64 = base64Image.replace(/^data:image\/\w+;base64,/, "");
+      imageBuffer = Buffer.from(cleanB64, "base64");
+    } else {
+      return res
+        .status(400)
+        .json({ error: "Image and suggestions are required" });
+    }
+
+    const result = await vertexService.renderCampaignImage(
+      imageBuffer,
+      mimeType,
+      suggestions,
+    );
+
+    if (result.buffer) {
+      const filename = `rendered-${Date.now()}.png`;
+      const uploadPath = path.join(__dirname, "../../uploads", filename);
+      fs.writeFileSync(uploadPath, result.buffer);
+
+      res.json({
+        success: true,
+        data: {
+          imageUrl: `/uploads/${filename}`,
+          text: result.text,
+          prompt: result.prompt,
+        },
+      });
+    } else {
+      res.status(500).json({ error: "Failed to render image" });
+    }
+  } catch (error: any) {
+    console.error("Render Campaign error:", error);
+    res.status(500).json({ error: error.message });
+  }
+};

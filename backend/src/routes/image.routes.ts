@@ -4,6 +4,8 @@ import path from "path";
 import {
   processImage,
   generateAndSeprate,
+  suggestCampaign,
+  renderCampaign,
 } from "../controllers/image.controller";
 
 const router = Router();
@@ -29,5 +31,7 @@ const upload = multer({ storage: storage });
 // Routes
 router.post("/process", upload.single("image"), processImage);
 router.post("/generate", upload.array("images", 10), generateAndSeprate);
+router.post("/add-text", upload.single("image"), suggestCampaign);
+router.post("/render-text", upload.single("image"), renderCampaign);
 
 export default router;
