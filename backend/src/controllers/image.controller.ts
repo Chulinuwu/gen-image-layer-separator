@@ -392,10 +392,11 @@ export const renderCampaign = async (req: Request, res: Response) => {
 };
 
 /**
- * NEW FLOW: Build-Up Pipeline
+ * NEW FLOW: Build-Up Pipeline with SSE Live Preview
  * 1. Suggest text + components from reference image
- * 2. Generate die-cut component PNGs (sprite sheet → crop → die-cut)
- * 3. Return everything as layers for the editor
+ * 2. Iterative AI refinement with live updates
+ * 3. Generate die-cut component PNGs
+ * 4. Return everything as layers for the editor
  */
 export const createCampaign = async (req: Request, res: Response) => {
   try {
@@ -435,11 +436,24 @@ export const createCampaign = async (req: Request, res: Response) => {
     const refFilename = `ref-${Date.now()}.png`;
     fs.writeFileSync(path.join(uploadDir, refFilename), imageBuffer);
 
+    // Setup SSE
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders();
+
+    const sendSSE = (event: string, data: any) => {
+      res.write(`event: ${event}\n`);
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
     // ───── Step 1: AI Suggest Text + Components ─────
     const { mode } = req.body;
-    console.log(
-      `[Build-Up] Step 1: Suggesting text + components (Mode: ${mode || "full"})...`,
-    );
+    sendSSE("progress", {
+      step: "initial_analysis",
+      message: "AI is analyzing the reference image...",
+    });
+
     const analysis = await vertexService.suggestCampaignLayout(
       imageBuffer,
       mimeType,
@@ -449,22 +463,27 @@ export const createCampaign = async (req: Request, res: Response) => {
     let textSuggestions = analysis.suggestions || [];
     let componentSuggestions = analysis.components || [];
 
-    console.log(
-      `[Build-Up] Got ${textSuggestions.length} text + ${componentSuggestions.length} components`,
-    );
+    sendSSE("progress", {
+      step: "initial_analysis_complete",
+      message: `Found ${textSuggestions.length} text + ${componentSuggestions.length} components`,
+      textCount: textSuggestions.length,
+      componentCount: componentSuggestions.length,
+    });
 
     // ───── Step 1.2: AI Self-Review / Design Feedback Loop (Iterative) ─────
-    console.log("[Build-Up] Step 1.2: AI is reviewing its own suggestion...");
-    const MAX_ITERATIONS = 3;
+    const MAX_ITERATIONS = 10;
     let currentIteration = 0;
     let lastCritique: any = { status: "FAIL" };
 
     try {
       while (currentIteration < MAX_ITERATIONS) {
         currentIteration++;
-        console.log(
-          `[Build-Up] Iteration ${currentIteration}/${MAX_ITERATIONS}`,
-        );
+
+        sendSSE("iteration_start", {
+          iteration: currentIteration,
+          maxIterations: MAX_ITERATIONS,
+          message: `Iteration ${currentIteration}/${MAX_ITERATIONS}: Generating preview...`,
+        });
 
         // Generate visual preview using SVG overlay (matches editor output)
         const previewBuffer = await vertexService.generateLayoutPreview(
@@ -473,9 +492,16 @@ export const createCampaign = async (req: Request, res: Response) => {
           componentSuggestions,
         );
 
-        // Save preview for debugging
+        // Save preview for debugging and frontend display
         const previewFilename = `preview-iter${currentIteration}-${Date.now()}.png`;
-        fs.writeFileSync(path.join(uploadDir, previewFilename), previewBuffer);
+        const previewPath = path.join(uploadDir, previewFilename);
+        fs.writeFileSync(previewPath, previewBuffer);
+
+        sendSSE("preview_ready", {
+          iteration: currentIteration,
+          previewUrl: `/uploads/${previewFilename}`,
+          message: "Preview generated, AI is reviewing...",
+        });
 
         // AI Critique as a Professional Graphic Designer
         const critique = await vertexService.critiqueLayout(
@@ -486,24 +512,39 @@ export const createCampaign = async (req: Request, res: Response) => {
         );
 
         lastCritique = critique;
-        console.log(`[Build-Up] AI Critique Result: ${critique.status}`);
+
+        sendSSE("critique_complete", {
+          iteration: currentIteration,
+          status: critique.status,
+          feedback: critique.feedback,
+          actionableSteps: critique.actionable_steps || [],
+          message:
+            critique.status === "PASS"
+              ? "✅ Layout approved by AI Creative Director!"
+              : `❌ Issues found: ${critique.feedback}`,
+        });
 
         if (critique.status === "PASS") {
-          console.log("[Build-Up] ✅ Layout approved by AI Creative Director!");
+          sendSSE("progress", {
+            step: "refinement_complete",
+            message: "Layout approved! Proceeding to final generation...",
+          });
           break;
         }
 
         // FAIL - needs refinement
-        console.log(
-          `[Build-Up] ❌ AI found issues: ${critique.feedback}. Refining...`,
-        );
-
         if (currentIteration >= MAX_ITERATIONS) {
-          console.log(
-            "[Build-Up] ⚠️ Max iterations reached. Using best available layout.",
-          );
+          sendSSE("progress", {
+            step: "max_iterations_reached",
+            message: "⚠️ Max iterations reached. Using best available layout.",
+          });
           break;
         }
+
+        sendSSE("refining", {
+          iteration: currentIteration,
+          message: "Refining layout based on feedback...",
+        });
 
         // Refine the layout based on critique
         const refinedAnalysis = await vertexService.refineLayout(
@@ -523,9 +564,12 @@ export const createCampaign = async (req: Request, res: Response) => {
           componentSuggestions = refinedAnalysis.components;
           analysis.components = refinedAnalysis.components;
         }
-        console.log(
-          `[Build-Up] Layout refined (iteration ${currentIteration}).`,
-        );
+        sendSSE("iteration_end", {
+          iteration: currentIteration,
+          message: `Layout refined (iteration ${currentIteration}).`,
+          textCount: textSuggestions.length,
+          componentCount: componentSuggestions.length,
+        });
       }
 
       // Add iteration metadata to response
@@ -533,16 +577,20 @@ export const createCampaign = async (req: Request, res: Response) => {
       analysis.final_critique_status = lastCritique.status;
       analysis.final_critique_feedback = lastCritique.feedback;
     } catch (err) {
-      console.error(
-        "[Build-Up] Feedback loop failed, continuing with initial analysis:",
-        err,
-      );
+      sendSSE("error", {
+        step: "refinement_loop",
+        message: "Feedback loop failed, continuing with initial analysis",
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
 
     // ───── Step 1.5: Inpaint Clean Background Image ─────
     let generatedBackgroundImageUrl: string | null = null;
     if (mode === "text") {
-      console.log("[Build-Up] Step 1.5: Skipped (Mode: Text Only)");
+      sendSSE("progress", {
+        step: "inpaint_background",
+        message: "Skipped background inpainting (Mode: Text Only)",
+      });
     } else if (componentSuggestions.length > 0) {
       try {
         console.log("[Build-Up] Step 1.5: Inpainting clean background...");
@@ -650,7 +698,7 @@ export const createCampaign = async (req: Request, res: Response) => {
     }
 
     // ───── Step 3: Return Everything ─────
-    res.json({
+    sendSSE("done", {
       success: true,
       data: {
         referenceImage: `/uploads/${refFilename}`,
@@ -660,10 +708,25 @@ export const createCampaign = async (req: Request, res: Response) => {
         textLayers: textSuggestions,
         visualComponents,
         stackImageUrls: stackImageUrls || [],
+        critiqueIterations: analysis.critique_iterations,
+        finalCritiqueStatus: analysis.final_critique_status,
+        finalCritiqueFeedback: analysis.final_critique_feedback,
       },
     });
+
+    res.end();
   } catch (error: any) {
     console.error("Create Campaign error:", error);
-    res.status(500).json({ error: error.message });
+
+    // Try to send error via SSE if headers not sent yet
+    if (!res.headersSent) {
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+    }
+
+    res.write(`event: error\n`);
+    res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+    res.end();
   }
 };
