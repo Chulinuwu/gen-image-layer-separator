@@ -124,14 +124,18 @@ export class AIService {
     inputImages?: Array<{ buffer: Buffer; mimeType: string }>;
     model?: string;
   }) {
-    // Primary: User provided -> Configured primary -> Default 3pro preview
+    // Primary: User provided -> Configured secondary (Flash) -> Configured primary (Pro) -> Default
     const primaryModel =
       params.model ||
+      process.env.GEMINI_IMAGE_ENDPOINT_2 ||
       process.env.GEMINI_IMAGE_ENDPOINT ||
-      "gemini-3-pro-image-preview";
+      "gemini-2.5-flash-image";
 
-    // Fallback: Secondary endpoint only if primary fails
-    const fallbackModel = process.env.GEMINI_IMAGE_ENDPOINT_2;
+    // Fallback: Use original primary if flash fails
+    const fallbackModel =
+      primaryModel === process.env.GEMINI_IMAGE_ENDPOINT_2
+        ? process.env.GEMINI_IMAGE_ENDPOINT
+        : undefined;
 
     const executeGen = async (targetModel: string) => {
       const parts: any[] = [];
@@ -286,24 +290,37 @@ export class AIService {
     mode: string = "full",
     externalNoGoZones: any[] = [],
   ) {
-    // 1. Optimize Image: Resize to max 1500px to speed up analysis
+    // 1. Resize for faster analysis & stay within model limits
     let processingBuffer = imageBuffer;
     let processingMime = mimeType;
-
     try {
       const meta = await sharp(imageBuffer).metadata();
-      if ((meta.width || 0) > 1500 || (meta.height || 0) > 1500) {
-        processingBuffer = await sharp(imageBuffer)
-          .resize(1500, 1500, { fit: "inside" })
-          .jpeg({ quality: 85 })
-          .toBuffer();
-        processingMime = "image/jpeg";
-        console.log(
-          `[GenAI] specific: Resized input image from ${meta.width}x${meta.height} to max 1500px for speed.`,
-        );
+      const w = meta.width || 800;
+      const h = meta.height || 600;
+
+      // --- OPTIMIZATION: Physical Grid Overlay for Coordinate Accuracy ---
+      let gridSvg = `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">`;
+      // Draw 10x10 Grid
+      for (let i = 1; i < 10; i++) {
+        const x = (i / 10) * w;
+        const y = (i / 10) * h;
+        // Vertical lines
+        gridSvg += `<line x1="${x}" y1="0" x2="${x}" y2="${h}" stroke="rgba(255,255,255,0.3)" stroke-width="1" />`;
+        gridSvg += `<text x="${x + 2}" y="15" fill="white" font-size="14" font-weight="bold" opacity="0.6">${i * 100}</text>`;
+        // Horizontal lines
+        gridSvg += `<line x1="0" y1="${y}" x2="${w}" y2="${y}" stroke="rgba(255,255,255,0.3)" stroke-width="1" />`;
+        gridSvg += `<text x="5" y="${y + 12}" fill="white" font-size="14" font-weight="bold" opacity="0.6">${i * 100}</text>`;
       }
+      gridSvg += `</svg>`;
+
+      processingBuffer = await sharp(imageBuffer)
+        .resize(Math.min(w, 1500))
+        .composite([{ input: Buffer.from(gridSvg), top: 0, left: 0 }])
+        .toBuffer();
+
+      processingMime = "image/jpeg";
     } catch (e) {
-      console.warn("[GenAI] Resize failed, using original image:", e);
+      console.warn("[GenAI] Grid/Resize failed, using original:", e);
     }
 
     // 2. Select Model: Prefer configured endpoints
@@ -339,91 +356,65 @@ export class AIService {
       `;
     }
 
+    const isCompOnly = mode === "only_bg_comp";
+
     const prompt = `
-      Act as a professional graphic designer and advertising specialist.
-      Analyze this reference image and the provided ad brief/text elements.
+      Act as a professional graphic designer. 
+      NOTE: The image has a VISIBLE 10x10 WHITE GRID with numeric markers (100, 200... 900).
+      Use these grid lines as a strict PHYSICAL RULER to determine coordinates. 
+      Map your 0-1000 coordinates exactly to these visible markers. 
       
-      AD BRIEF / TEXT:
+      AD BRIEF / TEXT (Reference only for context):
       """
       ${targetText}
       """
 
       ${noGoInstruction}
       
-      CRITICAL: The AD BRIEF above contains the TEXT CONTENT that MUST appear in the final ad.
-      Even if the reference image doesn't show all text clearly, you MUST extract and suggest
-      placement for ALL text elements mentioned in the brief.
-      
       ═══════════════════════════════════════
-      TASK 0: PERSON & CHARACTER DETECTION (DO THIS FIRST!)
+      TASK 0: PRECISION OBJECT DETECTION
       ═══════════════════════════════════════
-      
-      Before placing ANY text, you MUST:
-      1. Identify ALL people, mascots, and characters in the image
-      2. For each person/character, create MULTIPLE no-go zones — one per BODY PART:
-         - Head/Face area
-         - Torso/Upper body
-         - Left arm (if visible)
-         - Right arm (if visible)
-         - Left leg (if visible)
-         - Right leg (if visible)
-         - For mascots: Head area, Body area
-      3. Each zone should have its own tight bounding box (top, left, width, height in 0-1000)
-      4. Do NOT use one big box for the entire person — that wastes too much space!
-         Instead, break them into 4-8 separate body-part boxes.
-      5. People's legs extend DOWN into colored bands/banners — include those areas!
-      
-      CRITICAL RULE: NO text may overlap with any body-part zone.
-      Even if there is a solid-color banner BEHIND the person, the person is IN FRONT of it.
-      
+      1. Use the VISIBLE GRID to pinpoint ALL people and characters.
+      2. Create tight bounding boxes for each significant body part.
+      3. Use the grid lines to ensure accuracy.
+      4. For mascots: Head area, Body area.
+      5. Each zone should have its own tight bounding box (top, left, width, height in 0-1000).
+      6. Do NOT guess. Map to the grid.
+
       ═══════════════════════════════════════
       
       TASKS:
+      ${
+        isCompOnly
+          ? `
+      1. COMPONENT EXTRACTION (MAIN TASK):
+         - Identify ALL foreground visual elements: Ribbons, banners, price badges, mascots, stickers, logos, person cutouts.
+         - For EACH element, provide a detailed description.
+      2. SKIP TEXT TASKS: Do NOT analyze or suggest text layouts for this request.
+      `
+          : `
       1. SPATIAL ANALYSIS (CRITICAL FIRST STEP):
          - Divide the image into 3 vertical columns: LEFT (0-333), CENTER (334-666), RIGHT (667-1000).
          - Identify which column is EMPTY/SAFE.
          - **RULE: PLACE 90% OF TEXT IN THE 'SAFE COLUMN' ONLY.**
-         - If the Safe Zone is narrow (e.g. only 300 units wide), YOU MUST BREAK LONG SENTENCES.
       
-      2. TEXT EXTRACTION & SMART LINE BREAKING (MANDATORY):
+      2. TEXT EXTRACTION & SMART LINE BREAKING:
          - Read the AD BRIEF.
-         - **CRITICAL RULE**: If a sentence is LONG (e.g. > 15-20 chars) and the Safe Zone is NARROW, you MUST splits it into multiple visual lines/blocks.
-         - DO NOT try to squeeze a long sentence into one line if it will overlap the forbidden zones.
-         - **Example**:
-           - ❌ BAD (Too long): "ชวนลูกค้าแอป SCB EASY และ Robinhood มาสนุก" -> Overlaps person!
-           - ✅ GOOD (Stacked): 
-             Layer 1: "ชวนลูกค้าแอป"
-             Layer 2: "SCB EASY"
-             Layer 3: "และ Robinhood"
-             Layer 4: "มาสนุก"
-             (All stacked vertically in the Safe Zone)
-         
-         - Combine lines ONLY if they are short enough to fit. Otherwise, SPLIT THEM.
+         - Split long sentences into multiple visual lines to fit the Safe Zone.
          - YOU MUST RETURN AT LEAST ONE TEXT SUGGESTION.
       
-      3. DESIGN POLISHING (AESTHETICS & BALANCE):
-         - **GROUPING**: Keep related text (Headline, Subhead, '2 ต่อ') VISUALLY CLOSE together. Do not scatter them efficiently; group them aesthetically to form a solid "Block of Information".
-         - **NO FLOATING**: Do not stick text rigidly to the far left edge. Push the text block INWARDS towards the main subject (Center) as much as possible without overlapping. Close the "awkward gap" between text and model.
-         - **TYPOGRAPHY TUNING**:
-             - For THAI text ('Kanit'): Use 'letter_spacing' between -0.5 and 0 (tighter is more modern).
-             - Use 'line_height' 1.25 - 1.35 to give breathing room for Thai vowels.
-             - "Fine Print" should be visibly separated at the very bottom, away from the main group.
-
-      4. FOR EACH text element/group: provide exact position (TIGHT bounding box), style, and hierarchy.
-         - The bounding box width MUST fit within the 'Safe Zone' found in Task 1.
-         - **If it doesn't fit, GO BACK to Step 2 and split the text further.**
-         - CRITICAL: The bounding box (top, left, width, height) MUST BE TIGHT.
+      3. DESIGN POLISHING:
+         - Group related text visually close together.
+         - Push text block inwards towards subjects to avoid awkward floating gaps.
+      `
+      }
       
       ${
-        mode === "full"
-          ? `5. COMPONENT EXTRACTION: Identify ALL non-text visual elements in the image that are
-         overlaid on the background (NOT the background itself). Examples:
-         - Ribbons, banners, tags, price badges
-         - Mascots, cartoon characters, stickers
-         - Person cutouts, product images
-         - Decorative shapes, frames, boxes, logos
-         For each component, provide a DETAILED visual description so it can be recreated.`
-          : `5. SKIP COMPONENT EXTRACTION: For this request (MODE: ${mode}), do NOT suggest any components. Return an empty array [] for 'components'.`
+        mode === "full" || mode === "only_bg_comp"
+          ? `4. COMPONENT LIST: Identify ALL non-text visual elements overlaid on the background.
+         Examples: Ribbons, banners, price badges, mascots, characters, stickers, person cutouts.
+         For each, provide a DETAILED visual description.`
+          : `4. SKIP COMPONENTS: Return empty array [] for 'components'.`
       }
       
       Return the result as a STRICT JSON object:
@@ -437,9 +428,16 @@ export class AIService {
         },
         "no_go_zones": [
           {
-            "label": "Woman in denim jacket",
-            "area": { "top": 50, "left": 200, "width": 400, "height": 650 },
-            "reason": "Person's full body including legs"
+            "priority": "HIGH (Face/Identity) | MEDIUM (Product/Hands) | LOW (Secondary Body/Background)",
+            "label": "Face of the woman",
+            "area": { "top": 50, "left": 400, "width": 200, "height": 200 },
+            "reason": "Highest priority, DO NOT OVERLAP."
+          },
+          {
+            "priority": "LOW",
+            "label": "Shoulder/Arms",
+            "area": { "top": 250, "left": 300, "width": 400, "height": 300 },
+            "reason": "Less critical, slight overlap OK for layout flow."
           }
         ],
         "suggestions": [
@@ -449,22 +447,26 @@ export class AIService {
               "top": 0, "left": 0, "width": 0, "height": 0, "rotation": 0,
               "explanation": "Normalized coordinates 0-1000. Rotation in degrees (0 for normal, 90 for vertical)."
             },
-            "style": {
-              "font_family": "Choose from: 'Kanit', 'Inter', 'Playfair Display', 'Roboto Mono', 'sans-serif'",
+             "style": {
+              "font_family": "Choose from: 'Kanit', 'Mitr', 'Sriracha', 'Inter', 'Playfair Display', 'Roboto Mono'",
               "font_weight": "normal | bold",
               "font_style": "normal | italic",
               "color_hex": "#FFFFFF",
+              "text_gradient": "[Optional] Array of 2 colors for gradient e.g. ['#FF512F', '#DD2476']",
+              "stroke_hex": "[Optional] Use #FFFFFF (White) for most cases. AVOID #000000 (Black) on dark backgrounds as it looks messy.",
+              "stroke_width": "[Optional] Numeric scale 0-10. For high visibility, use 4-6 (No 'px' unit).",
               "font_size_normalized": "Relative size (e.g. 10 to 120)",
               "text_align": "left | center | right",
-              "letter_spacing": "Numeric tracking (e.g. 0 for normal, 2 for slightly wide, -1 for tight)",
-              "line_height": "Line spacing (e.g. 1.0, 1.2, 1.5)",
+              "letter_spacing": "Numeric tracking (e.g. 0, -1)",
+              "line_height": "Default 1.2",
               "shadow": "none | subtle | strong | outline"
             },
+            "design_notes": "CRITICAL: Maintain a 'Safety Margin' of at least 5-8% from ALL edges (0-1000 scale, so avoid left < 50, right > 950, top < 50, bottom > 950). Do NOT touch the very edge.",
             "hierarchy": "Headline | Body | FinePrint"
           }
         ],
         "components": ${
-          mode === "full"
+          mode === "full" || mode === "only_bg_comp"
             ? `[
           {
             "label": "Short label (e.g. 'Thai boy mascot')",
@@ -483,10 +485,16 @@ export class AIService {
       - If mode is 'full', you MUST extract both text elements and visual components.
       
       ✓ FONT SELECTION RULES:
-      - THAI TEXT: MUST use 'Kanit'.
+      - STANDARD THAI: Use 'Kanit'.
+      - HEADER/MODERN THAI: Use 'Mitr' (Tailless, Friendly).
+      - HANDWRITTEN/FUN: Use 'Sriracha'.
       - MODERN/CLEAN: Use 'Inter'.
       - LUXURY/ELEGANT: Use 'Playfair Display'.
-      - TECH/CODE: Use 'Roboto Mono'.
+      
+      ✓ DESIGN TRICKS (COMMERCIAL GRADE):
+      - **STROKE/OUTLINE**: For main HEADLINES on busy backgrounds, ADD A STROKE (e.g., white stroke on orange text). 
+        Set "stroke_hex": "#FFFFFF", "stroke_width": 3.
+      - **GRADIENTS**: For "Promotional Numbers" (e.g., "50%", "2 ต่อ"), use gradients to make them pop.
       
       ✓ FINEPRINT (Legal disclaimers, terms & conditions, policy text, footer):
         - font_size_normalized: 8-16 (VERY SMALL)
@@ -640,7 +648,7 @@ export class AIService {
     svgOverlay += `
       <defs>
         <style>
-          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&amp;family=Kanit:wght@400;700&amp;family=Playfair+Display:wght@400;700&amp;family=Roboto+Mono:wght@400;700&amp;display=swap');
+          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&amp;family=Kanit:wght@400;700&amp;family=Mitr:wght@400;700&amp;family=Sriracha&amp;family=Playfair+Display:wght@400;700&amp;family=Roboto+Mono:wght@400;700&amp;display=swap');
           text { font-family: 'Inter', sans-serif; }
         </style>
       </defs>
@@ -698,7 +706,8 @@ export class AIService {
     }
 
     // 2. Draw Text Layers with shadow + rotation support
-    for (const s of suggestions) {
+    // 2. Draw Text Layers with shadow + rotation support
+    for (const [idx, s] of suggestions.entries()) {
       if (!s.position || typeof s.position.top === "undefined") continue;
 
       const top = (s.position.top / 1000) * height;
@@ -706,10 +715,9 @@ export class AIService {
       const w = (s.position.width / 1000) * width;
       const h = (s.position.height / 1000) * height;
       const fontSize = s.style?.font_size_normalized || 40;
-      const color = s.style?.color_hex || "#FFFFFF";
       const rotation = s.position?.rotation || 0;
-      const shadow = s.style?.shadow || "none";
       const fontStyle = s.style?.font_style || "normal";
+
       const textAnchor =
         s.style?.text_align === "center"
           ? "middle"
@@ -726,60 +734,81 @@ export class AIService {
       const lines = (s.part || "").split("\n");
       const lineHeight = s.style?.line_height || 1.2;
 
-      // Build filter attribute
-      const filterAttr =
-        shadow === "strong"
-          ? ' filter="url(#shadow-strong)"'
-          : shadow === "subtle"
-            ? ' filter="url(#shadow-subtle)"'
-            : "";
+      // Filter
+      let filterAttr = "";
+      if (s.style?.shadow === "strong")
+        filterAttr = `filter="url(#shadow-strong)"`;
+      else if (s.style?.shadow === "subtle")
+        filterAttr = `filter="url(#shadow-subtle)"`;
 
-      // Build rotation transform
-      const computedH = lines.length * fontSize * lineHeight;
+      // Font
+      const fontFamily = s.style?.font_family || "sans-serif";
+      const fontWeight = s.style?.font_weight || "normal";
+
+      // Rotation Transform (centered on text block)
+      const totalBlockHeight = lines.length * (fontSize * lineHeight);
       const transform =
         rotation !== 0
-          ? ` transform="rotate(${rotation}, ${left + w / 2}, ${top + computedH / 2})"`
+          ? ` transform="rotate(${rotation}, ${left + w / 2}, ${top + totalBlockHeight / 2})"`
           : "";
 
-      svgOverlay += `<g${transform}>`;
+      // Fill (Gradient or Solid)
+      let fill = s.style?.color_hex || "#FFFFFF";
+      if (
+        s.style?.text_gradient &&
+        Array.isArray(s.style.text_gradient) &&
+        s.style.text_gradient.length >= 2
+      ) {
+        const gradId = `grad-${idx}`;
+        const colors = s.style.text_gradient;
+        // Inject gradient defs dynamically
+        svgOverlay += `
+            <defs>
+              <linearGradient id="${gradId}" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" style="stop-color:${colors[0]};stop-opacity:1" />
+                <stop offset="100%" style="stop-color:${colors[1]};stop-opacity:1" />
+              </linearGradient>
+            </defs>
+          `;
+        fill = `url(#${gradId})`;
+      }
+
+      // Stroke
+      let strokeAttr = "";
+      if (s.style?.stroke_hex) {
+        const sw = s.style?.stroke_width || 2;
+        strokeAttr = `stroke="${s.style.stroke_hex}" stroke-width="${sw * 2}" paint-order="stroke" stroke-linejoin="round"`;
+      }
 
       lines.forEach((line: string, i: number) => {
-        const yLine = top + i * (fontSize * lineHeight);
-        // Layer 1: Thick RED STROKE behind text — hugs exact character shapes
+        // Use fontSize * lineHeight for spacing, but careful with baseline
+        // dominant-baseline="hanging" approach in previous code was... strict.
+        // Let's stick to standard baseline, allowing 'top' to be the top of the line.
+        const lineY = top + (i + 1) * (fontSize * lineHeight);
+
+        // --- RESTORED: Subtle Red Halo (for visibility without clutter) ---
         svgOverlay += `
-          <text 
-            x="${textX}" y="${yLine}" 
-            fill="rgba(255, 0, 0, 0.35)" 
-            stroke="rgba(255, 0, 0, 0.25)" 
-            stroke-width="${fontSize * 0.4}" 
-            paint-order="stroke"
-            font-size="${fontSize}px" 
-            font-family="${s.style?.font_family || "sans-serif"}" 
-            font-weight="${s.style?.font_weight || "normal"}"
-            font-style="${fontStyle}"
-            text-anchor="${textAnchor}"
-            dominant-baseline="hanging"
-            letter-spacing="${s.style?.letter_spacing || 0}"
-          >${line}</text>
+          <text x="${textX}" y="${lineY}" 
+                fill="rgba(255, 0, 0, 0.1)" 
+                stroke="rgba(255, 0, 0, 0.1)" stroke-width="${fontSize * 0.25}" paint-order="stroke" 
+                font-family="${fontFamily}" font-size="${fontSize}px" font-weight="${fontWeight}" font-style="${fontStyle}" text-anchor="${textAnchor}" letter-spacing="${s.style?.letter_spacing || 0}px"
+                ${transform}>${escapeXml(line)}</text>
         `;
-        // Layer 2: Actual text on top
+
+        // --- Main Text Layer (with dynamic Stroke & Fill) ---
         svgOverlay += `
-          <text 
-            x="${textX}" y="${yLine}" 
-            fill="${color}" 
-            font-size="${fontSize}px" 
-            font-family="${s.style?.font_family || "sans-serif"}" 
-            font-weight="${s.style?.font_weight || "normal"}"
-            font-style="${fontStyle}"
-            text-anchor="${textAnchor}"
-            dominant-baseline="hanging"
-            letter-spacing="${s.style?.letter_spacing || 0}"
-            ${filterAttr}
-          >${line}</text>
+          <text x="${textX}" y="${lineY}" 
+                fill="${fill}" 
+                ${strokeAttr}
+                font-family="${fontFamily}" 
+                font-size="${fontSize}px" 
+                font-weight="${fontWeight}"
+                font-style="${fontStyle}"
+                text-anchor="${textAnchor}"
+                letter-spacing="${s.style?.letter_spacing || 0}px"
+                ${filterAttr}${transform}>${escapeXml(line)}</text>
         `;
       });
-
-      svgOverlay += `</g>`;
     }
 
     svgOverlay += "</svg>";
@@ -819,16 +848,22 @@ export class AIService {
       Before making ANY judgment, you MUST examine IMAGE 2 (the PREVIEW) and answer these questions for EACH visible text block:
       
       For each text overlay you see in IMAGE 2:
-        Q1: "What is DIRECTLY BEHIND this text?" (e.g., sky, person's legs, purple banner, trees, etc.)
-        Q2: "Is any part of a human body behind this text?" (yes/no)
-        Q3: "Is any part of a mascot/character behind this text?" (yes/no)
+        Q1: "What is DIRECTLY BEHIND this text?" (e.g., sky, person's shoulder, face, background, etc.)
+        Q2: "Is the FACE or EYES of a human obscured?" (yes/no)
+        Q3: "If body parts are obscured, is it just secondary areas like shoulders/arms?" (yes/no)
         Q4: "Can I read this text easily, or does the color blend with the background?"
       
       You MUST list your findings for EACH text block in your feedback. Do NOT skip this step.
       
       ═══════════════════════════════════════
-      HARD FAIL CONDITIONS (ANY ONE = INSTANT FAIL):
+      CRITIQUE CRITERIA (PROFESSIONAL STANDARD):
       ═══════════════════════════════════════
+      
+      ✓ ALLOWED: Overlapping secondary body parts (shoulders, hair outskirts, legs) is ACCEPTABLE if it improves the overall layout and flow.
+      
+      ✗ FORBIDDEN: Obscuring the FACE, EYES, or key identifying features of the subject is a HARD FAIL.
+      
+      ✗ FORBIDDEN: Text spanning across very high-contrast edges without proper Stroke/Background is a FAIL.
       
       ✗ NO TEXT OR MISSING TEXT:
         - If IMAGE 2 has NO visible text at all → FAIL
@@ -1329,8 +1364,8 @@ export class AIService {
     gridImage: Buffer | null;
   }> {
     const model =
-      process.env.GEMINI_IMAGE_ENDPOINT ||
       process.env.GEMINI_IMAGE_ENDPOINT_2 ||
+      process.env.GEMINI_IMAGE_ENDPOINT ||
       "gemini-3-pro-image-preview";
 
     const n = batch.length;

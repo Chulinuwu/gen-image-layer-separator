@@ -146,14 +146,22 @@ const useGeneratedBg = () => {
               :class="{ active: mode === 'full' }"
               @click="mode = 'full'"
             >
-              Full Separation (Text + Components)
+              Full (Text + Comp)
             </button>
             <button
               type="button"
               :class="{ active: mode === 'text' }"
               @click="mode = 'text'"
             >
-              Text & Background Only
+              Text & BG Only
+            </button>
+            <button
+              type="button"
+              :class="{ active: mode === 'only_bg_comp' }"
+              @click="mode = 'only_bg_comp'"
+              title="Test: Generate only Background and components (No Text)"
+            >
+              Inpaint & Die-cut Only
             </button>
           </div>
         </div>

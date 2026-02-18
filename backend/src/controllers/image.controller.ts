@@ -21,32 +21,44 @@ export const processImage = async (req: Request, res: Response) => {
       backgroundBuffer = fs.readFileSync(files.background[0]!.path);
     }
 
-    const { hintText } = req.body;
+    const { hintText, mode } = req.body;
 
-    // Step 1: Analyze components + Extract text in parallel (both use fast text model)
-    console.log("[Pipeline] Step 1: Analyzing components + Extracting text...");
-    const [analysisResult, textResult] = await Promise.allSettled([
+    // Step 1: Analyze components + Extract text in parallel
+    console.log(
+      `[Pipeline] Step 1: Analyzing components (Mode: ${mode || "full"})...`,
+    );
+
+    const tasks: any[] = [
       vertexService.analyzeComponents(imageBuffer, mimeType, backgroundBuffer),
-      vertexService.separateLayers(
-        imageBuffer,
-        mimeType,
-        backgroundBuffer,
-        hintText,
-      ),
-    ]);
+    ];
+
+    // Only extract text if NOT in 'only_bg_comp' mode
+    if (mode !== "only_bg_comp") {
+      tasks.push(
+        vertexService.separateLayers(
+          imageBuffer,
+          mimeType,
+          backgroundBuffer,
+          hintText,
+        ),
+      );
+    }
+
+    const results = await Promise.allSettled(tasks);
 
     const analysisData =
-      analysisResult.status === "fulfilled"
-        ? analysisResult.value
-        : { components: [] };
-    const layersData =
-      textResult.status === "fulfilled" ? textResult.value : { layers: [] };
+      results[0].status === "fulfilled" ? results[0].value : { components: [] };
 
-    if (analysisResult.status === "rejected") {
-      console.error("Worker (Analyze) failed:", analysisResult.reason);
+    const layersData =
+      mode !== "only_bg_comp" && results[1]?.status === "fulfilled"
+        ? (results[1] as any).value
+        : { layers: [] };
+
+    if (results[0].status === "rejected") {
+      console.error("Worker (Analyze) failed:", results[0].reason);
     }
-    if (textResult.status === "rejected") {
-      console.error("Worker (Text) failed:", textResult.reason);
+    if (mode !== "only_bg_comp" && results[1]?.status === "rejected") {
+      console.error("Worker (Text) failed:", (results[1] as any).reason);
     }
 
     // Step 1.5: Generate clean background if not provided (Inpainting approach)
@@ -513,11 +525,19 @@ export const createCampaign = async (req: Request, res: Response) => {
     let componentSuggestions = analysis.components || [];
 
     // FORCE: Strip components if mode is 'text' — don't trust AI to follow the prompt
-    if ((mode || "full") === "text" && componentSuggestions.length > 0) {
+    if (mode === "text" && componentSuggestions.length > 0) {
       console.warn(
         `[WARNING] AI returned ${componentSuggestions.length} components in text-only mode! Stripping them.`,
       );
       componentSuggestions = [];
+    }
+
+    // FORCE: Strip text if mode is 'only_bg_comp'
+    if (mode === "only_bg_comp" && textSuggestions.length > 0) {
+      console.warn(
+        `[WARNING] AI returned ${textSuggestions.length} text suggestions in only_bg_comp mode! Stripping them.`,
+      );
+      textSuggestions = [];
     }
 
     sendSSE("progress", {
@@ -532,8 +552,19 @@ export const createCampaign = async (req: Request, res: Response) => {
     let currentIteration = 0;
     let lastCritique: any = { status: "FAIL" };
 
+    // SKIP ITERATION if mode is 'only_bg_comp' (no text to refine)
+    const shouldSkipIteration = mode === "only_bg_comp";
+
     try {
-      while (currentIteration < MAX_ITERATIONS) {
+      if (shouldSkipIteration) {
+        sendSSE("progress", {
+          step: "refinement_skipped",
+          message:
+            "Refinement skipped (Component Only Mode). Proceeding to final generation...",
+        });
+      }
+
+      while (currentIteration < MAX_ITERATIONS && !shouldSkipIteration) {
         currentIteration++;
 
         sendSSE("iteration_start", {
@@ -793,6 +824,10 @@ export const createCampaign = async (req: Request, res: Response) => {
       });
     } else if (componentSuggestions.length > 0) {
       try {
+        sendSSE("progress", {
+          step: "inpaint_background",
+          message: "AI Art Director is cleaning the background (Inpainting)...",
+        });
         console.log("[Build-Up] Step 1.5: Inpainting clean background...");
         const componentsToDelete = componentSuggestions
           .map(
@@ -807,6 +842,19 @@ export const createCampaign = async (req: Request, res: Response) => {
               `- TEXT: "${t.part}" at [top: ${t.position.top}, left: ${t.position.left}, width: ${t.position.width}, height: ${t.position.height}]`,
           )
           .join("\n");
+
+        // Detect aspect ratio from original image
+        const metadata = await sharp(imageBuffer).metadata();
+        const width = metadata.width || 1;
+        const height = metadata.height || 1;
+        const ratio = width / height;
+
+        let aspect_ratio = "3:4"; // Default portrait
+        if (ratio > 1.2)
+          aspect_ratio = "4:3"; // Landscape
+        else if (ratio < 0.8)
+          aspect_ratio = "3:4"; // Portrait
+        else aspect_ratio = "1:1"; // Square
 
         const bgResponse = await vertexService.generateImage({
           prompt: `
@@ -824,8 +872,7 @@ export const createCampaign = async (req: Request, res: Response) => {
             3. THE RESULT MUST BE AN EMPTY BACKGROUND VERSION OF THE REFERENCE IMAGE.
             4. Do NOT hallucinate new objects. If a greenhouse is there, keep same greenhouse style.
           `,
-          // Try to match aspect ratio of original
-          aspect_ratio: "3:4",
+          aspect_ratio,
           inputImages: [{ buffer: imageBuffer, mimeType }],
         });
 
@@ -836,9 +883,26 @@ export const createCampaign = async (req: Request, res: Response) => {
           console.log(
             `[Build-Up] Inpainted clean background: ${generatedBackgroundImageUrl}`,
           );
+
+          // Update live preview with the clean background
+          sendSSE("preview_ready", {
+            iteration: currentIteration,
+            previewUrl: generatedBackgroundImageUrl,
+            message: "AI cleaned the background successfully!",
+          });
+        } else {
+          sendSSE("progress", {
+            step: "inpaint_failed",
+            message:
+              "⚠️ Background cleaning failed, using original background.",
+          });
         }
       } catch (err) {
         console.error("[Build-Up] Background generation failed:", err);
+        sendSSE("progress", {
+          step: "inpaint_error",
+          message: "⚠️ Background cleaning encountered an error.",
+        });
       }
     }
 

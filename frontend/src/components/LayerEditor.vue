@@ -203,7 +203,7 @@ const onBgChange = (e: any) => {
   }
 };
 
-const processImage = async () => {
+const processImage = async (mode: string = "full") => {
   if (!selectedFile.value) return;
   loading.value = true;
   error.value = "";
@@ -217,6 +217,7 @@ const processImage = async () => {
     if (hintText.value) {
       formData.append("hintText", hintText.value);
     }
+    formData.append("mode", mode);
 
     const response = await fetch("http://localhost:5001/api/image/process", {
       method: "POST",
@@ -328,6 +329,16 @@ const renderOnClient = async (): Promise<Blob | null> => {
 
       const lines = (l.content || "").split("\n");
       const lineHeight = (l.style.line_height || 1.2) * pxFontSize;
+
+      // Stroke (Draw BEFORE fill to simulate paint-order: stroke fill)
+      if (l.style.stroke_hex && l.style.stroke_width) {
+        ctx.strokeStyle = l.style.stroke_hex;
+        ctx.lineWidth = l.style.stroke_width * 2; // Scale nicely
+        ctx.lineJoin = "round";
+        lines.forEach((line: string, i: number) => {
+          ctx.strokeText(line, x, y + i * lineHeight);
+        });
+      }
 
       lines.forEach((line: string, i: number) => {
         ctx.fillText(line, x, y + i * lineHeight);
@@ -540,13 +551,13 @@ const downloadAsSvg = async () => {
           reader.readAsDataURL(blob);
         });
         svgContent += `
-          <image 
-            href="${base64Img}" 
-            width="${w}" 
-            height="${h}" 
-            x="${x}" 
-            y="${y}" 
-            transform="${rotateStr}" 
+          <image
+            href="${base64Img}"
+            width="${w}"
+            height="${h}"
+            x="${x}"
+            y="${y}"
+            transform="${rotateStr}"
           />`;
       } catch (e) {
         console.error("SVG Export: Failed to embed component image", e);
@@ -559,12 +570,12 @@ const downloadAsSvg = async () => {
       const fontSize = l.style.font_size_normalized || 40;
 
       svgContent += `
-        <text 
-          x="${x}" 
-          y="${y + fontSize * 0.8}" 
-          fill="${l.style.color_hex || "#000"}" 
-          font-family="${l.style.font_family || "sans-serif"}" 
-          font-size="${fontSize}px" 
+        <text
+          x="${x}"
+          y="${y + fontSize * 0.8}"
+          fill="${l.style.color_hex || "#000"}"
+          font-family="${l.style.font_family || "sans-serif"}"
+          font-size="${fontSize}px"
           font-weight="${l.style.font_weight || "normal"}"
           transform="${rotateStr}"
         >${escapedContent}</text>`;
@@ -607,7 +618,7 @@ const downloadAsSvg = async () => {
         </div>
         <button
           :disabled="!selectedFile || loading"
-          @click="processImage"
+          @click="processImage('full')"
           class="mt-2"
         >
           {{ loading ? "Separating Layers..." : "Separate Layers" }}
@@ -736,8 +747,42 @@ const downloadAsSvg = async () => {
               <option value="none">None</option>
               <option value="subtle">Subtle Shadow</option>
               <option value="strong">Strong Shadow</option>
-              <option value="outline">Outline</option>
             </select>
+          </div>
+          <!-- Stroke / Outline Controls -->
+          <div class="prop-item">
+            <label>Text Outline</label>
+            <div class="flex no-gap align-center">
+              <input
+                type="color"
+                v-model="layers[selectedLayerId].style.stroke_hex"
+                class="w-8 h-8 p-0 border-none mr-2"
+                title="Outline Color"
+              />
+              <input
+                v-model.number="layers[selectedLayerId].style.stroke_width"
+                type="number"
+                min="0"
+                max="10"
+                step="0.5"
+                placeholder="Width"
+                class="w-16"
+                title="Outline Width (px)"
+              />
+              <button
+                class="mini-btn ml-2"
+                @click="
+                  layers[selectedLayerId].style.stroke_width = layers[
+                    selectedLayerId
+                  ].style.stroke_width
+                    ? 0
+                    : 4;
+                  layers[selectedLayerId].style.stroke_hex = '#FFFFFF';
+                "
+              >
+                {{ layers[selectedLayerId].style.stroke_width ? "ON" : "OFF" }}
+              </button>
+            </div>
           </div>
         </template>
         <!-- Mixed controls (Rotation, Opacity) -->
