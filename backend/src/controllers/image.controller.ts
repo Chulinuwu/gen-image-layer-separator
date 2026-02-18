@@ -479,9 +479,22 @@ export const createCampaign = async (req: Request, res: Response) => {
     };
 
     // ───── Step 1: AI Suggest Text + Components ─────
-    const { mode } = req.body;
+    const { mode, noGoZones } = req.body;
     console.log("[DEBUG] Received mode from frontend:", mode);
-    console.log("[DEBUG] Full req.body:", req.body);
+
+    // Parse noGoZones if they exist (might come as JSON string or object)
+    let parsedNoGoZones = [];
+    if (noGoZones) {
+      try {
+        parsedNoGoZones =
+          typeof noGoZones === "string" ? JSON.parse(noGoZones) : noGoZones;
+        console.log(
+          `[DEBUG] Received ${parsedNoGoZones.length} external No-Go Zones`,
+        );
+      } catch (e) {
+        console.warn("[DEBUG] Failed to parse noGoZones:", e);
+      }
+    }
 
     sendSSE("progress", {
       step: "initial_analysis",
@@ -493,6 +506,7 @@ export const createCampaign = async (req: Request, res: Response) => {
       mimeType,
       targetText,
       mode || "full",
+      parsedNoGoZones,
     );
 
     let textSuggestions = analysis.suggestions || [];

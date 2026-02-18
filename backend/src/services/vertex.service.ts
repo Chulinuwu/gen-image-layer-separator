@@ -284,11 +284,60 @@ export class AIService {
     mimeType: string,
     targetText: string,
     mode: string = "full",
+    externalNoGoZones: any[] = [],
   ) {
+    // 1. Optimize Image: Resize to max 1500px to speed up analysis
+    let processingBuffer = imageBuffer;
+    let processingMime = mimeType;
+
+    try {
+      const meta = await sharp(imageBuffer).metadata();
+      if ((meta.width || 0) > 1500 || (meta.height || 0) > 1500) {
+        processingBuffer = await sharp(imageBuffer)
+          .resize(1500, 1500, { fit: "inside" })
+          .jpeg({ quality: 85 })
+          .toBuffer();
+        processingMime = "image/jpeg";
+        console.log(
+          `[GenAI] specific: Resized input image from ${meta.width}x${meta.height} to max 1500px for speed.`,
+        );
+      }
+    } catch (e) {
+      console.warn("[GenAI] Resize failed, using original image:", e);
+    }
+
+    // 2. Select Model: Prefer configured endpoints
     const model =
       process.env.GEMINI_MODEL_ENDPOINT_2 ||
       process.env.GEMINI_MODEL_ENDPOINT ||
-      "gemini-3-flash-preview";
+      "gemini-2.0-flash-exp";
+    // User prefers 2.0 Flash/2.5 Flash. Respecting env variables strictly.
+
+    // Construct external No-Go Zone instructions
+    let noGoInstruction = "";
+    if (externalNoGoZones && externalNoGoZones.length > 0) {
+      const zoneList = externalNoGoZones
+        .map((z, i) => {
+          const label = z.label || `Zone ${i + 1}`;
+          // Ensure we have 0-1000 coordinates
+          const top = Math.round(z.top || z.y || 0);
+          const left = Math.round(z.left || z.x || 0);
+          const width = Math.round(z.width || z.w || 100);
+          const height = Math.round(z.height || z.h || 100);
+          return `- ${label}: [top:${top}, left:${left}, width:${width}, height:${height}]`;
+        })
+        .join("\n");
+
+      noGoInstruction = `
+      ═══════════════════════════════════════
+      🚫 STRICT FORBIDDEN ZONES (PRE-DETECTED):
+      The following areas contain critical objects. DO NOT PLACE ANY TEXT HERE:
+      ${zoneList}
+      
+      If a text placement overlaps with these coordinates, IT IS WRONG. MOVE IT.
+      ═══════════════════════════════════════
+      `;
+    }
 
     const prompt = `
       Act as a professional graphic designer and advertising specialist.
@@ -298,6 +347,8 @@ export class AIService {
       """
       ${targetText}
       """
+
+      ${noGoInstruction}
       
       CRITICAL: The AD BRIEF above contains the TEXT CONTENT that MUST appear in the final ad.
       Even if the reference image doesn't show all text clearly, you MUST extract and suggest
@@ -328,39 +379,62 @@ export class AIService {
       ═══════════════════════════════════════
       
       TASKS:
-      1. TEXT EXTRACTION (MANDATORY):
-         - Read EVERY text element from the AD BRIEF above
-         - Also read any visible text in the reference image
-         - If multiple text lines are VISUALLY GROUPED TOGETHER (same area, similar style), 
-           combine them into ONE suggestion with '\n' (newline character) separating the lines.
-         - Example: "ชวนลูกค้าแอป SCB EASY\nและ Robinhood มาสนุก" should be ONE text layer.
-         - Only split into separate suggestions if text elements are clearly in different locations or serve different purposes.
-         - YOU MUST RETURN AT LEAST ONE TEXT SUGGESTION. If the brief contains text, it MUST be in 'suggestions'.
+      1. SPATIAL ANALYSIS (CRITICAL FIRST STEP):
+         - Divide the image into 3 vertical columns: LEFT (0-333), CENTER (334-666), RIGHT (667-1000).
+         - Identify which column is EMPTY/SAFE.
+         - **RULE: PLACE 90% OF TEXT IN THE 'SAFE COLUMN' ONLY.**
+         - If the Safe Zone is narrow (e.g. only 300 units wide), YOU MUST BREAK LONG SENTENCES.
       
-      2. Cross-reference the AD BRIEF for correct spelling and intent.
+      2. TEXT EXTRACTION & SMART LINE BREAKING (MANDATORY):
+         - Read the AD BRIEF.
+         - **CRITICAL RULE**: If a sentence is LONG (e.g. > 15-20 chars) and the Safe Zone is NARROW, you MUST splits it into multiple visual lines/blocks.
+         - DO NOT try to squeeze a long sentence into one line if it will overlap the forbidden zones.
+         - **Example**:
+           - ❌ BAD (Too long): "ชวนลูกค้าแอป SCB EASY และ Robinhood มาสนุก" -> Overlaps person!
+           - ✅ GOOD (Stacked): 
+             Layer 1: "ชวนลูกค้าแอป"
+             Layer 2: "SCB EASY"
+             Layer 3: "และ Robinhood"
+             Layer 4: "มาสนุก"
+             (All stacked vertically in the Safe Zone)
+         
+         - Combine lines ONLY if they are short enough to fit. Otherwise, SPLIT THEM.
+         - YOU MUST RETURN AT LEAST ONE TEXT SUGGESTION.
       
-      3. FOR EACH text element/group: provide exact position (TIGHT bounding box that covers ALL lines), style, and hierarchy.
-         - Use the reference image as a DESIGN GUIDE for placement
-         - If text is not visible in the image, suggest a logical placement based on design principles
-         - CRITICAL: The bounding box (top, left, width, height) MUST BE TIGHT. Do not leave large empty margins.
-         - The 'top' value MUST represent the very top edge of the first line of text.
+      3. DESIGN POLISHING (AESTHETICS & BALANCE):
+         - **GROUPING**: Keep related text (Headline, Subhead, '2 ต่อ') VISUALLY CLOSE together. Do not scatter them efficiently; group them aesthetically to form a solid "Block of Information".
+         - **NO FLOATING**: Do not stick text rigidly to the far left edge. Push the text block INWARDS towards the main subject (Center) as much as possible without overlapping. Close the "awkward gap" between text and model.
+         - **TYPOGRAPHY TUNING**:
+             - For THAI text ('Kanit'): Use 'letter_spacing' between -0.5 and 0 (tighter is more modern).
+             - Use 'line_height' 1.25 - 1.35 to give breathing room for Thai vowels.
+             - "Fine Print" should be visibly separated at the very bottom, away from the main group.
+
+      4. FOR EACH text element/group: provide exact position (TIGHT bounding box), style, and hierarchy.
+         - The bounding box width MUST fit within the 'Safe Zone' found in Task 1.
+         - **If it doesn't fit, GO BACK to Step 2 and split the text further.**
+         - CRITICAL: The bounding box (top, left, width, height) MUST BE TIGHT.
       
       ${
         mode === "full"
-          ? `4. COMPONENT EXTRACTION: Identify ALL non-text visual elements in the image that are
+          ? `5. COMPONENT EXTRACTION: Identify ALL non-text visual elements in the image that are
          overlaid on the background (NOT the background itself). Examples:
          - Ribbons, banners, tags, price badges
          - Mascots, cartoon characters, stickers
          - Person cutouts, product images
          - Decorative shapes, frames, boxes, logos
          For each component, provide a DETAILED visual description so it can be recreated.`
-          : `4. SKIP COMPONENT EXTRACTION: For this request (MODE: ${mode}), do NOT suggest any components. Return an empty array [] for 'components'.`
+          : `5. SKIP COMPONENT EXTRACTION: For this request (MODE: ${mode}), do NOT suggest any components. Return an empty array [] for 'components'.`
       }
       
       Return the result as a STRICT JSON object:
       {
         "background_description": "Describe the background scene (without any overlaid elements)",
         "campaign_vibe": "Energetic, Minimalist, Luxury, etc.",
+        "spatial_analysis": {
+             "safe_zone": "LEFT | CENTER | RIGHT | TOP",
+             "blocked_zones": ["CENTER (Woman)", "RIGHT (Mascot)"],
+             "strategy": "Align all text to the LEFT column on the purple background"
+        },
         "no_go_zones": [
           {
             "label": "Woman in denim jacket",
@@ -376,7 +450,7 @@ export class AIService {
               "explanation": "Normalized coordinates 0-1000. Rotation in degrees (0 for normal, 90 for vertical)."
             },
             "style": {
-              "font_family": "serif | sans-serif | display | script",
+              "font_family": "Choose from: 'Kanit', 'Inter', 'Playfair Display', 'Roboto Mono', 'sans-serif'",
               "font_weight": "normal | bold",
               "font_style": "normal | italic",
               "color_hex": "#FFFFFF",
@@ -384,7 +458,7 @@ export class AIService {
               "text_align": "left | center | right",
               "letter_spacing": "Numeric tracking (e.g. 0 for normal, 2 for slightly wide, -1 for tight)",
               "line_height": "Line spacing (e.g. 1.0, 1.2, 1.5)",
-              "shadow": "none | subtle | strong"
+              "shadow": "none | subtle | strong | outline"
             },
             "hierarchy": "Headline | Body | FinePrint"
           }
@@ -407,6 +481,12 @@ export class AIService {
       - MODE is currently: ${mode}.
       - If mode is 'text', the 'components' array MUST be empty [].
       - If mode is 'full', you MUST extract both text elements and visual components.
+      
+      ✓ FONT SELECTION RULES:
+      - THAI TEXT: MUST use 'Kanit'.
+      - MODERN/CLEAN: Use 'Inter'.
+      - LUXURY/ELEGANT: Use 'Playfair Display'.
+      - TECH/CODE: Use 'Roboto Mono'.
       
       ✓ FINEPRINT (Legal disclaimers, terms & conditions, policy text, footer):
         - font_size_normalized: 8-16 (VERY SMALL)
@@ -455,8 +535,8 @@ export class AIService {
               parts: [
                 {
                   inlineData: {
-                    data: imageBuffer.toString("base64"),
-                    mimeType,
+                    data: processingBuffer.toString("base64"),
+                    mimeType: processingMime,
                   },
                 },
                 { text: prompt },
@@ -534,7 +614,37 @@ export class AIService {
     const width = metadata.width || 800;
     const height = metadata.height || 600;
 
+    // Helper to escape XML characters
+    const escapeXml = (unsafe: string) => {
+      return unsafe.replace(/[<>&'"]/g, (c) => {
+        switch (c) {
+          case "<":
+            return "&lt;";
+          case ">":
+            return "&gt;";
+          case "&":
+            return "&amp;";
+          case "'":
+            return "&apos;";
+          case '"':
+            return "&quot;";
+          default:
+            return c;
+        }
+      });
+    };
+
     let svgOverlay = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">`;
+
+    // Embed Google Fonts for correct rendering
+    svgOverlay += `
+      <defs>
+        <style>
+          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&amp;family=Kanit:wght@400;700&amp;family=Playfair+Display:wght@400;700&amp;family=Roboto+Mono:wght@400;700&amp;display=swap');
+          text { font-family: 'Inter', sans-serif; }
+        </style>
+      </defs>
+    `;
 
     // Draw NO-GO ZONES first (behind text) — green semi-transparent boxes
     if (noGoZones && noGoZones.length > 0) {
@@ -547,7 +657,7 @@ export class AIService {
         svgOverlay += `
           <rect x="${zLeft}" y="${zTop}" width="${zW}" height="${zH}" 
                 fill="rgba(0, 255, 0, 0.15)" stroke="#00FF00" stroke-width="2" stroke-dasharray="6,3" />
-          <text x="${zLeft + 4}" y="${zTop + 14}" fill="#00FF00" font-size="12px" font-family="sans-serif" font-weight="bold">${zone.label || "NO-GO"}</text>
+          <text x="${zLeft + 4}" y="${zTop + 14}" fill="#00FF00" font-size="12px" font-family="sans-serif" font-weight="bold">${escapeXml(zone.label || "NO-GO")}</text>
         `;
       }
     }
@@ -582,7 +692,7 @@ export class AIService {
       svgOverlay += `
         <g${transform}>
           <rect x="${left}" y="${top}" width="${w}" height="${h}" fill="rgba(0, 255, 0, 0.15)" stroke="#00FF00" stroke-width="2" />
-          <text x="${left + 5}" y="${top + 15}" fill="#00FF00" font-size="12" font-family="sans-serif" font-weight="bold">${c.label || "Component"}</text>
+          <text x="${left + 5}" y="${top + 15}" fill="#00FF00" font-size="12" font-family="sans-serif" font-weight="bold">${escapeXml(c.label || "Component")}</text>
         </g>
       `;
     }
