@@ -125,7 +125,81 @@ export const processImage = async (req: Request, res: Response) => {
     }> = [];
     const stackImageUrls: string[] = [];
 
-    const components = analysisData.components || [];
+    // Deduplicate: if a character (person/mascot/figure) is already in the list,
+    // remove any pure-object components that are likely just props of that character.
+    // This prevents duplicates like "Woman full figure" + "Purple Smartphone" (already held by woman).
+    const rawComponents: Array<{
+      label: string;
+      description: string;
+      position: any;
+      z_index: number;
+    }> = analysisData.components || [];
+
+    const CHARACTER_KEYWORDS = [
+      "woman",
+      "man",
+      "girl",
+      "boy",
+      "mascot",
+      "character",
+      "person",
+      "figure",
+      "human",
+    ];
+    const PROP_KEYWORDS = [
+      "phone",
+      "smartphone",
+      "mobile",
+      "tablet",
+      "gun",
+      "pistol",
+      "weapon",
+      "rifle",
+      "water gun",
+      "squirt",
+      "bag",
+      "purse",
+      "handbag",
+      "backpack",
+      "bottle",
+      "cup",
+      "mug",
+      "drink",
+      "hat",
+      "cap",
+      "helmet",
+      "glasses",
+      "sunglasses",
+      "umbrella",
+      "fan",
+      "flag",
+    ];
+
+    const hasCharacter = rawComponents.some((c) =>
+      CHARACTER_KEYWORDS.some((kw) => c.label.toLowerCase().includes(kw)),
+    );
+
+    const components = hasCharacter
+      ? rawComponents.filter((c) => {
+          const lbl = c.label.toLowerCase();
+          const isCharacter = CHARACTER_KEYWORDS.some((kw) => lbl.includes(kw));
+          // Keep characters always; keep non-characters only if they're NOT listed prop-keywords
+          if (isCharacter) return true;
+          const isProp = PROP_KEYWORDS.some((kw) => lbl.includes(kw));
+          if (isProp) {
+            console.log(
+              `[Pipeline] ⚠️ Filtered prop component (already part of character): "${c.label}"`,
+            );
+            return false;
+          }
+          return true;
+        })
+      : rawComponents;
+
+    console.log(
+      `[Pipeline] Components after dedup: ${components.length}/${rawComponents.length} — [${components.map((c) => c.label).join(", ")}]`,
+    );
+
     if (components.length > 0) {
       console.log(
         `[Pipeline] Step 2: Generating ${components.length} die-cut components...`,
@@ -918,14 +992,71 @@ export const createCampaign = async (req: Request, res: Response) => {
     if (mode === "text") {
       console.log("[Build-Up] Step 2: Skipped (Mode: Text Only)");
     } else if (componentSuggestions.length > 0) {
+      // Dedup: remove props already held by a character in the list
+      const CHAR_KW = [
+        "woman",
+        "man",
+        "girl",
+        "boy",
+        "mascot",
+        "character",
+        "person",
+        "figure",
+        "human",
+      ];
+      const PROP_KW = [
+        "phone",
+        "smartphone",
+        "mobile",
+        "tablet",
+        "gun",
+        "pistol",
+        "weapon",
+        "rifle",
+        "water gun",
+        "squirt",
+        "bag",
+        "purse",
+        "handbag",
+        "backpack",
+        "bottle",
+        "cup",
+        "mug",
+        "drink",
+        "hat",
+        "cap",
+        "helmet",
+        "glasses",
+        "sunglasses",
+        "umbrella",
+        "fan",
+        "flag",
+      ];
+      const hasChar = componentSuggestions.some((c: any) =>
+        CHAR_KW.some((kw) => c.label.toLowerCase().includes(kw)),
+      );
+      const filteredComponents: any[] = hasChar
+        ? componentSuggestions.filter((c: any) => {
+            const lbl = c.label.toLowerCase();
+            if (CHAR_KW.some((kw) => lbl.includes(kw))) return true;
+            if (PROP_KW.some((kw) => lbl.includes(kw))) {
+              console.log(
+                `[Build-Up] ⚠️ Filtered prop component: "${c.label}"`,
+              );
+              return false;
+            }
+            return true;
+          })
+        : componentSuggestions;
+
       console.log(
-        `[Build-Up] Step 2: Generating ${componentSuggestions.length} die-cut components...`,
+        `[Build-Up] Step 2: Generating ${filteredComponents.length} die-cut components (filtered from ${componentSuggestions.length})...`,
       );
       const { results: diecutResults, gridImages } =
         await vertexService.generateDiecutComponents(
           imageBuffer,
           mimeType,
-          componentSuggestions,
+          filteredComponents,
         );
 
       // Save stack preview images
@@ -943,16 +1074,20 @@ export const createCampaign = async (req: Request, res: Response) => {
         (result: { label: string; buffer: Buffer }, i: number) => {
           const filename = `component-${Date.now()}-${i}.png`;
           fs.writeFileSync(path.join(uploadDir, filename), result.buffer);
+          // Match position by label (safer than index after filtering)
+          const matched =
+            filteredComponents.find((c: any) => c.label === result.label) ||
+            filteredComponents[i];
           return {
             label: result.label,
             imageUrl: `/uploads/${filename}`,
-            position: componentSuggestions[i]?.position || {
+            position: matched?.position || {
               top: 0,
               left: 0,
               width: 200,
               height: 200,
             },
-            z_index: componentSuggestions[i]?.z_index || 1,
+            z_index: matched?.z_index || 1,
           };
         },
       );

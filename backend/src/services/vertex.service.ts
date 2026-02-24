@@ -1268,6 +1268,19 @@ export class AIService {
       
       For each component, provide a detailed visual description so it can be recreated.
       
+      GROUPING RULE — CRITICAL:
+      - If a person, character, or mascot is holding or wearing an object (phone, bag, gun, prop, etc.),
+        that object is considered PART of that person/character.
+        Do NOT list it as a separate component — include it in the person's description instead.
+      - Only list an object as a separate, standalone component if it appears
+        COMPLETELY INDEPENDENT and is NOT being held/worn by any character.
+
+      Examples:
+      ✅ Woman holding a smartphone → ONE component: "Woman full figure"
+         (description: "...holding a purple smartphone in her left hand...")
+      ✅ A floating logo badge in the corner → separate component
+      ❌ Woman holding a phone + "Purple Smartphone" listed separately → WRONG, causes duplicates
+
       Return as STRICT JSON:
       {
         "components": [
@@ -1321,75 +1334,163 @@ export class AIService {
   }> {
     if (!components.length) return { results: [], gridImages: [] };
 
-    const BATCH_SIZE = 6;
     const allResults: Array<{ label: string; buffer: Buffer }> = [];
-    const allGridImages: Buffer[] = [];
 
-    for (let i = 0; i < components.length; i += BATCH_SIZE) {
-      const batch = components.slice(i, i + BATCH_SIZE);
+    // Generate each component individually at full resolution for best quality
+    for (let i = 0; i < components.length; i++) {
+      const comp = components[i];
       console.log(
-        `[GenAI] Processing batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(components.length / BATCH_SIZE)} (${batch.length} components)`,
+        `[GenAI] Generating die-cut ${i + 1}/${components.length}: "${comp.label}"`,
       );
-
       try {
-        const { results, gridImage } = await this._generateDiecutBatch(
+        const buf = await this._generateSingleDiecut(
           imageBuffer,
           mimeType,
-          batch,
+          comp,
         );
-        allResults.push(...results);
-        if (gridImage) allGridImages.push(gridImage);
-
-        // Small delay between batches to be safe
-        if (i + BATCH_SIZE < components.length) {
-          await new Promise((resolve) => setTimeout(resolve, 1000));
+        if (buf) {
+          allResults.push({ label: comp.label, buffer: buf });
+          console.log(
+            `[GenAI] ✅ Die-cut "${comp.label}" complete (${buf.length} bytes)`,
+          );
+        } else {
+          console.warn(`[GenAI] ⚠️ No image returned for "${comp.label}"`);
+        }
+        // Throttle between calls — keep at 3s to avoid 429 rate limits on per-image generation
+        if (i < components.length - 1) {
+          await new Promise((r) => setTimeout(r, 3000));
         }
       } catch (err) {
-        console.error(`[GenAI] Batch failed at index ${i}:`, err);
+        console.error(`[GenAI] ❌ Failed die-cut for "${comp.label}":`, err);
       }
     }
 
-    return { results: allResults, gridImages: allGridImages };
+    // Build a local preview grid from individual results using Sharp (no AI parsing needed)
+    const gridImages: Buffer[] = [];
+    if (allResults.length > 0) {
+      try {
+        const THUMB = 256; // thumbnail size per cell
+        const cols = Math.min(3, allResults.length);
+        const rows = Math.ceil(allResults.length / cols);
+        const gridW = cols * THUMB;
+        const gridH = rows * THUMB;
+
+        // White canvas
+        const composites: sharp.OverlayOptions[] = [];
+        for (let idx = 0; idx < allResults.length; idx++) {
+          const col = idx % cols;
+          const row = Math.floor(idx / cols);
+          const thumb = await sharp(allResults[idx].buffer)
+            .resize(THUMB - 10, THUMB - 10, {
+              fit: "contain",
+              background: { r: 255, g: 255, b: 255, alpha: 1 },
+            })
+            .extend({
+              top: 5,
+              bottom: 5,
+              left: 5,
+              right: 5,
+              background: { r: 255, g: 255, b: 255, alpha: 1 },
+            })
+            .png()
+            .toBuffer();
+          composites.push({
+            input: thumb,
+            left: col * THUMB,
+            top: row * THUMB,
+          });
+        }
+
+        const gridBuf = await sharp({
+          create: {
+            width: gridW,
+            height: gridH,
+            channels: 4,
+            background: { r: 255, g: 255, b: 255, alpha: 1 },
+          },
+        })
+          .composite(composites)
+          .png()
+          .toBuffer();
+
+        gridImages.push(gridBuf);
+        console.log(
+          `[GenAI] Preview grid built: ${cols}x${rows} (${allResults.length} components)`,
+        );
+      } catch (gridErr) {
+        console.warn("[GenAI] Could not build preview grid:", gridErr);
+      }
+    }
+
+    console.log(
+      `[GenAI] Die-cut complete: ${allResults.length}/${components.length} components succeeded`,
+    );
+    return { results: allResults, gridImages };
   }
 
   /**
-   * Internal helper to generate a single batch of components in a grid
+   * Generate ONE die-cut component at full resolution, then flood-fill remove white background.
    */
-  private async _generateDiecutBatch(
+  private async _generateSingleDiecut(
     imageBuffer: Buffer,
     mimeType: string,
-    batch: Array<{ label: string; description: string }>,
-  ): Promise<{
-    results: Array<{ label: string; buffer: Buffer }>;
-    gridImage: Buffer | null;
-  }> {
+    component: { label: string; description: string },
+  ): Promise<Buffer | null> {
     const model =
       process.env.GEMINI_IMAGE_ENDPOINT_2 ||
       process.env.GEMINI_IMAGE_ENDPOINT ||
       "gemini-3-pro-image-preview";
 
-    const n = batch.length;
-    const cols = n > 3 ? 3 : n; // Max 3 columns
-    const rows = Math.ceil(n / cols);
+    // Determine if this is a character (person/mascot) or an inanimate object
+    // Objects must NOT be shown with hands or arms holding them
+    const labelLower = component.label.toLowerCase();
+    const isCharacter =
+      labelLower.includes("woman") ||
+      labelLower.includes("man") ||
+      labelLower.includes("girl") ||
+      labelLower.includes("boy") ||
+      labelLower.includes("mascot") ||
+      labelLower.includes("character") ||
+      labelLower.includes("person") ||
+      labelLower.includes("figure") ||
+      labelLower.includes("human");
 
-    const prompt = `
-      Look at the reference image. Recreate these ${n} visual components as ISOLATED stickers in a SINGLE SQUARE grid.
+    const prompt = isCharacter
+      ? `
+      Look at the reference image carefully.
+      Your task is to recreate ONE specific visual element as a HIGH-RESOLUTION PHOTOGRAPHIC CUTOUT.
 
-      LAYOUT: Arrange them in a ${rows}x${cols} GRID (Total ${rows * cols} cells). 
-      You MUST draw THICK BRIGHT RED (#FF0000) lines to separate EVERY row and EVERY column.
+      ELEMENT TO RECREATE: "${component.label}"
+      ${component.description ? `EXTRA DESCRIPTION: "${component.description}"` : ""}
 
-      Components to include (exactly one per cell):
-      ${batch.map((c, i) => `${i + 1}. "${c.label}"`).join(", ")}
+      STRICT RULES:
+      1. Generate ONLY this single person/character. Do NOT include any other people or elements.
+      2. PURE WHITE BACKGROUND — the entire background must be perfectly flat white (#FFFFFF).
+      3. ABSOLUTELY NO WHITE BORDERS: Do NOT draw a white stroke, white outline, or sticker-style border around the character. The edges of the character must transition directly into the white background.
+      4. FULL BODY RULE: You MUST show the COMPLETE body from the very top of the head to the tips of the toes/feet. Absolutely NO cropping — feet must be fully visible.
+      5. CENTER the character with generous padding (at least 10% on each side).
+      6. Match the exact style, colors, outfit, proportions, and details from the reference image.
+      7. High resolution, sharp edges, vibrant colors.
+      8. Do NOT include any text, labels, borders, shadows, or drop shadows.
+      9. The character may hold any props they are holding in the reference image.
+    `
+      : `
+      Look at the reference image carefully.
+      Your task is to recreate ONE specific object as a HIGH-RESOLUTION PRODUCT CUTOUT.
 
-      CRITICAL RULES:
-      - FULL BODY: For all people, human characters, or mascots, you MUST generate the FULL BODY from HEAD TO TOE. Do NOT crop them at the waist.
-      - PLACE EXACTLY ONE COMPONENT PER CELL. 
-      - IF THERE ARE EMPTY CELLS, LEAVE THEM COMPLETELY PURE WHITE.
-      - DO NOT REPEAT ANY COMPONENT.
-      - EACH COMPONENT MUST BE SMALLER THAN THE CELL WITH GENEROUS PADDING.
-      - THE COMPONENT MUST NOT TOUCH OR CROSS THE RED LINES.
-      - Match the style, colors, proportions, and details from the reference image perfectly.
-      - Do NOT include any text, letters, or numbers.
+      OBJECT TO RECREATE: "${component.label}"
+      ${component.description ? `EXTRA DESCRIPTION: "${component.description}"` : ""}
+
+      STRICT RULES:
+      1. Generate ONLY this isolated object by itself. Do NOT include any other objects or elements.
+      2. PURE WHITE BACKGROUND — the entire background must be perfectly flat white (#FFFFFF).
+      3. ABSOLUTELY NO WHITE BORDERS: Do NOT draw a white stroke, white outline, or sticker-style border around the object. The edges of the object must transition directly into the white background.
+      4. OBJECT ONLY — Do NOT include any hands, arms, fingers, bodies, or human body parts holding or touching the object.
+      5. Show the object floating/standing alone, centered in the image.
+      6. CENTER the object with generous padding (at least 15% on each side).
+      7. Match the exact style, colors, design, and details from the reference image.
+      8. High resolution, sharp edges, vibrant colors.
+      9. Do NOT include any text, labels, borders, shadows, or drop shadows.
     `;
 
     const parts: any[] = [
@@ -1402,9 +1503,7 @@ export class AIService {
       temperature: 1,
       topP: 0.95,
       responseModalities: ["TEXT", "IMAGE"],
-      imageConfig: {
-        aspectRatio: "3:4",
-      },
+      imageConfig: { aspectRatio: "1:1" },
       safetySettings: [
         { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "OFF" },
         { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "OFF" },
@@ -1413,221 +1512,139 @@ export class AIService {
       ],
     };
 
+    const streamingResp = await this.withRetry(() =>
+      this.client.models.generateContentStream({
+        model,
+        contents: [{ role: "user", parts }],
+        config,
+      }),
+    );
+
+    let imgBuffer: Buffer | null = null;
+    for await (const chunk of streamingResp) {
+      if (chunk.candidates?.[0]?.content?.parts) {
+        for (const part of chunk.candidates[0].content.parts) {
+          if (part.inlineData?.data && !imgBuffer) {
+            imgBuffer = Buffer.from(part.inlineData.data as string, "base64");
+          }
+        }
+      }
+    }
+
+    if (!imgBuffer) return null;
+
+    // --- Flood-fill background removal ---
+    const WHITE_THRESHOLD = 250; // Safety first: don't eat highlights
+
+    const { data: pixels, info } = await sharp(imgBuffer)
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+
+    const w = info.width;
+    const h = info.height;
+    const pidx = (px: number, py: number) => py * w + px;
+    const ri = (px: number, py: number) => (py * w + px) * 4;
+
+    const isBg = (px: number, py: number): boolean => {
+      const i = ri(px, py);
+      const r = pixels[i],
+        g = pixels[i + 1],
+        b = pixels[i + 2];
+      // ONLY remove pure or near-pure white background
+      return (
+        r >= WHITE_THRESHOLD && g >= WHITE_THRESHOLD && b >= WHITE_THRESHOLD
+      );
+    };
+
+    const bgFlag = new Uint8Array(w * h);
+    const queue: number[] = [];
+
+    // Seed from all 4 edges
+    for (let ex = 0; ex < w; ex++) {
+      if (isBg(ex, 0) && !bgFlag[pidx(ex, 0)]) {
+        bgFlag[pidx(ex, 0)] = 1;
+        queue.push(pidx(ex, 0));
+      }
+      if (isBg(ex, h - 1) && !bgFlag[pidx(ex, h - 1)]) {
+        bgFlag[pidx(ex, h - 1)] = 1;
+        queue.push(pidx(ex, h - 1));
+      }
+    }
+    for (let ey = 1; ey < h - 1; ey++) {
+      if (isBg(0, ey) && !bgFlag[pidx(0, ey)]) {
+        bgFlag[pidx(0, ey)] = 1;
+        queue.push(pidx(0, ey));
+      }
+      if (isBg(w - 1, ey) && !bgFlag[pidx(w - 1, ey)]) {
+        bgFlag[pidx(w - 1, ey)] = 1;
+        queue.push(pidx(w - 1, ey));
+      }
+    }
+
+    // BFS
+    const dx = [-1, 1, 0, 0];
+    const dy = [0, 0, -1, 1];
+    let qi = 0;
+    while (qi < queue.length) {
+      const cur = queue[qi++];
+      const cx = cur % w;
+      const cy = Math.floor(cur / w);
+      for (let d = 0; d < 4; d++) {
+        const nx = cx + dx[d],
+          ny = cy + dy[d];
+        if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+        const np = pidx(nx, ny);
+        if (!bgFlag[np] && isBg(nx, ny)) {
+          bgFlag[np] = 1;
+          queue.push(np);
+        }
+      }
+    }
+
+    // Apply transparency
+    for (let py = 0; py < h; py++) {
+      for (let px = 0; px < w; px++) {
+        if (bgFlag[pidx(px, py)]) pixels[ri(px, py) + 3] = 0;
+      }
+    }
+
+    // --- NEW: Alpha Erosion to remove white stroke/halo ---
+    // We basically look at transparent pixels and make their neighbors transparent too
+    // to "eat" into the white halo.
+    const EROSION_ITERATIONS = 2;
+    for (let iter = 0; iter < EROSION_ITERATIONS; iter++) {
+      const currentAlpha = new Uint8Array(w * h);
+      for (let i = 0; i < w * h; i++) currentAlpha[i] = pixels[i * 4 + 3];
+
+      for (let py = 1; py < h - 1; py++) {
+        for (let px = 1; px < w - 1; px++) {
+          const idx = py * w + px;
+          if (currentAlpha[idx] > 0) {
+            // If any neighbor is transparent, make this pixel transparent (or reduce alpha)
+            if (
+              currentAlpha[idx - 1] === 0 ||
+              currentAlpha[idx + 1] === 0 ||
+              currentAlpha[idx - w] === 0 ||
+              currentAlpha[idx + w] === 0
+            ) {
+              pixels[idx * 4 + 3] = 0;
+            }
+          }
+        }
+      }
+    }
+
+    const diecut = await sharp(pixels, {
+      raw: { width: w, height: h, channels: 4 },
+    })
+      .png()
+      .toBuffer();
+
     try {
-      console.log(
-        `[GenAI] Generating ${rows}x${cols} Red-Line Grid for ${n} components`,
-      );
-
-      const streamingResp = await this.withRetry(() =>
-        this.client.models.generateContentStream({
-          model,
-          contents: [{ role: "user", parts }],
-          config,
-        }),
-      );
-
-      let gridBuffer: Buffer | null = null;
-      for await (const chunk of streamingResp) {
-        if (chunk.candidates?.[0]?.content?.parts) {
-          for (const part of chunk.candidates[0].content.parts) {
-            if (part.inlineData?.data && !gridBuffer) {
-              gridBuffer = Buffer.from(
-                part.inlineData.data as string,
-                "base64",
-              );
-            }
-          }
-        }
-      }
-
-      if (!gridBuffer) return { results: [], gridImage: null };
-
-      const metadata = await sharp(gridBuffer).metadata();
-      const imgW = metadata.width || 1024;
-      const imgH = metadata.height || 1024;
-
-      const { data: rawPixels } = await sharp(gridBuffer)
-        .ensureAlpha()
-        .raw()
-        .toBuffer({ resolveWithObject: true });
-
-      const RED_THRESHOLD_MIN = 200;
-      const GREEN_BLUE_THRESHOLD_MAX = 100;
-      const RED_PIXEL_RATIO_THRESHOLD = 0.3; // 30% of a line must be red
-      const DIVIDER_GROUP_THRESHOLD = 5; // Pixels to group consecutive red lines
-
-      // --- Detect Horizontal Dividers (Rows) ---
-      const redRows: number[] = [];
-      for (let y = 0; y < imgH; y++) {
-        let redCount = 0;
-        for (let x = 0; x < imgW; x++) {
-          const idx = (y * imgW + x) * 4;
-          const r = rawPixels[idx];
-          const g = rawPixels[idx + 1];
-          const b = rawPixels[idx + 2];
-          if (
-            r > RED_THRESHOLD_MIN &&
-            g < GREEN_BLUE_THRESHOLD_MAX &&
-            b < GREEN_BLUE_THRESHOLD_MAX
-          ) {
-            redCount++;
-          }
-        }
-        if (redCount > imgW * RED_PIXEL_RATIO_THRESHOLD) {
-          redRows.push(y);
-        }
-      }
-
-      const hDividers: number[] = [];
-      if (redRows.length > 0) {
-        let groupStart = redRows[0];
-        for (let i = 1; i < redRows.length; i++) {
-          if (redRows[i] - redRows[i - 1] > DIVIDER_GROUP_THRESHOLD) {
-            hDividers.push(Math.floor((groupStart + redRows[i - 1]) / 2));
-            groupStart = redRows[i];
-          }
-        }
-        hDividers.push(
-          Math.floor((groupStart + redRows[redRows.length - 1]) / 2),
-        );
-      }
-
-      console.log(
-        `[GenAI] Found ${hDividers.length} horizontal divider(s) at rows: [${hDividers.join(", ")}]`,
-      );
-
-      // --- Detect Vertical Dividers (Columns) ---
-      const redCols: number[] = [];
-      for (let x = 0; x < imgW; x++) {
-        let redCount = 0;
-        for (let y = 0; y < imgH; y++) {
-          const idx = (y * imgW + x) * 4;
-          const r = rawPixels[idx];
-          const g = rawPixels[idx + 1];
-          const b = rawPixels[idx + 2];
-          if (
-            r > RED_THRESHOLD_MIN &&
-            g < GREEN_BLUE_THRESHOLD_MAX &&
-            b < GREEN_BLUE_THRESHOLD_MAX
-          ) {
-            redCount++;
-          }
-        }
-        if (redCount > imgH * RED_PIXEL_RATIO_THRESHOLD) {
-          redCols.push(x);
-        }
-      }
-
-      const vDividers: number[] = [];
-      if (redCols.length > 0) {
-        let groupStart = redCols[0];
-        for (let i = 1; i < redCols.length; i++) {
-          if (redCols[i] - redCols[i - 1] > DIVIDER_GROUP_THRESHOLD) {
-            vDividers.push(Math.floor((groupStart + redCols[i - 1]) / 2));
-            groupStart = redCols[i];
-          }
-        }
-        vDividers.push(
-          Math.floor((groupStart + redCols[redCols.length - 1]) / 2),
-        );
-      }
-
-      console.log(
-        `[GenAI] Found ${vDividers.length} vertical divider(s) at columns: [${vDividers.join(", ")}]`,
-      );
-
-      // --- Define Cell Boundaries ---
-      const rowBoundaries = [0, ...hDividers, imgH];
-      const colBoundaries = [0, ...vDividers, imgW];
-
-      const results: Array<{ label: string; buffer: Buffer }> = [];
-      let componentIndex = 0;
-
-      for (let r = 0; r < rowBoundaries.length - 1; r++) {
-        const top = rowBoundaries[r];
-        const bottom = rowBoundaries[r + 1];
-        const cellHeight = bottom - top;
-
-        if (cellHeight < 10) continue; // Skip very small row segments
-
-        for (let c = 0; c < colBoundaries.length - 1; c++) {
-          const left = colBoundaries[c];
-          const right = colBoundaries[c + 1];
-          const cellWidth = right - left;
-
-          if (cellWidth < 10) continue; // Skip very small column segments
-          if (componentIndex >= n) break; // Stop if all components are processed
-
-          try {
-            // Crop the cell segment
-            const cropped = await sharp(gridBuffer)
-              .extract({ left, top, width: cellWidth, height: cellHeight })
-              .png()
-              .toBuffer();
-
-            // Remove white + red background -> transparent
-            const { data: cellPixels, info } = await sharp(cropped)
-              .ensureAlpha()
-              .raw()
-              .toBuffer({ resolveWithObject: true });
-
-            const WHITE_THRESHOLD = 240;
-            for (let p = 0; p < cellPixels.length; p += 4) {
-              const r = cellPixels[p];
-              const g = cellPixels[p + 1];
-              const b = cellPixels[p + 2];
-              // Remove white
-              if (
-                r >= WHITE_THRESHOLD &&
-                g >= WHITE_THRESHOLD &&
-                b >= WHITE_THRESHOLD
-              ) {
-                cellPixels[p + 3] = 0;
-              }
-              // Also remove red divider remnants
-              if (
-                r > RED_THRESHOLD_MIN &&
-                g < GREEN_BLUE_THRESHOLD_MAX &&
-                b < GREEN_BLUE_THRESHOLD_MAX
-              ) {
-                cellPixels[p + 3] = 0;
-              }
-            }
-
-            // Reconstruct transparent PNG
-            const diecutBuffer = await sharp(cellPixels, {
-              raw: { width: info.width, height: info.height, channels: 4 },
-            })
-              .png()
-              .toBuffer();
-
-            // Trim transparent edges
-            const trimmed = await sharp(diecutBuffer).trim().png().toBuffer();
-
-            const label =
-              batch[componentIndex]?.label || `Component ${componentIndex + 1}`;
-            results.push({ label, buffer: trimmed });
-
-            console.log(
-              `[GenAI] Die-cut component ${results.length}: "${label}" (cell: R${r}C${c}, bounds: ${left},${top},${cellWidth},${cellHeight})`,
-            );
-            componentIndex++;
-          } catch (cropErr) {
-            console.error(
-              `[GenAI] Failed to crop cell R${r}C${c} (bounds: ${left},${top},${cellWidth},${cellHeight}):`,
-              cropErr,
-            );
-          }
-        }
-      }
-
-      console.log(
-        `[GenAI] Generated ${results.length}/${n} die-cut components`,
-      );
-      return { results, gridImage: gridBuffer };
-    } catch (error: any) {
-      console.error("[GenAI] Generate Die-cut Components Error:", error);
-      return { results: [], gridImage: null };
+      return await sharp(diecut).trim().png().toBuffer();
+    } catch {
+      return diecut;
     }
   }
 
