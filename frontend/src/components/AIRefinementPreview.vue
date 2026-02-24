@@ -431,15 +431,17 @@ defineExpose({ connectSSE });
 }
 
 .canvas-container {
-  height: 100%;
-  max-width: 100%;
-  aspect-ratio: 4/5;
+  width: 100%;
+  max-width: 600px;
+  max-height: 100%;
   background: #fff;
   border: 1px solid var(--border);
   border-radius: 8px;
   position: relative;
   overflow: hidden;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.05);
+  display: flex;
+  flex-direction: column;
 }
 
 .canvas-label {
@@ -456,6 +458,7 @@ defineExpose({ connectSSE });
 .canvas-content {
   width: 100%;
   height: 100%;
+  min-height: 400px;
   position: relative;
   overflow: hidden;
 }
