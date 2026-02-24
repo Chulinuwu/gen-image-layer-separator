@@ -410,11 +410,13 @@ export class AIService {
       }
       
       ${
-        mode === "full" || mode === "only_bg_comp"
+        mode === "full" || mode === "text"
           ? `4. COMPONENT LIST: Identify ALL non-text visual elements overlaid on the background.
          Examples: Ribbons, banners, price badges, mascots, characters, stickers, person cutouts.
          For each, provide a DETAILED visual description.`
-          : `4. SKIP COMPONENTS: Return empty array [] for 'components'.`
+          : `4. COMPONENT LIST: Identify ALL non-text visual elements overlaid on the background.
+         Examples: Ribbons, banners, price badges, mascots, characters, stickers, person cutouts.
+         For each, provide a DETAILED visual description.`
       }
       
       Return the result as a STRICT JSON object:
@@ -465,24 +467,21 @@ export class AIService {
             "hierarchy": "Headline | Body | FinePrint"
           }
         ],
-        "components": ${
-          mode === "full" || mode === "only_bg_comp"
-            ? `[
+        "components": [
           {
             "label": "Short label (e.g. 'Thai boy mascot')",
             "description": "Visual description for recreation",
             "position": { "top": 0, "left": 0, "width": 0, "height": 0, "rotation": 0 },
             "z_index": 1
           }
-        ]`
-            : "[]"
-        }
+        ]
       }
       
       IMPORTANT:
       - MODE is currently: ${mode}.
-      - If mode is 'text', the 'components' array MUST be empty [].
-      - If mode is 'full', you MUST extract both text elements and visual components.
+      - You MUST always extract both text elements AND visual components, regardless of mode.
+      - If mode is 'only_bg_comp', the 'suggestions' (text) array should be empty [].
+      - If mode is 'full' or 'text', you MUST extract BOTH text AND components.
       
       ✓ FONT SELECTION RULES:
       - STANDARD THAI: Use 'Kanit'.
@@ -530,9 +529,7 @@ export class AIService {
 
     try {
       const modeLabel =
-        mode === "text"
-          ? "Text Layout (text-only mode)"
-          : "Layout + Components";
+        mode === "only_bg_comp" ? "Components Only" : "Layout + Components";
       console.log(`[GenAI] Suggesting ${modeLabel} with model: ${model}`);
       const response = await this.withRetry(() =>
         this.client.models.generateContent({
@@ -1056,6 +1053,12 @@ export class AIService {
       3. Keep the same text content — only change positions, sizes, colors, and styles
       4. Maintain at least 3% margin from image edges (30 in 0-1000 coords)
       5. Coordinates must be 0-1000 normalized
+      6. For COMPONENTS: You may adjust their positions to create a more harmonious composition.
+         - Characters/mascots should complement the text layout
+         - Keep components within the image bounds
+      
+      PREVIOUS COMPONENT LAYOUT:
+      ${JSON.stringify(previousAnalysis.components, null, 2)}
       
       Return as STRICT JSON (no markdown, no explanation):
       {
@@ -1063,7 +1066,7 @@ export class AIService {
         "campaign_vibe": "${previousAnalysis.campaign_vibe || ""}",
         "no_go_zones": ${JSON.stringify(noGoZones)},
         "suggestions": [same structure as before with fixed positions],
-        "components": []
+        "components": [same structure as before — you MAY adjust positions for better composition]
       }
     `;
 

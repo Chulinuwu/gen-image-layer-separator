@@ -182,9 +182,7 @@ export const processImage = async (req: Request, res: Response) => {
     const components = hasCharacter
       ? rawComponents.filter((c) => {
           const lbl = c.label.toLowerCase();
-          const isCharacter = CHARACTER_KEYWORDS.some((kw) => lbl.includes(kw));
-          // Keep characters always; keep non-characters only if they're NOT listed prop-keywords
-          if (isCharacter) return true;
+          // Check prop FIRST — "Phone (held by woman)" contains "woman" but IS a prop
           const isProp = PROP_KEYWORDS.some((kw) => lbl.includes(kw));
           if (isProp) {
             console.log(
@@ -598,13 +596,8 @@ export const createCampaign = async (req: Request, res: Response) => {
     let textSuggestions = analysis.suggestions || [];
     let componentSuggestions = analysis.components || [];
 
-    // FORCE: Strip components if mode is 'text' — don't trust AI to follow the prompt
-    if (mode === "text" && componentSuggestions.length > 0) {
-      console.warn(
-        `[WARNING] AI returned ${componentSuggestions.length} components in text-only mode! Stripping them.`,
-      );
-      componentSuggestions = [];
-    }
+    // NOTE: "text" mode now generates both text AND components (die-cuts).
+    // Components are kept so users can reposition them for better layouts.
 
     // FORCE: Strip text if mode is 'only_bg_comp'
     if (mode === "only_bg_comp" && textSuggestions.length > 0) {
@@ -621,15 +614,225 @@ export const createCampaign = async (req: Request, res: Response) => {
       componentCount: componentSuggestions.length,
     });
 
-    // ───── Step 1.2: AI Self-Review / Design Feedback Loop (Iterative) ─────
+    // ════════════════════════════════════════════════════════════════
+    // Step 1.5 + 2: INPAINT BG + DIE-CUT COMPONENTS (parallel, BEFORE refinement)
+    // ════════════════════════════════════════════════════════════════
+    let generatedBackgroundImageUrl: string | null = null;
+    let visualComponents: Array<{
+      label: string;
+      imageUrl: string;
+      position: any;
+      z_index: number;
+    }> = [];
+    const stackImageUrls: string[] = [];
+
+    // --- Dedup: remove props already held by a character ---
+    const CHAR_KW = [
+      "woman",
+      "man",
+      "girl",
+      "boy",
+      "mascot",
+      "character",
+      "person",
+      "figure",
+      "human",
+    ];
+    const PROP_KW = [
+      "phone",
+      "smartphone",
+      "mobile",
+      "tablet",
+      "gun",
+      "pistol",
+      "weapon",
+      "rifle",
+      "water gun",
+      "squirt",
+      "bag",
+      "purse",
+      "handbag",
+      "backpack",
+      "bottle",
+      "cup",
+      "mug",
+      "drink",
+      "hat",
+      "cap",
+      "helmet",
+      "glasses",
+      "sunglasses",
+      "umbrella",
+      "fan",
+      "flag",
+    ];
+    const hasChar = componentSuggestions.some((c: any) =>
+      CHAR_KW.some((kw) => c.label.toLowerCase().includes(kw)),
+    );
+    if (hasChar) {
+      componentSuggestions = componentSuggestions.filter((c: any) => {
+        const lbl = c.label.toLowerCase();
+        const hasPropWord = PROP_KW.some((kw) => lbl.includes(kw));
+        const hasCharWord = CHAR_KW.some((kw) => lbl.includes(kw));
+        // Filter out only if it contains a prop word but NO character word
+        if (hasPropWord && !hasCharWord) {
+          console.log(`[Build-Up] ⚠️ Filtered prop: "${c.label}"`);
+          return false;
+        }
+        return true;
+      });
+    }
+    console.log(
+      `[Build-Up] Components after dedup: ${componentSuggestions.length}`,
+    );
+
+    // --- Run inpaint + die-cut SEQUENTIALLY to prevent 429 API Rate Limits ---
+    if (componentSuggestions.length > 0) {
+      // Task A: Inpaint background
+      try {
+        sendSSE("progress", {
+          step: "inpaint_background",
+          message: "AI is cleaning the background...",
+        });
+        const componentsToDelete = componentSuggestions
+          .map(
+            (c: any) =>
+              `- "${c.label}" at [top:${c.position?.top}, left:${c.position?.left}]`,
+          )
+          .join("\n");
+        const textToDelete = textSuggestions
+          .map(
+            (t: any) =>
+              `- "${t.part}" at [top:${t.position?.top}, left:${t.position?.left}]`,
+          )
+          .join("\n");
+        const metadata = await sharp(imageBuffer).metadata();
+        const w = metadata.width || 1,
+          h = metadata.height || 1,
+          ratio = w / h;
+        let aspect_ratio = "3:4";
+        if (ratio > 1.2) aspect_ratio = "4:3";
+        else if (ratio >= 0.8) aspect_ratio = "1:1";
+        const bgPrompt = `You are an expert background artist and inpainting AI.
+TASK: Extract and recreate ONLY the pure background environment from the provided image.
+
+REFERENCE BACKGROUND DESCRIPTION:
+"${analysis.background_description || "A clean background environment."}"
+
+CRITICAL RULES:
+1. The result MUST be completely empty of any subjects.
+2. REMOVE ALL people, humans, characters, mascots, hands, and faces.
+3. REMOVE ALL typography, text, numbers, and logos.
+4. If a person is holding objects (like a phone, water gun, bag), remove the objects as well.
+5. Reconstruct the background behind them perfectly, maintaining the exact same lighting, colors, architecture, and textures.
+6. DO NOT hallucinate new objects. Create a seamless, clean slate.`;
+
+        const bgResponse = await vertexService.generateImage({
+          prompt: bgPrompt,
+          aspect_ratio,
+          inputImages: [{ buffer: imageBuffer, mimeType }],
+        });
+        if (bgResponse.buffer) {
+          const bgFilename = `bg-inpaint-${Date.now()}.png`;
+          fs.writeFileSync(path.join(uploadDir, bgFilename), bgResponse.buffer);
+          generatedBackgroundImageUrl = `/uploads/${bgFilename}`;
+          console.log(
+            `[Build-Up] Inpainted BG: ${generatedBackgroundImageUrl}`,
+          );
+          sendSSE("background_ready", {
+            previewUrl: generatedBackgroundImageUrl,
+            message: "Background cleaned!",
+          });
+        }
+      } catch (err) {
+        console.error("[Build-Up] BG inpaint failed:", err);
+        sendSSE("progress", {
+          step: "inpaint_error",
+          message: "⚠️ Background cleaning failed.",
+        });
+      }
+
+      // Task B: Generate die-cut components
+      try {
+        sendSSE("progress", {
+          step: "diecut_generation",
+          message: `Generating ${componentSuggestions.length} die-cut components...`,
+        });
+        const { results: diecutResults, gridImages } =
+          await vertexService.generateDiecutComponents(
+            imageBuffer,
+            mimeType,
+            componentSuggestions,
+          );
+        if (gridImages?.length) {
+          gridImages.forEach((img, idx) => {
+            const fn = `stack-${Date.now()}-${idx}.png`;
+            fs.writeFileSync(path.join(uploadDir, fn), img);
+            stackImageUrls.push(`/uploads/${fn}`);
+          });
+        }
+        visualComponents = diecutResults.map(
+          (r: { label: string; buffer: Buffer }, i: number) => {
+            const fn = `component-${Date.now()}-${i}.png`;
+            fs.writeFileSync(path.join(uploadDir, fn), r.buffer);
+            const matched =
+              componentSuggestions.find((c: any) => c.label === r.label) ||
+              componentSuggestions[i];
+            return {
+              label: r.label,
+              imageUrl: `/uploads/${fn}`,
+              position: matched?.position || {
+                top: 0,
+                left: 0,
+                width: 200,
+                height: 200,
+              },
+              z_index: matched?.z_index || 1,
+            };
+          },
+        );
+        console.log(
+          `[Build-Up] Generated ${visualComponents.length} die-cut images`,
+        );
+        sendSSE("progress", {
+          step: "diecut_complete",
+          message: `✅ ${visualComponents.length} components ready!`,
+        });
+      } catch (err) {
+        console.error("[Build-Up] Die-cut failed:", err);
+        sendSSE("progress", {
+          step: "diecut_error",
+          message: "⚠️ Die-cut generation failed.",
+        });
+      }
+
+      sendSSE("progress", {
+        step: "assets_ready",
+        message: `Assets: BG ${generatedBackgroundImageUrl ? "✅" : "❌"} | Components: ${visualComponents.length}`,
+      });
+
+      // Send initial layout to canvas before refinement loop
+      sendSSE("iteration_end", {
+        iteration: 0,
+        message: "Initial layout mapped to canvas.",
+        textCount: textSuggestions.length,
+        componentCount: componentSuggestions.length,
+        textLayers: textSuggestions,
+        components: componentSuggestions,
+        visualComponents,
+      });
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // Step 3: REFINEMENT LOOP — adjusts BOTH text AND component positions
+    // ════════════════════════════════════════════════════════════════
     const MAX_ITERATIONS = 10;
     let currentIteration = 0;
     let lastCritique: any = { status: "FAIL" };
 
-    // SKIP ITERATION if mode is 'only_bg_comp' (no text to refine)
-    const shouldSkipIteration = mode === "only_bg_comp";
-
     try {
+      const shouldSkipIteration = mode === "only_bg_comp";
+
       if (shouldSkipIteration) {
         sendSSE("progress", {
           step: "refinement_skipped",
@@ -660,7 +863,7 @@ export const createCampaign = async (req: Request, res: Response) => {
         const previewPath = path.join(uploadDir, previewFilename);
         fs.writeFileSync(previewPath, previewBuffer);
 
-        sendSSE("preview_ready", {
+        sendSSE("debug_preview", {
           iteration: currentIteration,
           previewUrl: `/uploads/${previewFilename}`,
           message: "Preview generated, checking for overlaps...",
@@ -861,19 +1064,28 @@ export const createCampaign = async (req: Request, res: Response) => {
           textSuggestions = refinedAnalysis.suggestions;
           analysis.suggestions = refinedAnalysis.suggestions;
         }
-        if (refinedAnalysis.components && (mode || "full") !== "text") {
+        if (refinedAnalysis.components) {
           componentSuggestions = refinedAnalysis.components;
           analysis.components = refinedAnalysis.components;
-        } else if ((mode || "full") === "text") {
-          // Force clear components in text-only mode
-          componentSuggestions = [];
-          analysis.components = [];
+          // Sync positions back into visualComponents (images stay, positions update)
+          for (const vc of visualComponents) {
+            const updated = componentSuggestions.find(
+              (c: any) => c.label === vc.label,
+            );
+            if (updated?.position) {
+              vc.position = updated.position;
+              vc.z_index = updated.z_index || vc.z_index;
+            }
+          }
         }
         sendSSE("iteration_end", {
           iteration: currentIteration,
           message: `Layout refined (iteration ${currentIteration}).`,
           textCount: textSuggestions.length,
           componentCount: componentSuggestions.length,
+          textLayers: textSuggestions,
+          components: componentSuggestions,
+          visualComponents,
         });
       }
 
@@ -887,213 +1099,6 @@ export const createCampaign = async (req: Request, res: Response) => {
         message: "Feedback loop failed, continuing with initial analysis",
         error: err instanceof Error ? err.message : String(err),
       });
-    }
-
-    // ───── Step 1.5: Inpaint Clean Background Image ─────
-    let generatedBackgroundImageUrl: string | null = null;
-    if (mode === "text") {
-      sendSSE("progress", {
-        step: "inpaint_background",
-        message: "Skipped background inpainting (Mode: Text Only)",
-      });
-    } else if (componentSuggestions.length > 0) {
-      try {
-        sendSSE("progress", {
-          step: "inpaint_background",
-          message: "AI Art Director is cleaning the background (Inpainting)...",
-        });
-        console.log("[Build-Up] Step 1.5: Inpainting clean background...");
-        const componentsToDelete = componentSuggestions
-          .map(
-            (c: any) =>
-              `- COMPONENT: "${c.label}" at [top: ${c.position.top}, left: ${c.position.left}, width: ${c.position.width}, height: ${c.position.height}]`,
-          )
-          .join("\n");
-
-        const textToDelete = textSuggestions
-          .map(
-            (t: any) =>
-              `- TEXT: "${t.part}" at [top: ${t.position.top}, left: ${t.position.left}, width: ${t.position.width}, height: ${t.position.height}]`,
-          )
-          .join("\n");
-
-        // Detect aspect ratio from original image
-        const metadata = await sharp(imageBuffer).metadata();
-        const width = metadata.width || 1;
-        const height = metadata.height || 1;
-        const ratio = width / height;
-
-        let aspect_ratio = "3:4"; // Default portrait
-        if (ratio > 1.2)
-          aspect_ratio = "4:3"; // Landscape
-        else if (ratio < 0.8)
-          aspect_ratio = "3:4"; // Portrait
-        else aspect_ratio = "1:1"; // Square
-
-        const bgResponse = await vertexService.generateImage({
-          prompt: `
-            You are a professional image editing AI specializing in INPAINTING and REMOVING objects.
-            
-            TASK: Create a clean background plate by REMOVING all foreground subjects, characters, and text from the provided image.
-            
-            IDENTIFIED ELEMENTS TO REMOVE (Coordinates 0-1000):
-            ${componentsToDelete}
-            ${textToDelete}
-            
-            CRITICAL RULES:
-            1. REMOVE these components and text, then reconstruct the background behind them perfectly.
-            2. MAINTAIN the exact environment, structure, lighting, and style of the existing background.
-            3. THE RESULT MUST BE AN EMPTY BACKGROUND VERSION OF THE REFERENCE IMAGE.
-            4. Do NOT hallucinate new objects. If a greenhouse is there, keep same greenhouse style.
-          `,
-          aspect_ratio,
-          inputImages: [{ buffer: imageBuffer, mimeType }],
-        });
-
-        if (bgResponse.buffer) {
-          const bgFilename = `bg-inpaint-${Date.now()}.png`;
-          fs.writeFileSync(path.join(uploadDir, bgFilename), bgResponse.buffer);
-          generatedBackgroundImageUrl = `/uploads/${bgFilename}`;
-          console.log(
-            `[Build-Up] Inpainted clean background: ${generatedBackgroundImageUrl}`,
-          );
-
-          // Update live preview with the clean background
-          sendSSE("preview_ready", {
-            iteration: currentIteration,
-            previewUrl: generatedBackgroundImageUrl,
-            message: "AI cleaned the background successfully!",
-          });
-        } else {
-          sendSSE("progress", {
-            step: "inpaint_failed",
-            message:
-              "⚠️ Background cleaning failed, using original background.",
-          });
-        }
-      } catch (err) {
-        console.error("[Build-Up] Background generation failed:", err);
-        sendSSE("progress", {
-          step: "inpaint_error",
-          message: "⚠️ Background cleaning encountered an error.",
-        });
-      }
-    }
-
-    // ───── Step 2: Generate Die-cut Components ─────
-    let visualComponents: Array<{
-      label: string;
-      imageUrl: string;
-      position: any;
-      z_index: number;
-    }> = [];
-    const stackImageUrls: string[] = [];
-
-    if (mode === "text") {
-      console.log("[Build-Up] Step 2: Skipped (Mode: Text Only)");
-    } else if (componentSuggestions.length > 0) {
-      // Dedup: remove props already held by a character in the list
-      const CHAR_KW = [
-        "woman",
-        "man",
-        "girl",
-        "boy",
-        "mascot",
-        "character",
-        "person",
-        "figure",
-        "human",
-      ];
-      const PROP_KW = [
-        "phone",
-        "smartphone",
-        "mobile",
-        "tablet",
-        "gun",
-        "pistol",
-        "weapon",
-        "rifle",
-        "water gun",
-        "squirt",
-        "bag",
-        "purse",
-        "handbag",
-        "backpack",
-        "bottle",
-        "cup",
-        "mug",
-        "drink",
-        "hat",
-        "cap",
-        "helmet",
-        "glasses",
-        "sunglasses",
-        "umbrella",
-        "fan",
-        "flag",
-      ];
-      const hasChar = componentSuggestions.some((c: any) =>
-        CHAR_KW.some((kw) => c.label.toLowerCase().includes(kw)),
-      );
-      const filteredComponents: any[] = hasChar
-        ? componentSuggestions.filter((c: any) => {
-            const lbl = c.label.toLowerCase();
-            if (CHAR_KW.some((kw) => lbl.includes(kw))) return true;
-            if (PROP_KW.some((kw) => lbl.includes(kw))) {
-              console.log(
-                `[Build-Up] ⚠️ Filtered prop component: "${c.label}"`,
-              );
-              return false;
-            }
-            return true;
-          })
-        : componentSuggestions;
-
-      console.log(
-        `[Build-Up] Step 2: Generating ${filteredComponents.length} die-cut components (filtered from ${componentSuggestions.length})...`,
-      );
-      const { results: diecutResults, gridImages } =
-        await vertexService.generateDiecutComponents(
-          imageBuffer,
-          mimeType,
-          filteredComponents,
-        );
-
-      // Save stack preview images
-      if (gridImages && gridImages.length > 0) {
-        gridImages.forEach((img, idx) => {
-          const stackFilename = `stack-${Date.now()}-${idx}.png`;
-          fs.writeFileSync(path.join(uploadDir, stackFilename), img);
-          const url = `/uploads/${stackFilename}`;
-          stackImageUrls.push(url);
-          console.log(`[Build-Up] Saved stack preview ${idx}: ${url}`);
-        });
-      }
-
-      visualComponents = diecutResults.map(
-        (result: { label: string; buffer: Buffer }, i: number) => {
-          const filename = `component-${Date.now()}-${i}.png`;
-          fs.writeFileSync(path.join(uploadDir, filename), result.buffer);
-          // Match position by label (safer than index after filtering)
-          const matched =
-            filteredComponents.find((c: any) => c.label === result.label) ||
-            filteredComponents[i];
-          return {
-            label: result.label,
-            imageUrl: `/uploads/${filename}`,
-            position: matched?.position || {
-              top: 0,
-              left: 0,
-              width: 200,
-              height: 200,
-            },
-            z_index: matched?.z_index || 1,
-          };
-        },
-      );
-      console.log(
-        `[Build-Up] Generated ${visualComponents.length} die-cut images.`,
-      );
     }
 
     // ───── Step 3: Return Everything ─────

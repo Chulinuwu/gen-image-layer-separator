@@ -51,6 +51,9 @@ const createCampaign = async () => {
   }
 
   error.value = "";
+  analysis.value = null; // Clear previous results
+  loading.value = true;
+  progressMessage.value = "Starting...";
   const formData = new FormData();
   formData.append("image", selectedFile.value);
   formData.append("text", targetText.value);

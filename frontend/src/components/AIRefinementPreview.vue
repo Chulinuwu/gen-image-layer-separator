@@ -52,6 +52,27 @@
             <div class="loader-ring"></div>
             <span>INITIALIZING AI CREATIVE SUITE...</span>
           </div>
+
+          <!-- Live text overlay (only when preview is ready) -->
+          <template v-if="currentPreviewUrl">
+            <div
+              v-for="(t, idx) in liveTextLayers"
+              :key="'lt' + idx"
+              class="live-text-overlay"
+              :style="getTextStyle(t)"
+            >
+              {{ t.part }}
+            </div>
+
+            <!-- Live component overlay -->
+            <img
+              v-for="(c, idx) in liveComponents"
+              :key="'lc' + idx"
+              :src="'http://localhost:5001' + c.imageUrl"
+              class="live-component-overlay"
+              :style="getComponentStyle(c)"
+            />
+          </template>
         </div>
       </div>
     </div>
@@ -180,6 +201,46 @@ const statusText = ref("Initializing design suite...");
 const logContainer = ref<HTMLElement | null>(null);
 const isComplete = ref(false);
 const isCollapsed = ref(false);
+const liveTextLayers = ref<any[]>([]);
+const liveComponents = ref<any[]>([]);
+
+const getTextStyle = (t: any) => {
+  const pos = t.position || {};
+  const style = t.style || {};
+  return {
+    position: "absolute" as const,
+    top: pos.top / 10 + "%",
+    left: pos.left / 10 + "%",
+    fontSize: Math.max(8, (style.font_size_normalized || 16) * 0.4) + "px",
+    fontFamily: style.font_family || "Inter, sans-serif",
+    fontWeight: style.font_weight || "bold",
+    color: style.color_hex || "#FFFFFF",
+    textShadow: style.stroke_hex
+      ? `0 0 2px ${style.stroke_hex}, 0 0 4px ${style.stroke_hex}`
+      : "none",
+    whiteSpace: "nowrap" as const,
+    pointerEvents: "none" as const,
+    zIndex: 20,
+    letterSpacing: (style.letter_spacing || 0) + "px",
+    lineHeight: String(style.line_height || 1.2),
+    transform: pos.rotation ? `rotate(${pos.rotation}deg)` : undefined,
+  };
+};
+
+const getComponentStyle = (c: any) => {
+  const pos = c.position || {};
+  return {
+    position: "absolute" as const,
+    top: pos.top / 10 + "%",
+    left: pos.left / 10 + "%",
+    width: pos.width / 10 + "%",
+    height: pos.height / 10 + "%",
+    objectFit: "contain" as const,
+    pointerEvents: "none" as const,
+    zIndex: c.z_index || 10,
+    transform: pos.rotation ? `rotate(${pos.rotation}deg)` : undefined,
+  };
+};
 
 const progressPercent = computed(() => {
   return (currentIteration.value / maxIterations.value) * 100;
@@ -210,6 +271,8 @@ const connectSSE = async (formData: FormData) => {
     currentPreviewUrl.value = "";
     currentCritique.value = null;
     isComplete.value = false;
+    liveTextLayers.value = [];
+    liveComponents.value = [];
     statusText.value = "Initializing design suite...";
 
     addMessage("Establishing design connection...", "info");
@@ -284,9 +347,14 @@ const handleSSEEvent = (event: string, data: any) => {
       statusText.value = `Running Iteration ${data.iteration}...`;
       addMessage(`Starting refinement pass ${data.iteration}`, "iteration");
       break;
-    case "preview_ready":
+    case "background_ready":
+      // Clean inpainted background — show on canvas
       currentPreviewUrl.value = `http://localhost:5001${data.previewUrl}`;
-      addMessage("Draft preview updated", "success");
+      addMessage("Clean background ready!", "success");
+      break;
+    case "debug_preview":
+      // Refinement debug preview (has green boxes, text drawn) — don't show on canvas
+      addMessage(`Iteration ${data.iteration} preview generated`, "info");
       break;
     case "critique_complete":
       currentCritique.value = data;
@@ -303,9 +371,25 @@ const handleSSEEvent = (event: string, data: any) => {
       statusText.value = "Design Approved";
       isComplete.value = true;
       addMessage("Layout finalized successfully", "success");
+      // Populate live preview from final data
+      if (data.data?.textLayers) {
+        liveTextLayers.value = data.data.textLayers;
+      }
+      if (data.data?.visualComponents) {
+        liveComponents.value = data.data.visualComponents;
+      }
       setTimeout(() => {
         emit("complete", data.data);
       }, 1000);
+      break;
+    case "iteration_end":
+      // Store latest text + component data from iterations
+      if (data.textLayers) liveTextLayers.value = data.textLayers;
+      if (data.visualComponents?.length) {
+        liveComponents.value = data.visualComponents;
+      } else if (data.components) {
+        liveComponents.value = data.components;
+      }
       break;
     case "error":
       addMessage(`Engine Error: ${data.error}`, "error");
@@ -372,18 +456,34 @@ defineExpose({ connectSSE });
 .canvas-content {
   width: 100%;
   height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  position: relative;
+  overflow: hidden;
 }
 
 .design-preview {
   width: 100%;
-  height: 100%;
-  object-fit: contain;
+  height: auto;
+  display: block;
+}
+
+.live-text-overlay {
+  position: absolute;
+  pointer-events: none;
+  transition: all 0.3s ease;
+  text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+.live-component-overlay {
+  position: absolute;
+  pointer-events: none;
+  transition: all 0.3s ease;
 }
 
 .empty-canvas {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   display: flex;
   flex-direction: column;
   align-items: center;
