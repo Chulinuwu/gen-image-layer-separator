@@ -6,6 +6,7 @@
  */
 
 import { GoogleGenAI } from "@google/genai";
+import { removeBackground } from "@imgly/background-removal-node";
 import sharp from "sharp";
 import fs from "fs";
 import path from "path";
@@ -1324,13 +1325,23 @@ export class AIService {
   }
 
   /**
-   * Worker 2B: Generate all die-cut components in BATCHES
-   * Limits to 6 components per API call to avoid timeouts and improve quality.
+   * Worker 2B: Generate die-cut components using a HYBRID approach.
+   *
+   * Strategy (per component):
+   *  1. PRIMARY: Crop from source image + ML background removal (@imgly/background-removal-node)
+   *     — No AI Image Gen call needed. Fast, style-accurate (it's the real photo).
+   *  2. FALLBACK: AI Image Generation (original method)
+   *     — Used only when the position data is missing/invalid so we can't crop.
+   *
+   * Why crop works well here:
+   *  - The first AI pass already detected bounding boxes per component.
+   *  - ML bg-removal handles complex backgrounds (gradients, scenes) — not just plain white.
+   *  - Characters/mascots with complex backgrounds are exactly what BRIAAI RMBG excels at.
    */
   async generateDiecutComponents(
     imageBuffer: Buffer,
     mimeType: string,
-    components: Array<{ label: string; description: string }>,
+    components: Array<{ label: string; description: string; position?: any }>,
   ): Promise<{
     results: Array<{ label: string; buffer: Buffer }>;
     gridImages: Buffer[];
@@ -1339,32 +1350,58 @@ export class AIService {
 
     const allResults: Array<{ label: string; buffer: Buffer }> = [];
 
-    // Generate each component individually at full resolution for best quality
     for (let i = 0; i < components.length; i++) {
       const comp = components[i];
+      const hasValidPosition =
+        comp.position &&
+        typeof comp.position.top === "number" &&
+        typeof comp.position.left === "number" &&
+        (comp.position.width || 0) > 20 &&
+        (comp.position.height || 0) > 20;
+
       console.log(
-        `[GenAI] Generating die-cut ${i + 1}/${components.length}: "${comp.label}"`,
+        `[Diecut] ${i + 1}/${components.length}: "${comp.label}" — using ${
+          hasValidPosition ? "CROP+ML" : "AI-GEN fallback"
+        }`,
       );
+
       try {
-        const buf = await this._generateSingleDiecut(
-          imageBuffer,
-          mimeType,
-          comp,
-        );
+        let buf: Buffer | null = null;
+
+        if (hasValidPosition) {
+          // PRIMARY PATH: Crop from original + ML background removal
+          buf = await this._cropAndDiecut(imageBuffer, comp.position);
+          if (buf) {
+            console.log(
+              `[Diecut] ✅ Crop+ML success for "${comp.label}" (${buf.length} bytes)`,
+            );
+          } else {
+            console.warn(
+              `[Diecut] ⚠️ Crop+ML returned null for "${comp.label}", falling back to AI Gen`,
+            );
+          }
+        }
+
+        if (!buf) {
+          // FALLBACK PATH: AI Image Generation (original method)
+          // Only reaches here if: no valid position OR crop+ML failed
+          console.log(`[Diecut] 🔄 AI-Gen fallback for "${comp.label}"`);
+          buf = await this._generateSingleDiecut(imageBuffer, mimeType, comp);
+          // Throttle only for AI gen calls to avoid 429
+          if (i < components.length - 1) {
+            await new Promise((r) => setTimeout(r, 3000));
+          }
+        }
+
         if (buf) {
           allResults.push({ label: comp.label, buffer: buf });
-          console.log(
-            `[GenAI] ✅ Die-cut "${comp.label}" complete (${buf.length} bytes)`,
-          );
         } else {
-          console.warn(`[GenAI] ⚠️ No image returned for "${comp.label}"`);
-        }
-        // Throttle between calls — keep at 3s to avoid 429 rate limits on per-image generation
-        if (i < components.length - 1) {
-          await new Promise((r) => setTimeout(r, 3000));
+          console.warn(
+            `[Diecut] ⚠️ No result for "${comp.label}" (both paths failed)`,
+          );
         }
       } catch (err) {
-        console.error(`[GenAI] ❌ Failed die-cut for "${comp.label}":`, err);
+        console.error(`[Diecut] ❌ Failed for "${comp.label}":`, err);
       }
     }
 
@@ -1429,6 +1466,82 @@ export class AIService {
       `[GenAI] Die-cut complete: ${allResults.length}/${components.length} components succeeded`,
     );
     return { results: allResults, gridImages };
+  }
+
+  /**
+   * PRIMARY die-cut method: Crop component from source image + ML background removal.
+   *
+   * This avoids AI Image Generation entirely — uses the real photo pixels + an ML
+   * segmentation model (BRIAAI RMBG-1.4 via @imgly/background-removal-node) to separate
+   * the foreground subject from background.
+   *
+   * The position is a normalized 0-1000 bounding box from the AI layout analysis.
+   * We pad by 3% to avoid accidentally clipping edges due to AI bounding box inaccuracy.
+   */
+  private async _cropAndDiecut(
+    imageBuffer: Buffer,
+    position: { top: number; left: number; width: number; height: number },
+  ): Promise<Buffer | null> {
+    try {
+      const meta = await sharp(imageBuffer).metadata();
+      const imgW = meta.width || 1000;
+      const imgH = meta.height || 1000;
+
+      // Convert normalized 0-1000 coords to pixel coords
+      const PAD = 0.03; // 3% padding to account for bounding box inaccuracy
+      const topNorm = Math.max(0, position.top / 1000 - PAD);
+      const leftNorm = Math.max(0, position.left / 1000 - PAD);
+      const bottomNorm = Math.min(
+        1,
+        (position.top + position.height) / 1000 + PAD,
+      );
+      const rightNorm = Math.min(
+        1,
+        (position.left + position.width) / 1000 + PAD,
+      );
+
+      const cropLeft = Math.round(leftNorm * imgW);
+      const cropTop = Math.round(topNorm * imgH);
+      const cropWidth = Math.round((rightNorm - leftNorm) * imgW);
+      const cropHeight = Math.round((bottomNorm - topNorm) * imgH);
+
+      // Guard: skip if crop region is too small to be meaningful
+      if (cropWidth < 10 || cropHeight < 10) {
+        console.warn("[Diecut/Crop] Crop region too small, skipping.");
+        return null;
+      }
+
+      console.log(
+        `[Diecut/Crop] Cropping region: left=${cropLeft} top=${cropTop} w=${cropWidth} h=${cropHeight}`,
+      );
+
+      const croppedBuffer = await sharp(imageBuffer)
+        .extract({
+          left: cropLeft,
+          top: cropTop,
+          width: cropWidth,
+          height: cropHeight,
+        })
+        .png()
+        .toBuffer();
+
+      // Run ML background removal — BRIAAI RMBG-1.4 handles complex backgrounds
+      // Input: cropped PNG (any background)
+      // Output: Blob with PNG that has transparent background
+      const resultBlob = await removeBackground(croppedBuffer);
+      const resultBuffer = Buffer.from(await resultBlob.arrayBuffer());
+
+      // Trim transparent edges to get a tight bounding box on the subject
+      try {
+        return await sharp(resultBuffer).trim().png().toBuffer();
+      } catch {
+        // trim() can fail if the image has no transparent edge to trim from — return as-is
+        return resultBuffer;
+      }
+    } catch (err) {
+      console.error("[Diecut/Crop] Error during crop+ML removal:", err);
+      return null;
+    }
   }
 
   /**

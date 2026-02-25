@@ -1,6 +1,39 @@
 # Progress Log — gen-image-layer-separator
 
-## 2026-02-24 Session
+## 2026-02-25 Session
+
+### Summary
+
+Replaced AI Image Generation for die-cut components with Hybrid Crop+ML approach to reduce Vertex AI API calls significantly.
+
+### Major Changes
+
+#### 1. Hybrid Die-cut System (`vertex.service.ts`)
+
+**Before:** For each component → 1 AI Image Gen call (expensive, slow, 3s delay between)
+**After:** Crop from original image → ML background removal → die-cut (0 AI calls for most components)
+
+- Added `_cropAndDiecut()` private method: Sharp crop + `@imgly/background-removal-node` (BRIAAI RMBG-1.4 model)
+- Updated `generateDiecutComponents()` to use hybrid logic:
+  - **PRIMARY:** Crop + ML (uses real pixels, style-accurate, no AI needed)
+  - **FALLBACK:** AI Gen (only when position data is missing/invalid)
+- Added 3% bounding box padding to handle AI position inaccuracy
+
+#### 2. Type Declaration for @imgly (`src/types/imgly-background-removal-node.d.ts`)
+
+- Created local `.d.ts` because `moduleResolution: "node"` doesn't auto-resolve `exports` map
+- `skipLibCheck: true` already set — no build issues
+
+### State
+
+- `tsc --noEmit` passes cleanly ✅
+- Server starts OK but has a `sharp` version conflict warning (two sharp instances loaded)
+- **Needs end-to-end test** with a real image to verify crop+ML quality
+
+### Tech Debt
+
+- **Sharp conflict:** `@imgly/background-removal-node` bundles its own `sharp`. If this causes crashes in production, consider switching to `rembg` (Python subprocess) or using `@imgly/background-removal` browser-side instead.
+- Refinement loop `MAX_ITERATIONS = 10` is still high — planned reduction to 3 with smarter auto-fix.
 
 ### Summary
 
