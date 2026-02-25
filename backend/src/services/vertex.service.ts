@@ -10,7 +10,14 @@ import { removeBackground } from "@imgly/background-removal-node";
 import sharp from "sharp";
 import fs from "fs";
 import path from "path";
+import os from "os";
 import dotenv from "dotenv";
+
+// RMBG-2.0 model singleton — loaded once, reused across all calls
+// Using @huggingface/transformers which runs ONNX models locally (no API call)
+let _rmbg2Model: any = null;
+let _rmbg2Processor: any = null;
+let _rmbg2Loading: Promise<void> | null = null;
 
 dotenv.config();
 
@@ -1345,10 +1352,40 @@ export class AIService {
   ): Promise<{
     results: Array<{ label: string; buffer: Buffer }>;
     gridImages: Buffer[];
+    maskedFullImageBuffer: Buffer | null;
   }> {
-    if (!components.length) return { results: [], gridImages: [] };
+    if (!components.length)
+      return { results: [], gridImages: [], maskedFullImageBuffer: null };
 
     const allResults: Array<{ label: string; buffer: Buffer }> = [];
+
+    // Run RMBG on the FULL source image ONCE before the component loop.
+    // Strategy: full-image context gives the ML model much better segmentation accuracy
+    // than cropped pieces, especially for complex handheld objects (water guns, phones, etc.).
+    // The masked full-image is then cached and shared across all components — each one just
+    // crops the relevant bounding box region from this pre-masked result.
+    let maskedFullImageBuffer: Buffer | null = null;
+    const hasAnyValidPosition = components.some(
+      (c) =>
+        c.position &&
+        typeof c.position.top === "number" &&
+        (c.position.width || 0) > 20,
+    );
+    if (hasAnyValidPosition) {
+      console.log(
+        "[Diecut] Running RMBG on full source image (shared across all components)...",
+      );
+      maskedFullImageBuffer = await this._removeBgFullImage(imageBuffer);
+      if (maskedFullImageBuffer) {
+        console.log(
+          "[Diecut] ✅ Full-image RMBG complete — will crop components from masked result",
+        );
+      } else {
+        console.warn(
+          "[Diecut] ⚠️ Full-image RMBG failed — will run RMBG per-crop as fallback",
+        );
+      }
+    }
 
     for (let i = 0; i < components.length; i++) {
       const comp = components[i];
@@ -1361,7 +1398,11 @@ export class AIService {
 
       console.log(
         `[Diecut] ${i + 1}/${components.length}: "${comp.label}" — using ${
-          hasValidPosition ? "CROP+ML" : "AI-GEN fallback"
+          hasValidPosition
+            ? maskedFullImageBuffer
+              ? "FULL-ML+CROP"
+              : "CROP+ML"
+            : "AI-GEN fallback"
         }`,
       );
 
@@ -1369,15 +1410,20 @@ export class AIService {
         let buf: Buffer | null = null;
 
         if (hasValidPosition) {
-          // PRIMARY PATH: Crop from original + ML background removal
-          buf = await this._cropAndDiecut(imageBuffer, comp.position);
+          // PRIMARY PATH: crop from full-image RMBG result (or fall back to per-crop RMBG)
+          buf = await this._cropAndDiecut(
+            imageBuffer,
+            comp.position,
+            comp.label,
+            maskedFullImageBuffer,
+          );
           if (buf) {
             console.log(
-              `[Diecut] ✅ Crop+ML success for "${comp.label}" (${buf.length} bytes)`,
+              `[Diecut] ✅ Crop success for "${comp.label}" (${buf.length} bytes)`,
             );
           } else {
             console.warn(
-              `[Diecut] ⚠️ Crop+ML returned null for "${comp.label}", falling back to AI Gen`,
+              `[Diecut] ⚠️ Crop returned null for "${comp.label}", falling back to AI Gen`,
             );
           }
         }
@@ -1465,7 +1511,421 @@ export class AIService {
     console.log(
       `[GenAI] Die-cut complete: ${allResults.length}/${components.length} components succeeded`,
     );
-    return { results: allResults, gridImages };
+    return { results: allResults, gridImages, maskedFullImageBuffer };
+  }
+
+  /**
+   * Inpaint the background using Vertex AI Imagen 3 editImage (INPAINT_REMOVAL mode).
+   * It takes the original image and the full-scene alpha mask from RMBG,
+   * converts the alpha mask into a solid Black & White inverted inpaint mask,
+   * and sends it to the model.
+   */
+  async inpaintBackground(
+    imageBuffer: Buffer,
+    maskedFullImageBuffer: Buffer,
+    prompt: string,
+  ): Promise<{ buffer: Buffer | null }> {
+    try {
+      console.log(
+        "[Inpaint] Generating B&W inpaint mask from RMBG alpha channel...",
+      );
+      // Convert RMBG alpha mask (where subjects have alpha > 0)
+      // to Imagen 3 Inpaint Mask (where regions to REMOVE are White 255, keep are Black 0)
+      const maskOutput = await sharp(maskedFullImageBuffer)
+        .ensureAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+
+      const maskData = maskOutput.data;
+      for (let i = 0; i < maskData.length; i += 4) {
+        // If alpha (i+3) is > threshold, this is foreground we want to REMOVE
+        const isForeground = maskData[i + 3] > 30;
+        const val = isForeground ? 255 : 0;
+        maskData[i] = val; // R
+        maskData[i + 1] = val; // G
+        maskData[i + 2] = val; // B
+        maskData[i + 3] = 255; // solid mask alpha
+      }
+
+      const bwMaskBuffer = await sharp(maskData, {
+        raw: {
+          width: maskOutput.info.width,
+          height: maskOutput.info.height,
+          channels: 4,
+        },
+      })
+        .png()
+        .toBuffer();
+
+      console.log(
+        `[Inpaint] Calling Imagen 3 editImage (EDIT_MODE_INPAINT_REMOVAL)...`,
+      );
+
+      const { MaskReferenceMode, MaskReferenceImage, RawReferenceImage } =
+        await import("@google/genai");
+
+      const maskRef = new MaskReferenceImage();
+      maskRef.referenceId = 1;
+      maskRef.referenceImage = {
+        imageBytes: bwMaskBuffer.toString("base64"),
+        mimeType: "image/png",
+      };
+      maskRef.config = {
+        maskMode: MaskReferenceMode.MASK_MODE_USER_PROVIDED,
+      };
+
+      const rawRef = new RawReferenceImage();
+      rawRef.referenceId = 2;
+      rawRef.referenceImage = {
+        imageBytes: imageBuffer.toString("base64"),
+        mimeType: "image/png",
+      };
+
+      const response = await this.client.models.editImage({
+        model: process.env.IMAGEN_ENDPOINT || "imagen-4.0-fast-generate-001",
+        prompt: prompt,
+        referenceImages: [maskRef, rawRef],
+        config: {
+          editMode: "EDIT_MODE_INPAINT_REMOVAL" as any,
+          numberOfImages: 1,
+          outputMimeType: "image/png",
+        },
+      });
+
+      if (
+        response.generatedImages &&
+        response.generatedImages.length > 0 &&
+        response.generatedImages[0].image
+      ) {
+        const imageBytes = response.generatedImages[0].image.imageBytes;
+        if (!imageBytes) {
+          console.warn("[Inpaint] editImage returned image without imageBytes");
+          return { buffer: null };
+        }
+        console.log("[Inpaint] ✅ Successfully inpainted background");
+        return { buffer: Buffer.from(imageBytes, "base64") };
+      }
+
+      console.warn("[Inpaint] editImage returned no image data");
+      return { buffer: null };
+    } catch (err) {
+      console.error("[Inpaint] Error during editImage:", err);
+      return { buffer: null };
+    }
+  }
+
+  /**
+   * Extract a single component from a full-image RMBG mask using BFS flood-fill.
+   *
+   * Problem with simple rectangular crop: when two subjects (e.g. woman + mascot) are close,
+   * their bounding boxes may overlap, causing BOTH to appear in one component's crop.
+   *
+   * Solution: after RMBG gives us the full alpha mask, BFS from the CENTER of the target
+   * component's bounding box — following only connected foreground pixels (alpha > 0).
+   * Since the woman and mascot are separate foreground blobs, BFS from woman center reaches
+   * only woman pixels. BFS from mascot center reaches only mascot pixels.
+   *
+   * Returns a tight transparent PNG of just that one component.
+   */
+  private async _extractComponentByFloodFill(
+    maskedFullBuffer: Buffer, // RMBG output: full image with alpha mask
+    position: { top: number; left: number; width: number; height: number },
+    origW: number, // original image width (for coord scaling)
+    origH: number, // original image height
+    label: string = "",
+  ): Promise<Buffer | null> {
+    try {
+      const maskedMeta = await sharp(maskedFullBuffer).metadata();
+      const mW = maskedMeta.width || origW;
+      const mH = maskedMeta.height || origH;
+
+      // Scale factor: masked image may have been resized to max 1024/1500px
+      const scaleX = mW / origW;
+      const scaleY = mH / origH;
+
+      // Bounding box center in masked-image pixel space (where we'll start BFS)
+      const centerX = Math.round(
+        ((position.left + position.width / 2) / 1000) * origW * scaleX,
+      );
+      const centerY = Math.round(
+        ((position.top + position.height / 2) / 1000) * origH * scaleY,
+      );
+
+      // Get raw RGBA data of the masked full image
+      const { data, info } = await sharp(maskedFullBuffer)
+        .ensureAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+
+      const W = info.width;
+      const H = info.height;
+
+      // BFS: walk connected foreground pixels starting from the component center.
+      // We mark visited pixels in a separate boolean array to avoid revisiting.
+      const visited = new Uint8Array(W * H); // 0 = unvisited
+      const queue: number[] = []; // stores pixel index (y*W + x)
+      const startIdx = centerY * W + centerX;
+
+      const ALPHA_THRESHOLD = 10; // pixels above this are "foreground"
+      const startAlpha = data[startIdx * 4 + 3];
+
+      if (startAlpha < ALPHA_THRESHOLD) {
+        // Center falls on background — scan outward in the bounding box to find a foreground seed
+        let found = false;
+        const bLeft = Math.max(
+          0,
+          Math.round((position.left / 1000) * origW * scaleX),
+        );
+        const bTop = Math.max(
+          0,
+          Math.round((position.top / 1000) * origH * scaleY),
+        );
+        const bRight = Math.min(
+          W - 1,
+          Math.round(
+            ((position.left + position.width) / 1000) * origW * scaleX,
+          ),
+        );
+        const bBottom = Math.min(
+          H - 1,
+          Math.round(
+            ((position.top + position.height) / 1000) * origH * scaleY,
+          ),
+        );
+
+        outer: for (let y = bTop; y <= bBottom; y++) {
+          for (let x = bLeft; x <= bRight; x++) {
+            if (data[(y * W + x) * 4 + 3] >= ALPHA_THRESHOLD) {
+              queue.push(y * W + x);
+              visited[y * W + x] = 1;
+              found = true;
+              break outer;
+            }
+          }
+        }
+        if (!found) {
+          console.warn(
+            `[FloodFill] No foreground seed found in bbox for "${label}", falling back to rectangular crop`,
+          );
+          return null;
+        }
+      } else {
+        queue.push(startIdx);
+        visited[startIdx] = 1;
+      }
+
+      // BFS — 5x5 neighborhood to jump small alpha gaps (up to 2px thick)
+      // We dynamically generate the relative offsets.
+      const dirs: number[] = [];
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          dirs.push(dy * W + dx);
+        }
+      }
+
+      let head = 0;
+      while (head < queue.length) {
+        const idx = queue[head++];
+        const x = idx % W;
+        const y = Math.floor(idx / W);
+
+        for (const d of dirs) {
+          const n = idx + d;
+          if (n < 0 || n >= W * H) continue;
+          if (visited[n]) continue;
+
+          const nx = n % W;
+          const ny = Math.floor(n / W);
+          if (Math.abs(nx - x) > 2 || Math.abs(ny - y) > 2) continue; // prevent wrap-around
+
+          if (data[n * 4 + 3] < ALPHA_THRESHOLD) continue;
+          visited[n] = 1;
+          queue.push(n);
+        }
+      }
+
+      // Build output: keep only BFS-visited pixels, zero out the rest
+      const outData = Buffer.alloc(W * H * 4, 0);
+      let minX = W,
+        maxX = 0,
+        minY = H,
+        maxY = 0;
+      for (let i = 0; i < queue.length; i++) {
+        const idx = queue[i];
+        const x = idx % W;
+        const y = Math.floor(idx / W);
+        const p = idx * 4;
+        outData[p] = data[p];
+        outData[p + 1] = data[p + 1];
+        outData[p + 2] = data[p + 2];
+        outData[p + 3] = data[p + 3];
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+
+      if (minX > maxX || minY > maxY) return null; // nothing found
+
+      // Crop to tight bounding box of the flood-filled region
+      const cropW = maxX - minX + 1;
+      const cropH = maxY - minY + 1;
+      const tightBuffer = await sharp(outData, {
+        raw: { width: W, height: H, channels: 4 },
+      })
+        .extract({ left: minX, top: minY, width: cropW, height: cropH })
+        .png()
+        .toBuffer();
+
+      console.log(
+        `[FloodFill] ✅ "${label}": filled ${queue.length} px → crop ${cropW}x${cropH}`,
+      );
+      return tightBuffer;
+    } catch (err) {
+      console.error(`[FloodFill] Error for "${label}":`, err);
+      return null;
+    }
+  }
+
+  /**
+   * Remove background using BRIAAI RMBG-2.0 via @huggingface/transformers (local ONNX inference).
+   * RMBG-2.0 is significantly better than 1.4 at preserving handheld objects, props, and
+   * complex subject boundaries. Model is lazy-loaded and cached as a singleton to avoid
+   * repeated download/initialization overhead (first call ~10-30s, subsequent calls ~1-3s).
+   *
+   * Falls back to @imgly/background-removal-node (RMBG-1.4) if transformers fails or is unavailable.
+   */
+  private async _removeBgRMBG2(imageBuffer: Buffer): Promise<Buffer | null> {
+    try {
+      // Lazy-load RMBG-2.0 model once and cache it
+      if (!_rmbg2Model || !_rmbg2Processor) {
+        if (!_rmbg2Loading) {
+          console.log(
+            "[RMBG-2.0] Loading model from HuggingFace (first time, may take 30s)...",
+          );
+          _rmbg2Loading = (async () => {
+            // Dynamic import to avoid top-level ESM issues with ts-node
+            const { AutoModel, AutoProcessor } =
+              await import("@huggingface/transformers");
+            _rmbg2Processor = await AutoProcessor.from_pretrained(
+              "briaai/RMBG-2.0",
+              {
+                // Cache locally in the project's node_modules cache
+              },
+            );
+            _rmbg2Model = await AutoModel.from_pretrained("briaai/RMBG-2.0", {
+              dtype: "fp32",
+            });
+            console.log("[RMBG-2.0] Model loaded and cached ✅");
+          })();
+        }
+        await _rmbg2Loading;
+      }
+
+      const { RawImage } = await import("@huggingface/transformers");
+
+      // Convert buffer to a temp file path that RawImage can load
+      const tmpIn = path.join(os.tmpdir(), `rmbg2-in-${Date.now()}.png`);
+      const tmpOut = path.join(os.tmpdir(), `rmbg2-out-${Date.now()}.png`);
+
+      try {
+        // Resize to 1024px max (RMBG-2.0 trained at 1024x1024)
+        const resized = await sharp(imageBuffer)
+          .resize({
+            width: 1024,
+            height: 1024,
+            fit: "inside",
+            withoutEnlargement: true,
+          })
+          .png()
+          .toBuffer();
+        fs.writeFileSync(tmpIn, resized);
+
+        const image = await RawImage.fromURL(`file://${tmpIn}`);
+        const { pixel_values } = await _rmbg2Processor(image);
+        const { output } = await _rmbg2Model({ pixel_values });
+
+        // Post-process: sigmoid → threshold → apply as alpha mask
+        const maskTensor = output[0].sigmoid();
+        const [, , h, w] = maskTensor.dims;
+        const maskData = maskTensor.data as Float32Array;
+
+        // Get original resized image as RGBA raw buffer
+        const { data: imgData, info } = await sharp(resized)
+          .ensureAlpha()
+          .raw()
+          .toBuffer({ resolveWithObject: true });
+
+        // Apply mask: scale mask pixels to match image dimensions
+        const scaleX = info.width / w;
+        const scaleY = info.height / h;
+        for (let y = 0; y < info.height; y++) {
+          for (let x = 0; x < info.width; x++) {
+            const mx = Math.min(w - 1, Math.floor(x / scaleX));
+            const my = Math.min(h - 1, Math.floor(y / scaleY));
+            const maskVal = maskData[my * w + mx]; // 0.0–1.0
+            const alphaIdx = (y * info.width + x) * 4 + 3;
+            // Keep more edges for transparent/fuzzy objects like water guns
+            imgData[alphaIdx] = maskVal > 0.1 ? Math.round(maskVal * 255) : 0;
+          }
+        }
+
+        const result = await sharp(imgData, {
+          raw: { width: info.width, height: info.height, channels: 4 },
+        })
+          .png()
+          .toBuffer();
+
+        console.log(`[RMBG-2.0] ✅ Done (${info.width}x${info.height})`);
+        return result;
+      } finally {
+        if (fs.existsSync(tmpIn)) fs.unlinkSync(tmpIn);
+        if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut);
+      }
+    } catch (err) {
+      console.error("[RMBG-2.0] Failed, will fallback to RMBG-1.4:", err);
+      return null;
+    }
+  }
+
+  /**
+   * Run background removal on the FULL source image and return the masked result.
+   * Running on the full image gives the ML model complete scene context, which significantly
+   * improves accuracy for complex items like handheld objects (water guns, phones, bags).
+   * The result is shared/cached by the caller across all components.
+   */
+  private async _removeBgFullImage(
+    imageBuffer: Buffer,
+  ): Promise<Buffer | null> {
+    const tmpPath = path.join(os.tmpdir(), `diecut-full-${Date.now()}.png`);
+    try {
+      // Resize full image to max 1500px to balance quality vs ML processing time
+      const resized = await sharp(imageBuffer)
+        .resize({
+          width: 1500,
+          height: 1500,
+          fit: "inside",
+          withoutEnlargement: true,
+        })
+        .png()
+        .toBuffer();
+
+      fs.writeFileSync(tmpPath, resized);
+      console.log("[Diecut/FullML] Sending full image to RMBG...");
+      const resultBlob = await removeBackground(tmpPath);
+      const rawBuffer = Buffer.from(await resultBlob.arrayBuffer());
+
+      // Store the dimensions of the resized image so we can upscale back if needed
+      const meta = await sharp(rawBuffer).metadata();
+      console.log(`[Diecut/FullML] RMBG done: ${meta.width}x${meta.height}`);
+      return rawBuffer;
+    } catch (err) {
+      console.error("[Diecut/FullML] Full-image RMBG failed:", err);
+      return null;
+    } finally {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    }
   }
 
   /**
@@ -1476,19 +1936,42 @@ export class AIService {
    * the foreground subject from background.
    *
    * The position is a normalized 0-1000 bounding box from the AI layout analysis.
-   * We pad by 3% to avoid accidentally clipping edges due to AI bounding box inaccuracy.
+   * Padding is adaptive: characters (people/mascots) get 10% to preserve extended arms,
+   * while standalone objects get 4%.
    */
   private async _cropAndDiecut(
     imageBuffer: Buffer,
     position: { top: number; left: number; width: number; height: number },
+    label: string = "",
+    maskedFullImage: Buffer | null = null,
   ): Promise<Buffer | null> {
     try {
-      const meta = await sharp(imageBuffer).metadata();
-      const imgW = meta.width || 1000;
-      const imgH = meta.height || 1000;
+      const CHARACTER_KW = [
+        "woman",
+        "man",
+        "girl",
+        "boy",
+        "mascot",
+        "character",
+        "person",
+        "figure",
+        "human",
+        "chibi",
+      ];
+      const isCharacter = CHARACTER_KW.some((kw) =>
+        label.toLowerCase().includes(kw),
+      );
+      const PAD = isCharacter ? 0.1 : 0.04;
+      console.log(
+        `[Diecut/Crop] "${label}" → ${isCharacter ? "character" : "object"} padding=${(PAD * 100).toFixed(0)}%`,
+      );
 
-      // Convert normalized 0-1000 coords to pixel coords
-      const PAD = 0.03; // 3% padding to account for bounding box inaccuracy
+      // Determine source dimensions (original image)
+      const origMeta = await sharp(imageBuffer).metadata();
+      const origW = origMeta.width || 1000;
+      const origH = origMeta.height || 1000;
+
+      // Compute bounding box in original pixel space
       const topNorm = Math.max(0, position.top / 1000 - PAD);
       const leftNorm = Math.max(0, position.left / 1000 - PAD);
       const bottomNorm = Math.min(
@@ -1500,19 +1983,54 @@ export class AIService {
         (position.left + position.width) / 1000 + PAD,
       );
 
-      const cropLeft = Math.round(leftNorm * imgW);
-      const cropTop = Math.round(topNorm * imgH);
-      const cropWidth = Math.round((rightNorm - leftNorm) * imgW);
-      const cropHeight = Math.round((bottomNorm - topNorm) * imgH);
+      // ── Branch A: Use pre-masked full image (preferred — better context for ML) ──
+      if (maskedFullImage) {
+        // Use BFS flood fill to isolate just this component's pixels (ignores other disjoint foregrounds)
+        const extractedBuffer = await this._extractComponentByFloodFill(
+          maskedFullImage,
+          position,
+          origW,
+          origH,
+          label,
+        );
 
-      // Guard: skip if crop region is too small to be meaningful
+        if (extractedBuffer) {
+          // To maintain scale, we resize the tight extracted blob into the exact expected
+          // target width/height based on the original component proportion
+          const targetW = Math.round((rightNorm - leftNorm) * origW);
+          const targetH = Math.round((bottomNorm - topNorm) * origH);
+          return await sharp(extractedBuffer)
+            // fit: "contain" ensures we don't stretch the pixel ratio if the flood-fill
+            // bounding box aspect ratio differs slightly from the raw crop aspect ratio
+            .resize({
+              width: targetW,
+              height: targetH,
+              fit: "contain",
+              background: { r: 0, g: 0, b: 0, alpha: 0 },
+            })
+            .png()
+            .toBuffer();
+        } else {
+          console.warn(
+            `[Diecut/Crop] FloodFill failed for "${label}", falling back to Branch B`,
+          );
+          // Fall through to Branch B if flood fill fails (e.g., no foreground pixels)
+        }
+      }
+
+      // ── Branch B: Crop first, then run RMBG-2.0 (primary) or RMBG-1.4 (fallback) ──
+      const cropLeft = Math.round(leftNorm * origW);
+      const cropTop = Math.round(topNorm * origH);
+      const cropWidth = Math.round((rightNorm - leftNorm) * origW);
+      const cropHeight = Math.round((bottomNorm - topNorm) * origH);
+
       if (cropWidth < 10 || cropHeight < 10) {
         console.warn("[Diecut/Crop] Crop region too small, skipping.");
         return null;
       }
 
       console.log(
-        `[Diecut/Crop] Cropping region: left=${cropLeft} top=${cropTop} w=${cropWidth} h=${cropHeight}`,
+        `[Diecut/Crop] Crop: left=${cropLeft} top=${cropTop} w=${cropWidth} h=${cropHeight}`,
       );
 
       const croppedBuffer = await sharp(imageBuffer)
@@ -1525,21 +2043,49 @@ export class AIService {
         .png()
         .toBuffer();
 
-      // Run ML background removal — BRIAAI RMBG-1.4 handles complex backgrounds
-      // Input: cropped PNG (any background)
-      // Output: Blob with PNG that has transparent background
-      const resultBlob = await removeBackground(croppedBuffer);
-      const resultBuffer = Buffer.from(await resultBlob.arrayBuffer());
+      // Try RMBG-2.0 first — better at preserving props, handheld objects, and fine edges
+      let rawResultBuffer = await this._removeBgRMBG2(croppedBuffer);
 
-      // Trim transparent edges to get a tight bounding box on the subject
-      try {
-        return await sharp(resultBuffer).trim().png().toBuffer();
-      } catch {
-        // trim() can fail if the image has no transparent edge to trim from — return as-is
-        return resultBuffer;
+      if (!rawResultBuffer) {
+        // Fallback to @imgly RMBG-1.4
+        console.log("[Diecut/Crop] Using RMBG-1.4 fallback...");
+        const tmpPath = path.join(os.tmpdir(), `diecut-crop-${Date.now()}.png`);
+        try {
+          fs.writeFileSync(tmpPath, croppedBuffer);
+          const resultBlob = await removeBackground(tmpPath);
+          rawResultBuffer = Buffer.from(await resultBlob.arrayBuffer());
+        } finally {
+          if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+        }
       }
+
+      if (!rawResultBuffer) return null;
+
+      const { data, info } = await sharp(rawResultBuffer)
+        .ensureAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+
+      const ALPHA_THRESHOLD = 25;
+      for (let i = 3; i < data.length; i += 4) {
+        if (data[i] < ALPHA_THRESHOLD) data[i] = 0;
+      }
+      const cleanedBuffer = await sharp(data, {
+        raw: { width: info.width, height: info.height, channels: 4 },
+      })
+        .png()
+        .toBuffer();
+
+      if (!isCharacter) {
+        try {
+          return await sharp(cleanedBuffer).trim().png().toBuffer();
+        } catch {
+          return cleanedBuffer;
+        }
+      }
+      return cleanedBuffer;
     } catch (err) {
-      console.error("[Diecut/Crop] Error during crop+ML removal:", err);
+      console.error("[Diecut/Crop] Error:", err);
       return null;
     }
   }

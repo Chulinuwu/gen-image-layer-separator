@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, onMounted, nextTick } from "vue";
 import AIRefinementPreview from "./AIRefinementPreview.vue";
 
 const props = defineProps({
@@ -43,8 +43,8 @@ const onFileChange = (e: any) => {
     analysis.value = null;
   }
 };
-
 const createCampaign = async () => {
+  console.log("Create Campaign triggered");
   if (!selectedFile.value) {
     error.value = "Please select a reference image first";
     return;
@@ -59,11 +59,18 @@ const createCampaign = async () => {
   formData.append("text", targetText.value);
   formData.append("mode", mode.value);
 
+  console.log("Opening refinement view...");
   showRefinement.value = true;
 
   // Connect SSE via the component
+  await nextTick();
   if (refinementPreview.value) {
+    console.log("Connecting SSE...");
     refinementPreview.value.connectSSE(formData);
+  } else {
+    console.warn("Refinement preview component not found in refs!");
+    // Fallback if ref is missing
+    loading.value = false;
   }
 };
 

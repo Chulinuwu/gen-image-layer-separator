@@ -666,6 +666,38 @@ export const createCampaign = async (req: Request, res: Response) => {
       "fan",
       "flag",
     ];
+    // Keywords that indicate decorative graphic elements (NOT actual subjects to die-cut)
+    // These are background design elements, patterns, borders, etc.
+    const GRAPHICAL_KW = [
+      "pattern",
+      "hexagon",
+      "geometric",
+      "background",
+      "texture",
+      "gradient",
+      "border",
+      "decoration",
+      "ornament",
+      "abstract",
+      "shape",
+      "wave",
+      "frame",
+      "watermark",
+    ];
+    // Filter out pure graphic/decorative elements that are part of the background
+    componentSuggestions = componentSuggestions.filter((c: any) => {
+      const lbl = c.label.toLowerCase();
+      const desc = (c.description || "").toLowerCase();
+      const isGraphicOnly =
+        GRAPHICAL_KW.some((kw) => lbl.includes(kw)) &&
+        !CHAR_KW.some((kw) => lbl.includes(kw));
+      if (isGraphicOnly) {
+        console.log(`[Build-Up] 🎨 Filtered graphic element: "${c.label}"`);
+        return false;
+      }
+      return true;
+    });
+
     const hasChar = componentSuggestions.some((c: any) =>
       CHAR_KW.some((kw) => c.label.toLowerCase().includes(kw)),
     );
@@ -682,88 +714,59 @@ export const createCampaign = async (req: Request, res: Response) => {
         return true;
       });
     }
+
+    // --- Dedup: remove bounding boxes that heavily overlap (IoU > 70%) ---
+    // This prevents getting duplicate crops when AI returns near-identical bounding boxes
+    const computeIoU = (a: any, b: any): number => {
+      const aPos = a.position || {};
+      const bPos = b.position || {};
+      const xA = Math.max(aPos.left, bPos.left);
+      const yA = Math.max(aPos.top, bPos.top);
+      const xB = Math.min(aPos.left + aPos.width, bPos.left + bPos.width);
+      const yB = Math.min(aPos.top + aPos.height, bPos.top + bPos.height);
+      if (xB <= xA || yB <= yA) return 0;
+      const inter = (xB - xA) * (yB - yA);
+      const aArea = aPos.width * aPos.height;
+      const bArea = bPos.width * bPos.height;
+      return inter / (aArea + bArea - inter);
+    };
+    const deduped: any[] = [];
+    for (const comp of componentSuggestions) {
+      const isDuplicate = deduped.some((kept) => computeIoU(kept, comp) > 0.7);
+      if (isDuplicate) {
+        console.log(
+          `[Build-Up] 🔁 Removed overlapping duplicate: "${comp.label}"`,
+        );
+      } else {
+        deduped.push(comp);
+      }
+    }
+    componentSuggestions = deduped;
+
     console.log(
       `[Build-Up] Components after dedup: ${componentSuggestions.length}`,
     );
 
-    // --- Run inpaint + die-cut SEQUENTIALLY to prevent 429 API Rate Limits ---
+    // --- Run die-cut FIRST, so we get the full-image RMBG mask for true inpainting ---
+    let fullImageAlphaMask: Buffer | null = null;
     if (componentSuggestions.length > 0) {
-      // Task A: Inpaint background
-      try {
-        sendSSE("progress", {
-          step: "inpaint_background",
-          message: "AI is cleaning the background...",
-        });
-        const componentsToDelete = componentSuggestions
-          .map(
-            (c: any) =>
-              `- "${c.label}" at [top:${c.position?.top}, left:${c.position?.left}]`,
-          )
-          .join("\n");
-        const textToDelete = textSuggestions
-          .map(
-            (t: any) =>
-              `- "${t.part}" at [top:${t.position?.top}, left:${t.position?.left}]`,
-          )
-          .join("\n");
-        const metadata = await sharp(imageBuffer).metadata();
-        const w = metadata.width || 1,
-          h = metadata.height || 1,
-          ratio = w / h;
-        let aspect_ratio = "3:4";
-        if (ratio > 1.2) aspect_ratio = "4:3";
-        else if (ratio >= 0.8) aspect_ratio = "1:1";
-        const bgPrompt = `You are an expert background artist and inpainting AI.
-TASK: Extract and recreate ONLY the pure background environment from the provided image.
-
-REFERENCE BACKGROUND DESCRIPTION:
-"${analysis.background_description || "A clean background environment."}"
-
-CRITICAL RULES:
-1. The result MUST be completely empty of any subjects.
-2. REMOVE ALL people, humans, characters, mascots, hands, and faces.
-3. REMOVE ALL typography, text, numbers, and logos.
-4. If a person is holding objects (like a phone, water gun, bag), remove the objects as well.
-5. Reconstruct the background behind them perfectly, maintaining the exact same lighting, colors, architecture, and textures.
-6. DO NOT hallucinate new objects. Create a seamless, clean slate.`;
-
-        const bgResponse = await vertexService.generateImage({
-          prompt: bgPrompt,
-          aspect_ratio,
-          inputImages: [{ buffer: imageBuffer, mimeType }],
-        });
-        if (bgResponse.buffer) {
-          const bgFilename = `bg-inpaint-${Date.now()}.png`;
-          fs.writeFileSync(path.join(uploadDir, bgFilename), bgResponse.buffer);
-          generatedBackgroundImageUrl = `/uploads/${bgFilename}`;
-          console.log(
-            `[Build-Up] Inpainted BG: ${generatedBackgroundImageUrl}`,
-          );
-          sendSSE("background_ready", {
-            previewUrl: generatedBackgroundImageUrl,
-            message: "Background cleaned!",
-          });
-        }
-      } catch (err) {
-        console.error("[Build-Up] BG inpaint failed:", err);
-        sendSSE("progress", {
-          step: "inpaint_error",
-          message: "⚠️ Background cleaning failed.",
-        });
-      }
-
-      // Task B: Generate die-cut components
+      // Task A: Generate die-cut components
       try {
         sendSSE("progress", {
           step: "diecut_generation",
           message: `Generating ${componentSuggestions.length} die-cut components...`,
         });
-        const { results: diecutResults, gridImages } =
-          await vertexService.generateDiecutComponents(
-            imageBuffer,
-            mimeType,
-            componentSuggestions,
-          );
+        const {
+          results: diecutResults,
+          gridImages,
+          maskedFullImageBuffer,
+        } = await vertexService.generateDiecutComponents(
+          imageBuffer,
+          mimeType,
+          componentSuggestions,
+        );
+        fullImageAlphaMask = maskedFullImageBuffer || null;
+
         if (gridImages?.length) {
           gridImages.forEach((img, idx) => {
             const fn = `stack-${Date.now()}-${idx}.png`;
@@ -772,14 +775,14 @@ CRITICAL RULES:
           });
         }
         visualComponents = diecutResults.map(
-          (r: { label: string; buffer: Buffer }, i: number) => {
-            const fn = `component-${Date.now()}-${i}.png`;
-            fs.writeFileSync(path.join(uploadDir, fn), r.buffer);
+          (res: { label: string; buffer: Buffer }, idx: number) => {
+            const fn = `component-${Date.now()}-${idx}.png`;
+            fs.writeFileSync(path.join(uploadDir, fn), res.buffer);
             const matched =
-              componentSuggestions.find((c: any) => c.label === r.label) ||
-              componentSuggestions[i];
+              componentSuggestions.find((c: any) => c.label === res.label) ||
+              componentSuggestions[idx];
             return {
-              label: r.label,
+              label: res.label,
               imageUrl: `/uploads/${fn}`,
               position: matched?.position || {
                 top: 0,
@@ -803,6 +806,91 @@ CRITICAL RULES:
         sendSSE("progress", {
           step: "diecut_error",
           message: "⚠️ Die-cut generation failed.",
+        });
+      }
+
+      // Task B: Inpaint background (using the mask from Task A)
+      try {
+        sendSSE("progress", {
+          step: "inpaint_background",
+          message: "AI is cleaning the background...",
+        });
+
+        const metadata = await sharp(imageBuffer).metadata();
+        const w = metadata.width || 1,
+          h = metadata.height || 1,
+          ratio = w / h;
+        let aspect_ratio = "3:4";
+        if (ratio > 1.2) aspect_ratio = "4:3";
+        else if (ratio >= 0.8) aspect_ratio = "1:1";
+
+        const bgPrompt = `A clean background environment. ${analysis.background_description || ""}`;
+
+        let bgBufferedResponse: Buffer | null = null;
+
+        if (fullImageAlphaMask) {
+          // Use True Inpainting with the Alpha Mask
+          const inpaintRes = await vertexService.inpaintBackground(
+            imageBuffer,
+            fullImageAlphaMask,
+            bgPrompt,
+          );
+          bgBufferedResponse = inpaintRes.buffer;
+        }
+
+        // Fallback to older generateImage approach if true inpaint failed or mask was unavailable
+        if (!bgBufferedResponse) {
+          console.log(
+            "[Build-Up] Using fallback prompt-based background removal...",
+          );
+          const componentsToErase = componentSuggestions
+            .map(
+              (c: any) =>
+                `- "${c.label}" (position: top=${c.position?.top}, left=${c.position?.left}, width=${c.position?.width}, height=${c.position?.height} — in 0-1000 normalized coords)`,
+            )
+            .join("\n");
+
+          const fallbackPrompt = `You are a professional background reconstruction artist.
+TASK: Recreate ONLY the clean background from this reference image, with ALL foreground subjects completely removed.
+
+SUBJECTS TO ERASE (remove every single one entirely — including their shadows and hands):
+${componentsToErase}
+
+BACKGROUND TO RECONSTRUCT:
+"${bgPrompt}"
+
+STRICT RULES:
+1. Output ONLY the pure background — NO people, NO characters, NO mascots, NO sprites, NO hands.
+2. Seamlessly reconstruct what would exist BEHIND each removed subject.`;
+
+          const fallbackRes = await vertexService.generateImage({
+            prompt: fallbackPrompt,
+            aspect_ratio,
+            inputImages: [{ buffer: imageBuffer, mimeType }],
+          });
+          bgBufferedResponse = fallbackRes.buffer || null;
+        }
+
+        if (bgBufferedResponse) {
+          const bgFilename = `bg-inpaint-${Date.now()}.png`;
+          fs.writeFileSync(
+            path.join(uploadDir, bgFilename),
+            bgBufferedResponse,
+          );
+          generatedBackgroundImageUrl = `/uploads/${bgFilename}`;
+          console.log(
+            `[Build-Up] Inpainted BG: ${generatedBackgroundImageUrl}`,
+          );
+          sendSSE("background_ready", {
+            previewUrl: generatedBackgroundImageUrl,
+            message: "Background cleaned!",
+          });
+        }
+      } catch (err) {
+        console.error("[Build-Up] BG inpaint failed:", err);
+        sendSSE("progress", {
+          step: "inpaint_error",
+          message: "⚠️ Background cleaning failed.",
         });
       }
 
