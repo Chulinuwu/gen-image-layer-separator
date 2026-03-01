@@ -19,6 +19,7 @@ const CANVAS_SIZE = 1000;
  * Splits each affected rectangle into up to 4 sub-rects around the obstacle.
  */
 function subtractBBox(available: BBox[], obstacle: BBox): BBox[] {
+  if (obstacle.width <= 0 || obstacle.height <= 0) return [...available];
   const result: BBox[] = [];
   for (const rect of available) {
     const rRight = rect.left + rect.width;
@@ -97,17 +98,21 @@ export function computeSafeZones(obstacles: BBox[]): SafeZone[] {
 
   for (const obstacle of obstacles) {
     // Add safety padding around each obstacle
+    const paddedLeft   = Math.max(0, obstacle.left - 20);
+    const paddedTop    = Math.max(0, obstacle.top - 20);
+    const paddedRight  = Math.min(CANVAS_SIZE, obstacle.left + obstacle.width + 20);
+    const paddedBottom = Math.min(CANVAS_SIZE, obstacle.top + obstacle.height + 20);
     const padded: BBox = {
-      top: Math.max(0, obstacle.top - 20),
-      left: Math.max(0, obstacle.left - 20),
-      width: Math.min(CANVAS_SIZE - Math.max(0, obstacle.left - 20), obstacle.width + 40),
-      height: Math.min(CANVAS_SIZE - Math.max(0, obstacle.top - 20), obstacle.height + 40),
+      top:    paddedTop,
+      left:   paddedLeft,
+      width:  paddedRight  - paddedLeft,
+      height: paddedBottom - paddedTop,
     };
     available = subtractBBox(available, padded);
   }
 
   return available
-    .filter((r) => r.width >= MIN_ZONE_WIDTH || r.height >= MIN_ZONE_HEIGHT)
+    .filter((r) => r.width >= MIN_ZONE_WIDTH && r.height >= MIN_ZONE_HEIGHT)
     .map((r) => ({
       ...r,
       area: r.width * r.height,
