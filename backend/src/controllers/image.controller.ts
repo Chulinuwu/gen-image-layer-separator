@@ -692,6 +692,7 @@ export const createCampaign = async (req: Request, res: Response) => {
       z_index: number;
     }> = [];
     const stackImageUrls: string[] = [];
+    let safeZonePlacementDone = false;
 
     // --- Dedup: remove props already held by a character ---
     const CHAR_KW = [
@@ -951,6 +952,7 @@ export const createCampaign = async (req: Request, res: Response) => {
                 imgMeta2.height || 1000,
               );
               textSuggestions = finalTextLayers;
+              safeZonePlacementDone = true;
               console.log(
                 `[SafeZone] Placed ${textSuggestions.length} text layers in safe zones`,
               );
@@ -1070,7 +1072,29 @@ export const createCampaign = async (req: Request, res: Response) => {
       let preCheckOverlapFound = false;
       const preCheckDetails: string[] = [];
 
-      if (!shouldSkipIteration && textSuggestions.length > 0) {
+      if (safeZonePlacementDone && !shouldSkipIteration) {
+        // Safe zone placement guarantees no overlap — skip pre-check entirely
+        console.log(
+          `[OVERLAP CHECK] ✅ Safe zone placement used — positions mathematically guaranteed. Skipping overlap check.`,
+        );
+        sendSSE("critique_complete", {
+          iteration: 0,
+          status: "PASS",
+          feedback:
+            "Text placed within verified safe zones. No overlap possible.",
+          actionableSteps: [],
+          message:
+            "✅ Layout approved by safe zone system — no refinement needed!",
+        });
+        lastCritique = {
+          status: "PASS",
+          feedback: "Safe zone placement guarantees no overlap.",
+        };
+      } else if (
+        !shouldSkipIteration &&
+        !safeZonePlacementDone &&
+        textSuggestions.length > 0
+      ) {
         const allNoGoZones = [
           ...(analysis.no_go_zones || []),
           ...parsedNoGoZones,

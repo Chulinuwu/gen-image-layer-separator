@@ -1781,7 +1781,7 @@ ${zoneList}
           editMode: "EDIT_MODE_INPAINT_REMOVAL" as any,
           numberOfImages: 1,
           outputMimeType: "image/png",
-          personGeneration: "ALLOW_ALL_AGES" as any,
+          personGeneration: "ALLOW_ALL" as any,
         },
       });
 
