@@ -1576,6 +1576,91 @@ export class AIService {
     }
   }
 
+  /**
+   * Extract pixel-precise bounding boxes from die-cut component PNG buffers.
+   * Each component is a transparent PNG — we scan its alpha channel to find
+   * the tight bbox of non-transparent pixels, then map back to 0-1000
+   * normalized source image coordinates using the component's known position.
+   *
+   * @param components Array of { label, buffer, position } — position is in 0-1000 normalized coords
+   * @param sourceImageWidth Width of original source image in pixels
+   * @param sourceImageHeight Height of original source image in pixels
+   */
+  async extractComponentStrokeBboxes(
+    components: Array<{ label: string; buffer: Buffer; position: any }>,
+    sourceImageWidth: number,
+    sourceImageHeight: number,
+  ): Promise<Array<{ label: string; top: number; left: number; width: number; height: number }>> {
+    const results: Array<{ label: string; top: number; left: number; width: number; height: number }> = [];
+
+    for (const comp of components) {
+      if (!comp.buffer || !comp.position) continue;
+      try {
+        const { data, info } = await sharp(comp.buffer)
+          .ensureAlpha()
+          .raw()
+          .toBuffer({ resolveWithObject: true });
+
+        let minX = info.width, minY = info.height, maxX = 0, maxY = 0;
+        let found = false;
+
+        for (let y = 0; y < info.height; y++) {
+          for (let x = 0; x < info.width; x++) {
+            const alpha = data[(y * info.width + x) * 4 + 3];
+            if (alpha > 30) {
+              if (x < minX) minX = x;
+              if (x > maxX) maxX = x;
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
+              found = true;
+            }
+          }
+        }
+
+        if (!found) continue;
+
+        // The component PNG is cropped to its position bbox.
+        // Pixel coords within the PNG map to the component's position in the source image.
+        const compLeft = comp.position.left / 1000;
+        const compTop = comp.position.top / 1000;
+        const compWidth = comp.position.width / 1000;
+        const compHeight = comp.position.height / 1000;
+
+        // Map local pixel bbox to normalized 0-1000 source image coords
+        const normLeft = compLeft + (minX / info.width) * compWidth;
+        const normTop = compTop + (minY / info.height) * compHeight;
+        const normRight = compLeft + (maxX / info.width) * compWidth;
+        const normBottom = compTop + (maxY / info.height) * compHeight;
+
+        results.push({
+          label: comp.label,
+          top: Math.round(normTop * 1000),
+          left: Math.round(normLeft * 1000),
+          width: Math.round((normRight - normLeft) * 1000),
+          height: Math.round((normBottom - normTop) * 1000),
+        });
+
+        console.log(
+          `[StrokeBbox] "${comp.label}": top=${Math.round(normTop * 1000)}, left=${Math.round(normLeft * 1000)}, w=${Math.round((normRight - normLeft) * 1000)}, h=${Math.round((normBottom - normTop) * 1000)}`,
+        );
+      } catch (err) {
+        console.warn(`[StrokeBbox] Failed for "${comp.label}":`, err);
+        // Fall back to using the position bbox directly
+        if (comp.position) {
+          results.push({
+            label: comp.label,
+            top: comp.position.top || 0,
+            left: comp.position.left || 0,
+            width: comp.position.width || 0,
+            height: comp.position.height || 0,
+          });
+        }
+      }
+    }
+
+    return results;
+  }
+
   async inpaintBackground(
     imageBuffer: Buffer,
     maskedFullImageBuffer: Buffer,
