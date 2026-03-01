@@ -1096,9 +1096,10 @@ export const createCampaign = async (req: Request, res: Response) => {
           mimeType,
           targetText,
           "text",
-          textNoGoZones,
-          fixedPositions,
-          artDirectorTextZone || undefined,
+          textNoGoZones,                    // 5: externalNoGoZones
+          [],                               // 6: safeZones (empty — not pre-computed for text pass)
+          fixedPositions,                   // 7: fixedComponentPositions
+          artDirectorTextZone || undefined, // 8: textZone
         );
         textSuggestions = textAnalysis.suggestions || [];
         // Sync Pass 2 no_go_zones into the shared analysis object for the refinement loop
