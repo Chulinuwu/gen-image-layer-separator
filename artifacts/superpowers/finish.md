@@ -1,42 +1,42 @@
-# Finish: Kanit Font System (Options A + B)
+# Finish: Smart Layout Composition (Options A+B+C)
 
-## Summary of Changes
+## Summary
 
-### Option B — Backend (2 layers of enforcement)
+### Option A — Component Composition (2 files)
 
-1. **AI Prompt** (`vertex.service.ts`): Hard mandate — "MUST use Kanit, NEVER use other fonts" + weight by hierarchy
-2. **Controller normalize** (`image.controller.ts`): Post-process pass forces `font_family: "Kanit"` on every suggestion
+- **Prompt**: AI told components are die-cut PNGs → recommends `suggested_position` (not just detection)
+- **Composition rules in prompt**: person → right/center, mascot → bottom-right, left column for text
+- **Controller**: uses `suggested_position` over detected `position` (fallback chain preserved)
+- **Log**: `[Compose]` printed when AI reposition is applied
 
-### Option A — Frontend (fallback + token system)
+### Option B — Contrast Enforcement
 
-3. **Google Fonts** (`AIRefinementPreview.vue`): Added Kanit wght 400–900 to @import
-4. **getTextStyle()**: Full rewrite with KANIT_TOKENS type-safe map:
+- `enforceContrast()` helper using ITU-R BT.601 luminance
+- Heuristic: top > 450 → dark bg → if text luma < 100 → force #FFFFFF
+- Applied alongside Kanit normalize pass
 
-| Hierarchy | Weight | Letter-spacing | Line-height | Notes                      |
-| --------- | ------ | -------------- | ----------- | -------------------------- |
-| headline  | 800    | -0.5px         | 1.1         | + auto-shadow if no stroke |
-| body      | 600    | 0px            | 1.4         |                            |
-| badge     | 700    | +1px           | 1.2         |                            |
-| fineprint | 400    | 0px            | 1.3         | opacity 0.85               |
-| number    | 900    | -1px           | 1.0         | large promo numbers        |
+### Option C — Zone Font Size Hints
 
-## Verification Commands
+- `safeZoneInstruction` now includes `headline font_size ≥ N` per zone
+- Global thresholds: area>50000→≥80, area>20000→≥50, else→≥30
+- sqrt(area)/10 gives per-zone minimum
 
-| Command                          | Result       |
-| -------------------------------- | ------------ |
-| `cd backend && npx tsc --noEmit` | ✅ Clean     |
-| `git log --oneline -1`           | ✅ Committed |
+## Verification
+
+| Command                          | Result                |
+| -------------------------------- | --------------------- |
+| `cd backend && npx tsc --noEmit` | ✅ Clean              |
+| `git log --oneline -1`           | ✅ Committed: 7582de8 |
 
 ## Manual Validation Steps
 
-1. Generate a campaign — check SESSION LOG for "Found N text" message
-2. Wait for layout → text on canvas should use Kanit (Thai glyphs look different from Inter)
-3. Headline text should be heavier/bolder than body text
-4. Fineprint should be slightly dimmer (opacity 0.85)
-5. Check browser DevTools → Network → filter "Kanit" → font file should load
+1. Generate campaign → check server logs for `[Compose]` (shows AI repositioned a component)
+2. Check server logs for `[Contrast]` (shows dark text was swapped to white)
+3. Headline text in large zones should be font_size ≥ 80 in next generation
+4. Canvas: components should appear at AI-suggested positions (not just where they were in original)
 
 ## Follow-ups
 
-- Option D (collision nudge): auto-move text that overlaps components into nearest safe zone
-- Consider adding `text-transform: uppercase` for badge hierarchy
-- May want user-toggleable font override in the UI for brand customization
+- Validate composition rules work for right-side person (should move to right column)
+- Consider adding `opacity` enforcement for fineprint hierarchy (currently 0.85 in frontend only)
+- Option D (collision nudge): after suggested_position, verify no overlap and nudge if detected
