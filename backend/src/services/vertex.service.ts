@@ -1574,24 +1574,21 @@ ${zoneList}
       const maskW = maskOutput.info.width;
       const maskH = maskOutput.info.height;
 
-      // Binarize: alpha > 5 → white (foreground to remove), else black (background to keep).
-      // Threshold 5 catches semi-transparent edge pixels (shadows, hair fringes) from RMBG.
+      // Hard binarize: alpha > 30 → white (foreground to remove), else black (background).
+      // No blur — we delegate dilation to maskDilation on the API side (see below).
+      // Higher threshold (30 vs 5) avoids noisy semi-transparent noise pixels at feet contacts.
       for (let i = 0; i < maskData.length; i += 4) {
-        const val = maskData[i + 3] > 5 ? 255 : 0;
+        const val = maskData[i + 3] > 30 ? 255 : 0;
         maskData[i] = val;
         maskData[i + 1] = val;
         maskData[i + 2] = val;
         maskData[i + 3] = 255;
       }
 
-      // Dilate: blur(6) expands white region ~6px to capture shadow fringe edges.
-      // Keep blur SMALL — a large blur (>8px) causes Imagen to treat the mask as
-      // "open canvas" and hallucinate new subjects into the enlarged empty region.
+      // Convert to PNG — no blur/threshold (mask stays as sharp hard edges)
       const bwMaskBuffer = await sharp(maskData, {
         raw: { width: maskW, height: maskH, channels: 4 },
       })
-        .blur(6)
-        .threshold(30)
         .png()
         .toBuffer();
 
@@ -1606,10 +1603,14 @@ ${zoneList}
       };
       maskRef.config = {
         maskMode: "MASK_MODE_USER_PROVIDED" as any,
+        // KEY: Official Imagen 3 docs use maskDilation to expand the mask at the API level.
+        // 0.03 = 3% of image dimension (~30px on a 1000px image), covers shadow fringe.
+        // This is more accurate than manual sharp blur which confused Imagen into hallucinating.
+        maskDilation: 0.03,
       };
 
       const rawRef = new RawReferenceImage();
-      rawRef.referenceId = 2;
+      rawRef.referenceId = 0; // Official sample uses referenceId=0 for raw image
       rawRef.referenceImage = {
         imageBytes: imageBuffer.toString("base64"),
         mimeType: "image/png",
@@ -1621,23 +1622,13 @@ ${zoneList}
         `[Inpaint] Calling Imagen 3 (${editModel}) context: inpaint_removal`,
       );
 
-      const bgDescription =
-        analysis.background_description ||
-        "a clean empty background matching the surrounding area";
-      // Instruct Imagen to erase ALL traces including shadows/reflections.
-      // Keep framing POSITIVE (what TO fill) — negative framing anchors the model on removed subjects.
-      const bgPrompt = [
-        `Fill the masked area with only the background.`,
-        `Background: ${bgDescription}`,
-        `Match the exact colors, textures, lighting, and patterns of the surrounding background.`,
-        `Erase any shadows, reflections, or traces left by removed subjects.`,
-        `The result must look as if the masked area was always empty — pure background only.`,
-      ].join(" ");
-
+      // Per official docs: INPAINT_REMOVAL works best with prompt="" (let the model
+      // figure out the background from context). Complex prompts can anchor the model
+      // on the wrong content type.
       const response = await this.client.models.editImage({
         model: editModel,
-        prompt: bgPrompt,
-        referenceImages: [maskRef, rawRef],
+        prompt: "",
+        referenceImages: [rawRef, maskRef],
         config: {
           editMode: "EDIT_MODE_INPAINT_REMOVAL" as any,
           numberOfImages: 1,
