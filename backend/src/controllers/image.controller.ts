@@ -562,12 +562,13 @@ export const createCampaign = async (req: Request, res: Response) => {
       res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
-    // ───── Step 1: AI Suggest Text + Components ─────
+    // ───── Step 1A: RMBG (local, free) — runs BEFORE layout suggestion ─────
+    // We run RMBG first so we have pixel-accurate bboxes of every foreground subject.
+    // These bboxes become the no-go zones for text placement, eliminating blind guessing.
     const { mode, noGoZones } = req.body;
     console.log("[DEBUG] Received mode from frontend:", mode);
 
-    // Parse noGoZones if they exist (might come as JSON string or object)
-    let parsedNoGoZones = [];
+    let parsedNoGoZones: any[] = [];
     if (noGoZones) {
       try {
         parsedNoGoZones =
@@ -581,8 +582,44 @@ export const createCampaign = async (req: Request, res: Response) => {
     }
 
     sendSSE("progress", {
+      step: "rmbg_analysis",
+      message: "Running background removal to detect subject positions...",
+    });
+
+    let precomputedMaskedBuffer: Buffer | null = null;
+
+    try {
+      const { maskedBuffer, bboxes } =
+        await vertexService.runRMBGAndGetBboxes(imageBuffer);
+      precomputedMaskedBuffer = maskedBuffer;
+
+      if (bboxes.length > 0) {
+        // Merge RMBG bboxes into no-go zones (RMBG takes priority over external)
+        const rmbgNoGoZones = bboxes.map((b) => ({
+          label: b.label,
+          top: b.top,
+          left: b.left,
+          width: b.width,
+          height: b.height,
+          area: { top: b.top, left: b.left, width: b.width, height: b.height },
+        }));
+        // Prepend RMBG bboxes — they are more accurate than user-provided estimates
+        parsedNoGoZones = [...rmbgNoGoZones, ...parsedNoGoZones];
+        console.log(
+          `[Pipeline] ✅ RMBG bboxes injected as no-go zones: ${bboxes.map((b) => `${b.label}(top:${b.top},left:${b.left},w:${b.width},h:${b.height})`).join(", ")}`,
+        );
+      }
+    } catch (rmbgErr) {
+      console.warn(
+        "[Pipeline] RMBG pre-scan failed, proceeding without pixel-accurate bboxes:",
+        rmbgErr,
+      );
+    }
+
+    // ───── Step 1B: AI Suggest Text + Components (now with accurate bboxes) ─────
+    sendSSE("progress", {
       step: "initial_analysis",
-      message: "AI is analyzing the reference image...",
+      message: "AI is planning layout with pixel-accurate subject positions...",
     });
 
     const analysis = await vertexService.suggestCampaignLayout(
@@ -596,15 +633,43 @@ export const createCampaign = async (req: Request, res: Response) => {
     let textSuggestions = analysis.suggestions || [];
     let componentSuggestions = analysis.components || [];
 
-    // NOTE: "text" mode now generates both text AND components (die-cuts).
-    // Components are kept so users can reposition them for better layouts.
-
     // FORCE: Strip text if mode is 'only_bg_comp'
     if (mode === "only_bg_comp" && textSuggestions.length > 0) {
       console.warn(
         `[WARNING] AI returned ${textSuggestions.length} text suggestions in only_bg_comp mode! Stripping them.`,
       );
       textSuggestions = [];
+    }
+
+    // ── POST-PROCESS: Clamp text right/bottom edges to no-go zone boundaries ──
+    // AI often returns text elements that are technically within a safe column
+    // but whose computed width bleeds into the subject area.
+    // Code-clamp ensures no text element's right edge ever exceeds the leftmost
+    // no-go zone boundary that is to the right of the text's left edge.
+    if (textSuggestions.length > 0 && parsedNoGoZones.length > 0) {
+      textSuggestions = textSuggestions.map((s: any) => {
+        if (!s.position) return s;
+        const textLeft = s.position.left || 0;
+        const textRight = textLeft + (s.position.width || 200);
+
+        // Find the nearest no-go zone wall to the right of this text's left edge
+        let minNoGoLeft = 970; // max allowed right edge (safe margin from border)
+        for (const zone of parsedNoGoZones) {
+          const zLeft = zone.area?.left ?? zone.left ?? 1000;
+          if (zLeft > textLeft && zLeft < minNoGoLeft) {
+            minNoGoLeft = zLeft - 10; // 10px safety margin
+          }
+        }
+
+        if (textRight > minNoGoLeft) {
+          const clampedWidth = Math.max(50, minNoGoLeft - textLeft);
+          console.log(
+            `[TextClamp] "${(s.part || "").substring(0, 20)}..." width ${s.position.width} → ${clampedWidth} (right was ${textRight}, clamped to ${minNoGoLeft})`,
+          );
+          return { ...s, position: { ...s.position, width: clampedWidth } };
+        }
+        return s;
+      });
     }
 
     sendSSE("progress", {
@@ -764,6 +829,7 @@ export const createCampaign = async (req: Request, res: Response) => {
           imageBuffer,
           mimeType,
           componentSuggestions,
+          precomputedMaskedBuffer, // reuse RMBG mask from Step 1A (skip re-run)
         );
         fullImageAlphaMask = maskedFullImageBuffer || null;
 
@@ -838,39 +904,6 @@ export const createCampaign = async (req: Request, res: Response) => {
           bgBufferedResponse = inpaintRes.buffer;
         }
 
-        // Fallback to older generateImage approach if true inpaint failed or mask was unavailable
-        if (!bgBufferedResponse) {
-          console.log(
-            "[Build-Up] Using fallback prompt-based background removal...",
-          );
-          const componentsToErase = componentSuggestions
-            .map(
-              (c: any) =>
-                `- "${c.label}" (position: top=${c.position?.top}, left=${c.position?.left}, width=${c.position?.width}, height=${c.position?.height} — in 0-1000 normalized coords)`,
-            )
-            .join("\n");
-
-          const fallbackPrompt = `You are a professional background reconstruction artist.
-TASK: Recreate ONLY the clean background from this reference image, with ALL foreground subjects completely removed.
-
-SUBJECTS TO ERASE (remove every single one entirely — including their shadows and hands):
-${componentsToErase}
-
-BACKGROUND TO RECONSTRUCT:
-"${bgPrompt}"
-
-STRICT RULES:
-1. Output ONLY the pure background — NO people, NO characters, NO mascots, NO sprites, NO hands.
-2. Seamlessly reconstruct what would exist BEHIND each removed subject.`;
-
-          const fallbackRes = await vertexService.generateImage({
-            prompt: fallbackPrompt,
-            aspect_ratio,
-            inputImages: [{ buffer: imageBuffer, mimeType }],
-          });
-          bgBufferedResponse = fallbackRes.buffer || null;
-        }
-
         if (bgBufferedResponse) {
           const bgFilename = `bg-inpaint-${Date.now()}.png`;
           fs.writeFileSync(
@@ -884,6 +917,17 @@ STRICT RULES:
           sendSSE("background_ready", {
             previewUrl: generatedBackgroundImageUrl,
             message: "Background cleaned!",
+          });
+        } else {
+          // Imagen inpaint failed — canvas will use original image as background
+          // (intentionally no Gemini fallback: it generates grid artifacts)
+          console.warn(
+            "[Build-Up] Inpaint returned null — canvas will use original image as BG",
+          );
+          sendSSE("progress", {
+            step: "inpaint_skipped",
+            message:
+              "⚠️ Background inpainting could not complete. Using original image.",
           });
         }
       } catch (err) {
@@ -914,7 +958,7 @@ STRICT RULES:
     // ════════════════════════════════════════════════════════════════
     // Step 3: REFINEMENT LOOP — adjusts BOTH text AND component positions
     // ════════════════════════════════════════════════════════════════
-    const MAX_ITERATIONS = 10;
+    const MAX_ITERATIONS = 3; // Reduced from 10 — good initial layout should rarely need more
     let currentIteration = 0;
     let lastCritique: any = { status: "FAIL" };
 
@@ -929,7 +973,101 @@ STRICT RULES:
         });
       }
 
-      while (currentIteration < MAX_ITERATIONS && !shouldSkipIteration) {
+      // ── PRE-LOOP GEOMETRIC CHECK ───────────────────────────────────────────
+      // Run overlap check on the INITIAL layout BEFORE entering the refinement loop.
+      // If the layout is already clean (RMBG bboxes helped the AI place text well),
+      // skip the entire loop — saves N × (critiqueLayout + refineLayout) API calls.
+      let preCheckOverlapFound = false;
+      const preCheckDetails: string[] = [];
+
+      if (!shouldSkipIteration && textSuggestions.length > 0) {
+        const allNoGoZones = [
+          ...(analysis.no_go_zones || []),
+          ...parsedNoGoZones,
+        ];
+        const imgMeta0 = await sharp(imageBuffer).metadata();
+        const imgW0 = imgMeta0.width || 1000;
+        const imgH0 = imgMeta0.height || 1000;
+
+        const computeTextBBox0 = (s: any) => {
+          const fontSize = s.style?.font_size_normalized || 40;
+          const lines = (s.part || "").split("\n");
+          const longestLine = Math.max(...lines.map((l: string) => l.length));
+          const lh = s.style?.line_height || 1.2;
+          const w = Math.max(
+            s.position?.width || 0,
+            ((longestLine * fontSize * 0.55) / imgW0) * 1000,
+          );
+          const h = Math.max(
+            s.position?.height || 0,
+            ((lines.length * fontSize * lh) / imgH0) * 1000,
+          );
+          const top = s.position?.top || 0;
+          const left = s.position?.left || 0;
+          return {
+            top,
+            left,
+            width: w,
+            height: h,
+            right: left + w,
+            bottom: top + h,
+          };
+        };
+
+        for (const s of textSuggestions) {
+          if (!s.position) continue;
+          const t = computeTextBBox0(s);
+          for (const zone of allNoGoZones) {
+            const zTop = zone.area?.top ?? zone.top ?? 0;
+            const zLeft = zone.area?.left ?? zone.left ?? 0;
+            const zW = zone.area?.width ?? zone.width ?? 0;
+            const zH = zone.area?.height ?? zone.height ?? 0;
+            const overlaps = !(
+              t.right <= zLeft ||
+              t.left >= zLeft + zW ||
+              t.bottom <= zTop ||
+              t.top >= zTop + zH
+            );
+            if (overlaps) {
+              preCheckOverlapFound = true;
+              preCheckDetails.push(
+                `"${(s.part || "").substring(0, 25)}..." overlaps "${zone.label}" — needs repositioning`,
+              );
+            }
+          }
+        }
+
+        if (!preCheckOverlapFound) {
+          console.log(
+            `[OVERLAP CHECK] ✅ Initial layout is clean — skipping refinement loop entirely (0 API calls saved!)`,
+          );
+          sendSSE("critique_complete", {
+            iteration: 0,
+            status: "PASS",
+            feedback:
+              "Initial layout passed geometric check. No refinement needed.",
+            actionableSteps: [],
+            message:
+              "✅ Layout approved by geometric check — skipping AI critique loop!",
+          });
+          lastCritique = {
+            status: "PASS",
+            feedback: "Geometric pre-check passed.",
+          };
+        } else {
+          console.log(
+            `[OVERLAP CHECK] ⚠️ ${preCheckDetails.length} initial overlaps — refinement loop will run (max ${MAX_ITERATIONS} iterations)`,
+          );
+        }
+      }
+
+      while (
+        currentIteration < MAX_ITERATIONS &&
+        !shouldSkipIteration &&
+        (currentIteration === 0
+          ? preCheckOverlapFound
+          : lastCritique.status !== "PASS")
+      ) {
         currentIteration++;
 
         sendSSE("iteration_start", {

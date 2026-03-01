@@ -1349,6 +1349,7 @@ export class AIService {
     imageBuffer: Buffer,
     mimeType: string,
     components: Array<{ label: string; description: string; position?: any }>,
+    precomputedMaskedBuffer: Buffer | null = null,
   ): Promise<{
     results: Array<{ label: string; buffer: Buffer }>;
     gridImages: Buffer[];
@@ -1520,6 +1521,61 @@ export class AIService {
    * converts the alpha mask into a solid Black & White inverted inpaint mask,
    * and sends it to the model.
    */
+  /**
+   * Run RMBG-2.0 and detect Bounding Boxes of subjects.
+   * This is used by the controller to identify "No-Go Zones".
+   */
+  async runRMBGAndGetBboxes(
+    imageBuffer: Buffer,
+  ): Promise<{ maskedBuffer: Buffer | null; bboxes: any[] }> {
+    try {
+      console.log("[RMBG-2.0] Processing for Bboxes...");
+      const masked = await this._removeBgRMBG2(imageBuffer);
+      if (!masked) return { maskedBuffer: null, bboxes: [] };
+
+      // Simple bbox detection from alpha channel
+      const { data, info } = await sharp(masked)
+        .ensureAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      let minX = info.width,
+        minY = info.height,
+        maxX = 0,
+        maxY = 0;
+      let found = false;
+
+      for (let y = 0; y < info.height; y++) {
+        for (let x = 0; x < info.width; x++) {
+          const alpha = data[(y * info.width + x) * 4 + 3];
+          if (alpha > 50) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+            found = true;
+          }
+        }
+      }
+
+      const bboxes = found
+        ? [
+            {
+              label: "Detected Subject",
+              top: Math.round((minY / info.height) * 1000),
+              left: Math.round((minX / info.width) * 1000),
+              width: Math.round(((maxX - minX) / info.width) * 1000),
+              height: Math.round(((maxY - minY) / info.height) * 1000),
+            },
+          ]
+        : [];
+
+      return { maskedBuffer: masked, bboxes };
+    } catch (err) {
+      console.error("[RMBG-2.0] Bbox detection failed:", err);
+      return { maskedBuffer: null, bboxes: [] };
+    }
+  }
+
   async inpaintBackground(
     imageBuffer: Buffer,
     maskedFullImageBuffer: Buffer,
@@ -1589,6 +1645,7 @@ export class AIService {
           editMode: "EDIT_MODE_INPAINT_REMOVAL" as any,
           numberOfImages: 1,
           outputMimeType: "image/png",
+          personGeneration: "ALLOW_ALL_AGES" as any,
         },
       });
 
@@ -1798,93 +1855,95 @@ export class AIService {
    */
   private async _removeBgRMBG2(imageBuffer: Buffer): Promise<Buffer | null> {
     try {
-      // Lazy-load RMBG-2.0 model once and cache it
       if (!_rmbg2Model || !_rmbg2Processor) {
         if (!_rmbg2Loading) {
-          console.log(
-            "[RMBG-2.0] Loading model from HuggingFace (first time, may take 30s)...",
-          );
+          console.log("[RMBG-2.0] Initializing model & processor...");
           _rmbg2Loading = (async () => {
-            // Dynamic import to avoid top-level ESM issues with ts-node
-            const { AutoModel, AutoProcessor } =
-              await import("@huggingface/transformers");
-            _rmbg2Processor = await AutoProcessor.from_pretrained(
-              "briaai/RMBG-2.0",
-              {
-                // Cache locally in the project's node_modules cache
-              },
-            );
-            _rmbg2Model = await AutoModel.from_pretrained("briaai/RMBG-2.0", {
-              dtype: "fp32",
-            });
-            console.log("[RMBG-2.0] Model loaded and cached ✅");
+            try {
+              const { AutoModel, AutoProcessor, env } =
+                await import("@huggingface/transformers");
+
+              // Apply ONNX stability fix before any model is loaded
+              (env as any).backends.onnx.preferredOutputLocation = null;
+              (env as any).backends.onnx.numThreads = 1;
+
+              _rmbg2Processor =
+                await AutoProcessor.from_pretrained("briaai/RMBG-2.0");
+              _rmbg2Model = await AutoModel.from_pretrained("briaai/RMBG-2.0", {
+                device: "cpu",
+                dtype: "fp32",
+              });
+              console.log("[RMBG-2.0] Model ready ✅");
+            } catch (err) {
+              console.error("[RMBG-2.0] Pipeline initialization failed:", err);
+              throw err;
+            }
           })();
         }
         await _rmbg2Loading;
       }
 
+      if (!_rmbg2Model || !_rmbg2Processor) return null;
+
       const { RawImage } = await import("@huggingface/transformers");
 
-      // Convert buffer to a temp file path that RawImage can load
-      const tmpIn = path.join(os.tmpdir(), `rmbg2-in-${Date.now()}.png`);
-      const tmpOut = path.join(os.tmpdir(), `rmbg2-out-${Date.now()}.png`);
+      // Use sharp to get raw pixels (most robust way to bypass RawImage.read buffer detection issues)
+      const { data: pixels, info } = await sharp(imageBuffer)
+        .removeAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
 
-      try {
-        // Resize to 1024px max (RMBG-2.0 trained at 1024x1024)
-        const resized = await sharp(imageBuffer)
-          .resize({
-            width: 1024,
-            height: 1024,
-            fit: "inside",
-            withoutEnlargement: true,
-          })
-          .png()
-          .toBuffer();
-        fs.writeFileSync(tmpIn, resized);
+      const img = new RawImage(
+        new Uint8Array(pixels),
+        info.width,
+        info.height,
+        3,
+      );
+      const { pixel_values } = await _rmbg2Processor(img);
 
-        const image = await RawImage.fromURL(`file://${tmpIn}`);
-        const { pixel_values } = await _rmbg2Processor(image);
-        const { output } = await _rmbg2Model({ pixel_values });
+      const modelResult = await _rmbg2Model({ pixel_values });
+      const output =
+        modelResult.output ||
+        modelResult.logits ||
+        modelResult[Object.keys(modelResult)[0]];
 
-        // Post-process: sigmoid → threshold → apply as alpha mask
-        const maskTensor = output[0].sigmoid();
-        const [, , h, w] = maskTensor.dims;
-        const maskData = maskTensor.data as Float32Array;
-
-        // Get original resized image as RGBA raw buffer
-        const { data: imgData, info } = await sharp(resized)
-          .ensureAlpha()
-          .raw()
-          .toBuffer({ resolveWithObject: true });
-
-        // Apply mask: scale mask pixels to match image dimensions
-        const scaleX = info.width / w;
-        const scaleY = info.height / h;
-        for (let y = 0; y < info.height; y++) {
-          for (let x = 0; x < info.width; x++) {
-            const mx = Math.min(w - 1, Math.floor(x / scaleX));
-            const my = Math.min(h - 1, Math.floor(y / scaleY));
-            const maskVal = maskData[my * w + mx]; // 0.0–1.0
-            const alphaIdx = (y * info.width + x) * 4 + 3;
-            // Keep more edges for transparent/fuzzy objects like water guns
-            imgData[alphaIdx] = maskVal > 0.1 ? Math.round(maskVal * 255) : 0;
-          }
-        }
-
-        const result = await sharp(imgData, {
-          raw: { width: info.width, height: info.height, channels: 4 },
-        })
-          .png()
-          .toBuffer();
-
-        console.log(`[RMBG-2.0] ✅ Done (${info.width}x${info.height})`);
-        return result;
-      } finally {
-        if (fs.existsSync(tmpIn)) fs.unlinkSync(tmpIn);
-        if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut);
+      if (!output) {
+        throw new Error(
+          `Model result keys [${Object.keys(modelResult).join(", ")}] did not contain output/logits`,
+        );
       }
+
+      // RMBG-2.0 returns logits, we need to apply sigmoid and convert to mask
+      const { data, dims } = output;
+      const [batch, channels, height, width] = dims;
+
+      // Sigmoid + alpha channel mapping
+      const alpha = new Uint8ClampedArray(height * width);
+      for (let i = 0; i < height * width; ++i) {
+        alpha[i] = Math.round((1 / (1 + Math.exp(-data[i]))) * 255);
+      }
+
+      // Use sharp to merge the original bytes with the new alpha
+      const { data: originalPixels } = await sharp(imageBuffer)
+        .resize(width, height)
+        .ensureAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+
+      for (let i = 0; i < height * width; ++i) {
+        originalPixels[i * 4 + 3] = alpha[i];
+      }
+
+      const resultBuffer = await sharp(originalPixels, {
+        raw: { width, height, channels: 4 },
+      })
+        .png()
+        .toBuffer();
+
+      console.log(`[RMBG-2.0] ✅ Done (${width}x${height})`);
+      return resultBuffer;
     } catch (err) {
-      console.error("[RMBG-2.0] Failed, will fallback to RMBG-1.4:", err);
+      console.error("[RMBG-2.0] Runtime failure:", err);
       return null;
     }
   }
@@ -2442,6 +2501,26 @@ export class AIService {
     });
 
     return sharp(baseImageBuffer).composite(compositeItems).png().toBuffer();
+  }
+
+  async warmupRMBG2(): Promise<void> {
+    try {
+      console.log("[RMBG-2.0] Warming up model (256x256)...");
+      // Use a 256x256 dummy image instead of 1x1 to avoid ONNX shape issues
+      const dummyBuffer = await sharp({
+        create: {
+          width: 256,
+          height: 256,
+          channels: 3,
+          background: { r: 255, g: 255, b: 255 },
+        },
+      })
+        .png()
+        .toBuffer();
+      await this._removeBgRMBG2(dummyBuffer);
+    } catch (e) {
+      console.warn("[RMBG-2.0] Warmup skip/fail:", e);
+    }
   }
 }
 

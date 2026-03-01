@@ -3,6 +3,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import path from "path";
 import imageRoutes from "./routes/image.routes";
+import { vertexService } from "./services/vertex.service";
 
 // Load environment variables
 dotenv.config();
@@ -39,4 +40,7 @@ app.get("/", (req: Request, res: Response) => {
 
 app.listen(port, () => {
   console.log(`⚡️[server]: Backend is running at http://localhost:${port}`);
+  // Pre-warm RMBG-2.0 model in the background so Branch B never causes
+  // a 30s+ first-request stall that drops SSE connections.
+  vertexService.warmupRMBG2().catch(() => {});
 });

@@ -83,6 +83,11 @@ const handleComplete = (data: any) => {
   emit("created", data);
 };
 
+const handleRefinementError = (message: string) => {
+  loading.value = false;
+  progressMessage.value = `❌ Error: ${message}`;
+};
+
 const goToEditor = () => {
   emit("proceed");
 };
@@ -318,6 +323,7 @@ const useGeneratedBg = () => {
       ref="refinementPreview"
       @close="showRefinement = false"
       @complete="handleComplete"
+      @error="handleRefinementError"
     />
   </div>
 </template>

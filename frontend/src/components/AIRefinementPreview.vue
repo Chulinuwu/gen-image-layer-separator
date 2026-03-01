@@ -176,6 +176,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: "close"): void;
   (e: "complete", data: any): void;
+  (e: "error", message: string): void;
 }>();
 
 const formatMarkdown = (text: string) => {
@@ -332,6 +333,8 @@ const connectSSE = async (formData: FormData) => {
   } catch (err: any) {
     statusText.value = "Design session failed";
     addMessage(`Session Error: ${err.message}`, "error");
+    isComplete.value = true;
+    emit("error", err.message);
   }
 };
 
@@ -393,6 +396,9 @@ const handleSSEEvent = (event: string, data: any) => {
       break;
     case "error":
       addMessage(`Engine Error: ${data.error}`, "error");
+      statusText.value = "Design session failed";
+      isComplete.value = true;
+      emit("error", data.error || "Unknown error");
       break;
   }
 };
