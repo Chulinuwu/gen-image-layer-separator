@@ -251,26 +251,55 @@ const pipelineSteps = ref<
 >([]);
 const showDebugBoxes = ref(true);
 
+// Thai Ad Typography tokens for Kanit — weight/spacing/line-height per hierarchy
+const KANIT_TOKENS: Record<
+  string,
+  { weight: string; letterSpacing: string; lineHeight: string }
+> = {
+  headline: { weight: "800", letterSpacing: "-0.5px", lineHeight: "1.1" },
+  body: { weight: "600", letterSpacing: "0px", lineHeight: "1.4" },
+  badge: { weight: "700", letterSpacing: "1px", lineHeight: "1.2" },
+  fineprint: { weight: "400", letterSpacing: "0px", lineHeight: "1.3" },
+  number: { weight: "900", letterSpacing: "-1px", lineHeight: "1.0" },
+};
+
 const getTextStyle = (t: any) => {
   const pos = t.position || {};
   const style = t.style || {};
+  const hierarchyKey = (t.hierarchy || "body").toLowerCase();
+  // KANIT_TOKENS["body"] is always defined — non-null assertion is safe
+  const tokens = (KANIT_TOKENS[hierarchyKey] ?? KANIT_TOKENS["body"])!;
+
+  // Kanit is always the font — ignore AI-provided font_family
+  // Weight: hierarchy token > AI suggestion > bold fallback
+  const weight = tokens.weight || style.font_weight || "700";
+
+  // Auto-shadow for headlines without explicit stroke (improves readability on busy backgrounds)
+  const autoShadow =
+    hierarchyKey === "headline" && !style.stroke_hex
+      ? "0 1px 6px rgba(0,0,0,0.6), 0 0 2px rgba(0,0,0,0.4)"
+      : "none";
+
+  const textShadow = style.stroke_hex
+    ? `0 0 2px ${style.stroke_hex}, 0 0 5px ${style.stroke_hex}, 0 0 1px ${style.stroke_hex}`
+    : autoShadow;
+
   return {
     position: "absolute" as const,
     top: pos.top / 10 + "%",
     left: pos.left / 10 + "%",
     fontSize: Math.max(8, (style.font_size_normalized || 16) * 0.4) + "px",
-    fontFamily: style.font_family || "Inter, sans-serif",
-    fontWeight: style.font_weight || "bold",
+    fontFamily: "'Kanit', sans-serif", // always Kanit
+    fontWeight: weight,
     color: style.color_hex || "#FFFFFF",
-    textShadow: style.stroke_hex
-      ? `0 0 2px ${style.stroke_hex}, 0 0 4px ${style.stroke_hex}`
-      : "none",
+    textShadow,
     whiteSpace: "nowrap" as const,
     pointerEvents: "none" as const,
     zIndex: 20,
-    letterSpacing: (style.letter_spacing || 0) + "px",
-    lineHeight: String(style.line_height || 1.2),
+    letterSpacing: tokens.letterSpacing,
+    lineHeight: tokens.lineHeight,
     transform: pos.rotation ? `rotate(${pos.rotation}deg)` : undefined,
+    opacity: hierarchyKey === "fineprint" ? 0.85 : 1,
   };
 };
 
@@ -492,7 +521,7 @@ defineExpose({ connectSSE });
 </script>
 
 <style scoped>
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Outfit:wght@500;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Kanit:wght@400;600;700;800;900&family=Inter:wght@400;600;700&family=Outfit:wght@500;700&display=swap");
 
 .refinement-viewport {
   background: var(--bg);

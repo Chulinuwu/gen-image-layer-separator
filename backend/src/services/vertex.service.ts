@@ -509,12 +509,16 @@ ${zoneList}
       - If mode is 'only_bg_comp', the 'suggestions' (text) array should be empty [].
       - If mode is 'full' or 'text', you MUST extract BOTH text AND components.
       
-      ✓ FONT SELECTION RULES:
-      - STANDARD THAI: Use 'Kanit'.
-      - HEADER/MODERN THAI: Use 'Mitr' (Tailless, Friendly).
-      - HANDWRITTEN/FUN: Use 'Sriracha'.
-      - MODERN/CLEAN: Use 'Inter'.
-      - LUXURY/ELEGANT: Use 'Playfair Display'.
+      ✓ FONT SELECTION RULES (MANDATORY — NO EXCEPTIONS):
+      - You MUST set "font_family": "Kanit" for EVERY SINGLE text element.
+      - NEVER use Mitr, Sriracha, Inter, Playfair Display, or any other font.
+      - Kanit is the ONLY allowed font for ALL Thai and English text in this system.
+      - Set font_weight based on hierarchy:
+          * "headline"  → font_weight: "800"  (bold, dominant)
+          * "body"      → font_weight: "600"  (semi-bold, readable)
+          * "badge"     → font_weight: "700"  (strong, compact)
+          * "fineprint" → font_weight: "400"  (light, unobtrusive)
+          * If the element is a large promotional number (e.g., "50%", "2 ต่อ") → font_weight: "900"
       
       ✓ DESIGN TRICKS (COMMERCIAL GRADE):
       - **STROKE/OUTLINE**: For main HEADLINES on busy backgrounds, ADD A STROKE (e.g., white stroke on orange text). 

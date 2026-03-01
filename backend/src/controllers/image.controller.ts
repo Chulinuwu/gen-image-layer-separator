@@ -674,6 +674,14 @@ export const createCampaign = async (req: Request, res: Response) => {
       });
     }
 
+    // Safety net: force Kanit on every text suggestion regardless of AI output
+    if (textSuggestions.length > 0) {
+      textSuggestions = textSuggestions.map((s: any) => ({
+        ...s,
+        style: { ...s.style, font_family: "Kanit" },
+      }));
+    }
+
     sendSSE("progress", {
       step: "initial_analysis_complete",
       message: `Found ${textSuggestions.length} text + ${componentSuggestions.length} components`,
