@@ -297,6 +297,7 @@ export class AIService {
     targetText: string,
     mode: string = "full",
     externalNoGoZones: any[] = [],
+    safeZones: Array<{ top: number; left: number; width: number; height: number; area: number; label: string }> = [],
   ) {
     // 1. Resize for faster analysis & stay within model limits
     let processingBuffer = imageBuffer;
@@ -306,26 +307,11 @@ export class AIService {
       const w = meta.width || 800;
       const h = meta.height || 600;
 
-      // --- OPTIMIZATION: Physical Grid Overlay for Coordinate Accuracy ---
-      let gridSvg = `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">`;
-      // Draw 10x10 Grid
-      for (let i = 1; i < 10; i++) {
-        const x = (i / 10) * w;
-        const y = (i / 10) * h;
-        // Vertical lines
-        gridSvg += `<line x1="${x}" y1="0" x2="${x}" y2="${h}" stroke="rgba(255,255,255,0.3)" stroke-width="1" />`;
-        gridSvg += `<text x="${x + 2}" y="15" fill="white" font-size="14" font-weight="bold" opacity="0.6">${i * 100}</text>`;
-        // Horizontal lines
-        gridSvg += `<line x1="0" y1="${y}" x2="${w}" y2="${y}" stroke="rgba(255,255,255,0.3)" stroke-width="1" />`;
-        gridSvg += `<text x="5" y="${y + 12}" fill="white" font-size="14" font-weight="bold" opacity="0.6">${i * 100}</text>`;
-      }
-      gridSvg += `</svg>`;
-
+      // Resize for faster analysis
       processingBuffer = await sharp(imageBuffer)
         .resize(Math.min(w, 1500))
-        .composite([{ input: Buffer.from(gridSvg), top: 0, left: 0 }])
+        .jpeg({ quality: 90 })
         .toBuffer();
-
       processingMime = "image/jpeg";
     } catch (e) {
       console.warn("[GenAI] Grid/Resize failed, using original:", e);
@@ -364,21 +350,40 @@ export class AIService {
       `;
     }
 
+    // Build safe zone instruction — if provided, override spatial reasoning with computed zones
+    let safeZoneInstruction = "";
+    if (safeZones && safeZones.length > 0) {
+      const zoneList = safeZones
+        .slice(0, 6)
+        .map((z, i) => `  Zone ${i + 1} [${z.label}]: top=${z.top}, left=${z.left}, width=${z.width}, height=${z.height} (area=${z.area})`)
+        .join("\n");
+      safeZoneInstruction = `
+      ═══════════════════════════════════════
+      ✅ VERIFIED SAFE PLACEMENT ZONES:
+      The following zones are mathematically verified to be free of all subjects and components.
+      Place ALL text elements within one of these zones. Do NOT place text outside these zones.
+
+${zoneList}
+
+      For each text suggestion, set "preferred_zone" to the label of the zone you chose (e.g. "top-left").
+      Your position coordinates MUST fall within that zone's boundaries.
+      ═══════════════════════════════════════
+      `;
+    }
+
     const isCompOnly = mode === "only_bg_comp";
 
     const prompt = `
       Act as a professional graphic designer. 
-      NOTE: The image has a VISIBLE 10x10 WHITE GRID with numeric markers (100, 200... 900).
-      Use these grid lines as a strict PHYSICAL RULER to determine coordinates. 
-      Map your 0-1000 coordinates exactly to these visible markers. 
+      Use 0-1000 normalized coordinates (0 = top/left edge, 1000 = bottom/right edge).
       
       AD BRIEF / TEXT (Reference only for context):
       """
       ${targetText}
       """
 
-      ${noGoInstruction}
-      
+      ${safeZoneInstruction || noGoInstruction}
+
       ═══════════════════════════════════════
       TASK 0: PRECISION OBJECT DETECTION
       ═══════════════════════════════════════
@@ -453,6 +458,7 @@ export class AIService {
         "suggestions": [
           {
             "part": "The exact text (e.g. 'SUMMER SALE')",
+            "preferred_zone": "top-left",
             "position": {
               "top": 0, "left": 0, "width": 0, "height": 0, "rotation": 0,
               "explanation": "Normalized coordinates 0-1000. Rotation in degrees (0 for normal, 90 for vertical)."
