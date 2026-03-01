@@ -3,6 +3,7 @@ import { vertexService } from "../services/vertex.service";
 import fs from "fs";
 import path from "path";
 import sharp from "sharp";
+import { computeSafeZones, assignTextToZones } from "../utils/safeZones";
 
 export const processImage = async (req: Request, res: Response) => {
   try {
@@ -868,6 +869,99 @@ export const createCampaign = async (req: Request, res: Response) => {
           step: "diecut_complete",
           message: `✅ ${visualComponents.length} components ready!`,
         });
+
+        // ── SAFE ZONE COMPUTATION from die-cut stroke bboxes ──────────────────
+        // Extract pixel-accurate bboxes from component PNGs, then compute safe zones
+        let strokeBboxes: Array<{
+          label: string;
+          top: number;
+          left: number;
+          width: number;
+          height: number;
+        }> = [];
+        try {
+          const diecutWithPositions = diecutResults.map(
+            (res: any, idx: number) => ({
+              label: res.label,
+              buffer: res.buffer,
+              position: componentSuggestions[idx]?.position || null,
+            }),
+          );
+
+          strokeBboxes =
+            await vertexService.extractComponentStrokeBboxes(
+              diecutWithPositions,
+            );
+          console.log(
+            `[SafeZone] Got ${strokeBboxes.length} stroke bboxes from die-cut components`,
+          );
+        } catch (strokeErr) {
+          console.warn(
+            "[SafeZone] Stroke bbox extraction failed, using RMBG bboxes only:",
+            strokeErr,
+          );
+        }
+
+        // Combine stroke bboxes + RMBG bboxes as obstacles
+        const allObstacles = [
+          ...strokeBboxes,
+          ...parsedNoGoZones.map((z: any) => ({
+            top: z.area?.top ?? z.top ?? 0,
+            left: z.area?.left ?? z.left ?? 0,
+            width: z.area?.width ?? z.width ?? 0,
+            height: z.area?.height ?? z.height ?? 0,
+          })),
+        ];
+
+        const safeZones = computeSafeZones(allObstacles);
+        console.log(
+          `[SafeZone] ${safeZones.length} safe zones computed: ${safeZones
+            .slice(0, 3)
+            .map((z) => `${z.label}(${z.area})`)
+            .join(", ")}`,
+        );
+        sendSSE("progress", {
+          step: "safe_zones_computed",
+          message: `Computed ${safeZones.length} safe placement zones from component boundaries`,
+        });
+
+        // ── RE-RUN LAYOUT with safe zones (text placement within verified zones) ──
+        if (mode !== "only_bg_comp" && safeZones.length > 0 && targetText) {
+          sendSSE("progress", {
+            step: "layout_with_safe_zones",
+            message: "Placing text in verified safe zones...",
+          });
+
+          try {
+            const refinedAnalysis = await vertexService.suggestCampaignLayout(
+              imageBuffer,
+              mimeType,
+              targetText,
+              mode || "full",
+              parsedNoGoZones,
+              safeZones,
+            );
+
+            if (refinedAnalysis.suggestions?.length > 0) {
+              const imgMeta2 = await sharp(imageBuffer).metadata();
+              const finalTextLayers = assignTextToZones(
+                refinedAnalysis.suggestions,
+                safeZones,
+                imgMeta2.width || 1000,
+                imgMeta2.height || 1000,
+              );
+              textSuggestions = finalTextLayers;
+              console.log(
+                `[SafeZone] Placed ${textSuggestions.length} text layers in safe zones`,
+              );
+            }
+          } catch (szErr) {
+            console.warn(
+              "[SafeZone] Safe zone layout failed, keeping initial layout:",
+              szErr,
+            );
+          }
+        }
       } catch (err) {
         console.error("[Build-Up] Die-cut failed:", err);
         sendSSE("progress", {
@@ -954,7 +1048,7 @@ export const createCampaign = async (req: Request, res: Response) => {
     // ════════════════════════════════════════════════════════════════
     // Step 3: REFINEMENT LOOP — adjusts BOTH text AND component positions
     // ════════════════════════════════════════════════════════════════
-    const MAX_ITERATIONS = 3; // Reduced from 10 — good initial layout should rarely need more
+    const MAX_ITERATIONS = 1; // Safe zone placement makes first round reliable; 1 style pass max
     let currentIteration = 0;
     let lastCritique: any = { status: "FAIL" };
 
