@@ -13,6 +13,7 @@ export interface SafeZone extends BBox {
 const MIN_ZONE_WIDTH = 150;
 const MIN_ZONE_HEIGHT = 50;
 const CANVAS_SIZE = 1000;
+const MARGIN = 30; // normalized units of padding within zones
 
 /**
  * Subtract a single obstacle bbox from a list of available rectangles.
@@ -119,4 +120,106 @@ export function computeSafeZones(obstacles: BBox[]): SafeZone[] {
       label: zoneLabel(r),
     }))
     .sort((a, b) => b.area - a.area);
+}
+
+export interface TextSuggestion {
+  part: string;
+  preferred_zone?: string;
+  style?: {
+    font_size_normalized?: number;
+    line_height?: number;
+    [key: string]: any;
+  };
+  [key: string]: any;
+}
+
+/**
+ * Compute text bounding box dimensions from content + font size.
+ * Uses 0.6 char width multiplier for Thai/multi-byte char compatibility (vs 0.55 latin-only).
+ */
+function computeTextSize(
+  text: string,
+  fontSize: number,
+  lineHeight: number,
+  imageWidth: number,
+  imageHeight: number,
+): { width: number; height: number } {
+  const lines = text.split("\n");
+  const longestLine = Math.max(...lines.map((l) => l.length), 1);
+  const widthPx = longestLine * fontSize * 0.6;
+  const heightPx = lines.length * fontSize * lineHeight;
+  return {
+    width: Math.round((widthPx / imageWidth) * 1000),
+    height: Math.round((heightPx / imageHeight) * 1000),
+  };
+}
+
+/**
+ * Assign text suggestions to safe zones, computing exact 0-1000 coordinates.
+ * Matches each text element to its preferred zone (by label) or the largest zone.
+ * Each placed text bbox is tracked to prevent stacking overlap within the same zone.
+ *
+ * @param suggestions Array of text elements from AI (with optional preferred_zone hints)
+ * @param availableZones Pre-computed safe zones from computeSafeZones()
+ * @param imageWidth Source image pixel width (for text size computation), defaults to 1000
+ * @param imageHeight Source image pixel height, defaults to 1000
+ */
+export function assignTextToZones(
+  suggestions: TextSuggestion[],
+  availableZones: SafeZone[],
+  imageWidth = 1000,
+  imageHeight = 1000,
+): Array<TextSuggestion & { position: BBox }> {
+  if (!availableZones.length) return suggestions as any;
+
+  // Track the current vertical offset within each zone (for stacking multiple text blocks)
+  const zoneOffsets: Map<string, number> = new Map();
+  availableZones.forEach((z) => zoneOffsets.set(z.label, z.top + MARGIN));
+
+  const results: Array<TextSuggestion & { position: BBox }> = [];
+
+  for (const s of suggestions) {
+    const fontSize = s.style?.font_size_normalized || 40;
+    const lineHeight = s.style?.line_height || 1.2;
+    const { width: textW, height: textH } = computeTextSize(
+      s.part || "",
+      fontSize,
+      lineHeight,
+      imageWidth,
+      imageHeight,
+    );
+
+    // Find best-fit zone: prefer label match, then fall back to largest zone with room
+    let targetZone = availableZones.find((z) => z.label === s.preferred_zone);
+    if (!targetZone) {
+      targetZone =
+        availableZones.find(
+          (z) =>
+            (zoneOffsets.get(z.label) ?? z.top + MARGIN) + textH + MARGIN <
+            z.top + z.height,
+        ) || availableZones[0];
+    }
+
+    const currentTop = zoneOffsets.get(targetZone.label) ?? targetZone.top + MARGIN;
+    const placedLeft = targetZone.left + MARGIN;
+    const placedTop = currentTop;
+
+    // Clamp text width to zone width minus margins
+    const clampedWidth = Math.min(textW, targetZone.width - MARGIN * 2);
+
+    results.push({
+      ...s,
+      position: {
+        top: Math.max(targetZone.top + MARGIN, placedTop),
+        left: placedLeft,
+        width: Math.max(50, clampedWidth), // minimum 50 to ensure clickability in editor
+        height: Math.max(20, textH),       // minimum 20 for single-line text
+      },
+    });
+
+    // Advance zone offset so next element in same zone stacks below this one
+    zoneOffsets.set(targetZone.label, placedTop + textH + MARGIN);
+  }
+
+  return results;
 }

@@ -1,4 +1,4 @@
-import { computeSafeZones, BBox, SafeZone } from "./safeZones";
+import { computeSafeZones, BBox, SafeZone, assignTextToZones, TextSuggestion } from "./safeZones";
 
 describe("computeSafeZones", () => {
   it("returns full canvas when no obstacles", () => {
@@ -57,5 +57,55 @@ describe("computeSafeZones", () => {
         expect(noOverlap).toBe(true);
       }
     }
+  });
+});
+
+describe("assignTextToZones", () => {
+  const zones: SafeZone[] = [
+    { top: 50, left: 50, width: 300, height: 800, area: 240000, label: "top-left" },
+    { top: 50, left: 700, width: 250, height: 400, area: 100000, label: "top-right" },
+    { top: 700, left: 400, width: 500, height: 250, area: 125000, label: "bottom-center" },
+  ];
+
+  it("places text within its preferred zone boundaries", () => {
+    const suggestions: TextSuggestion[] = [
+      { part: "HEADLINE", preferred_zone: "top-left", style: { font_size_normalized: 80 } },
+    ];
+    const result = assignTextToZones(suggestions, zones);
+    const pos = result[0].position;
+    expect(pos.left).toBeGreaterThanOrEqual(zones[0].left);
+    expect(pos.top).toBeGreaterThanOrEqual(zones[0].top);
+    expect(pos.left + pos.width).toBeLessThanOrEqual(zones[0].left + zones[0].width);
+  });
+
+  it("falls back to largest zone when preferred zone not found", () => {
+    const suggestions: TextSuggestion[] = [
+      { part: "BODY", preferred_zone: "nonexistent-zone", style: { font_size_normalized: 40 } },
+    ];
+    const result = assignTextToZones(suggestions, zones);
+    // Should use a real zone (not undefined)
+    expect(result[0].position).toBeDefined();
+    expect(result[0].position.left).toBeGreaterThanOrEqual(0);
+  });
+
+  it("stacks multiple elements in same zone without overlap", () => {
+    const suggestions: TextSuggestion[] = [
+      { part: "BIG HEADLINE TEXT HERE", preferred_zone: "top-left", style: { font_size_normalized: 80 } },
+      { part: "subtitle text", preferred_zone: "top-left", style: { font_size_normalized: 30 } },
+    ];
+    const result = assignTextToZones(suggestions, zones);
+    const first = result[0].position;
+    const second = result[1].position;
+    // Second element should start below the first
+    expect(second.top).toBeGreaterThan(first.top);
+  });
+
+  it("returns original suggestions when no zones provided", () => {
+    const suggestions: TextSuggestion[] = [
+      { part: "TEXT", style: { font_size_normalized: 40 } },
+    ];
+    const result = assignTextToZones(suggestions, []);
+    expect(result).toHaveLength(1);
+    expect(result[0].part).toBe("TEXT");
   });
 });
