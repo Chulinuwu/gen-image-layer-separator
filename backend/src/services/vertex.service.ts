@@ -1583,13 +1583,9 @@ export class AIService {
    * normalized source image coordinates using the component's known position.
    *
    * @param components Array of { label, buffer, position } — position is in 0-1000 normalized coords
-   * @param sourceImageWidth Width of original source image in pixels
-   * @param sourceImageHeight Height of original source image in pixels
    */
   async extractComponentStrokeBboxes(
     components: Array<{ label: string; buffer: Buffer; position: any }>,
-    sourceImageWidth: number,
-    sourceImageHeight: number,
   ): Promise<Array<{ label: string; top: number; left: number; width: number; height: number }>> {
     const results: Array<{ label: string; top: number; left: number; width: number; height: number }> = [];
 
@@ -1627,10 +1623,11 @@ export class AIService {
         const compHeight = comp.position.height / 1000;
 
         // Map local pixel bbox to normalized 0-1000 source image coords
+        // Use minX and (maxX + 1) to get the inclusive pixel-width right edge
         const normLeft = compLeft + (minX / info.width) * compWidth;
         const normTop = compTop + (minY / info.height) * compHeight;
-        const normRight = compLeft + (maxX / info.width) * compWidth;
-        const normBottom = compTop + (maxY / info.height) * compHeight;
+        const normRight = compLeft + ((maxX + 1) / info.width) * compWidth;
+        const normBottom = compTop + ((maxY + 1) / info.height) * compHeight;
 
         results.push({
           label: comp.label,
