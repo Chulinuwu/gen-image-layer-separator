@@ -297,7 +297,14 @@ export class AIService {
     targetText: string,
     mode: string = "full",
     externalNoGoZones: any[] = [],
-    safeZones: Array<{ top: number; left: number; width: number; height: number; area: number; label: string }> = [],
+    safeZones: Array<{
+      top: number;
+      left: number;
+      width: number;
+      height: number;
+      area: number;
+      label: string;
+    }> = [],
   ) {
     // 1. Resize for faster analysis & stay within model limits
     let processingBuffer = imageBuffer;
@@ -355,7 +362,10 @@ export class AIService {
     if (safeZones && safeZones.length > 0) {
       const zoneList = safeZones
         .slice(0, 6)
-        .map((z, i) => `  Zone ${i + 1} [${z.label || `zone-${i + 1}`}]: top=${z.top}, left=${z.left}, width=${z.width}, height=${z.height} (area=${z.area})`)
+        .map(
+          (z, i) =>
+            `  Zone ${i + 1} [${z.label || `zone-${i + 1}`}]: top=${z.top}, left=${z.left}, width=${z.width}, height=${z.height} (area=${z.area})`,
+        )
         .join("\n");
       safeZoneInstruction = `
       ═══════════════════════════════════════
@@ -842,11 +852,57 @@ ${zoneList}
     previewBuffer: Buffer,
     mimeType: string,
     targetText: string,
+    styleOnly: boolean = false,
   ) {
     const model =
       process.env.GEMINI_MODEL_ENDPOINT_2 ||
       process.env.GEMINI_MODEL_ENDPOINT ||
       "gemini-3-flash-preview";
+
+    // Position checks — skipped when safe zones guarantee placement
+    const positionChecks = styleOnly
+      ? ""
+      : `
+      ✗ TEXT BLOCKS OVERLAP EACH OTHER:
+        - If two different text elements overlap or are placed on top of each other → FAIL
+        - Each text block must have its own clear, separate space
+      
+      ✗ TEXT OVERLAPS A PERSON'S BODY:
+        - Look at IMAGE 2. Every text block has a SEMI-TRANSPARENT RED tint behind it.
+        - If that RED tint touches or covers ANY part of a human (legs, arms, hair, clothes, face) → FAIL
+        - This is non-negotiable. RED on PERSON = REJECT.
+        - PAY SPECIAL ATTENTION to the center and lower portions of the image where people typically stand.
+        - In this ad, there is likely a woman standing. If you see RED covering any part of her denim shirt, jeans, or skin → FAIL.
+      
+      ✗ TEXT OVERLAPS A MASCOT OR CHARACTER:
+        - If text covers any cartoon/mascot figure → FAIL
+      
+      ✗ TEXT CUT OFF AT EDGES:
+        - Any text going past the image boundary → FAIL
+      
+      ✗ TEXT TOO CLOSE TO EDGE (SAFE ZONE):
+        - ALL text (except FinePrint) must have at least 3% margin from ANY edge of the image
+        - In normalized coordinates (0-1000): text must not start before 30 or extend past 970
+        - Text crammed against the edge looks cheap and unprofessional → FAIL
+        - FinePrint is allowed to be closer to the bottom edge (min 1.5% / 15 in normalized coords)
+    `;
+
+    const styleChecks = `
+      ✗ TEXT COLOR BLENDS WITH BACKGROUND:
+        - If text color is too similar to the area directly behind it → FAIL
+        - Light text (white/yellow/light green) on a photo of sky/trees/plants = FAIL (not enough contrast)
+        - The text MUST contrast sharply with whatever photo/pattern is behind it
+      
+      ✗ TEXT OVER PHOTO WITHOUT SHADOW:
+        - If text sits on top of a photograph (not a solid color band) and has no shadow → FAIL
+        - Only text on a SOLID, HIGH-CONTRAST block of color can skip shadow
+      
+      ✗ FORBIDDEN: Text spanning across very high-contrast edges without proper Stroke/Background is a FAIL.
+    `;
+
+    const modeNote = styleOnly
+      ? `\n      NOTE: Text positions have been verified by code (safe zone placement). Focus ONLY on visual style quality — colors, shadows, contrast, readability. Do NOT critique positions.\n`
+      : "";
 
     const prompt = `
       You are the STRICTEST ART DIRECTOR in the advertising industry.
@@ -855,7 +911,7 @@ ${zoneList}
       - IMAGE 2: The PREVIEW showing text overlays placed on top of the background
 
       AD BRIEF: "${targetText}"
-      
+      ${modeNote}
       ═══════════════════════════════════════
       MANDATORY VISUAL INSPECTION (YOU MUST DO THIS FIRST):
       ═══════════════════════════════════════
@@ -878,44 +934,13 @@ ${zoneList}
       
       ✗ FORBIDDEN: Obscuring the FACE, EYES, or key identifying features of the subject is a HARD FAIL.
       
-      ✗ FORBIDDEN: Text spanning across very high-contrast edges without proper Stroke/Background is a FAIL.
-      
       ✗ NO TEXT OR MISSING TEXT:
         - If IMAGE 2 has NO visible text at all → FAIL
         - If key text from the AD BRIEF is missing (headline, offer, fine print) → FAIL
         - An ad with no text is not an ad. Automatic FAIL.
       
-      ✗ TEXT BLOCKS OVERLAP EACH OTHER:
-        - If two different text elements overlap or are placed on top of each other → FAIL
-        - Each text block must have its own clear, separate space
-      
-      ✗ TEXT OVERLAPS A PERSON'S BODY:
-        - Look at IMAGE 2. Every text block has a SEMI-TRANSPARENT RED tint behind it.
-        - If that RED tint touches or covers ANY part of a human (legs, arms, hair, clothes, face) → FAIL
-        - This is non-negotiable. RED on PERSON = REJECT.
-        - PAY SPECIAL ATTENTION to the center and lower portions of the image where people typically stand.
-        - In this ad, there is likely a woman standing. If you see RED covering any part of her denim shirt, jeans, or skin → FAIL.
-      
-      ✗ TEXT OVERLAPS A MASCOT OR CHARACTER:
-        - If text covers any cartoon/mascot figure → FAIL
-      
-      ✗ TEXT COLOR BLENDS WITH BACKGROUND:
-        - If text color is too similar to the area directly behind it → FAIL
-        - Light text (white/yellow/light green) on a photo of sky/trees/plants = FAIL (not enough contrast)
-        - The text MUST contrast sharply with whatever photo/pattern is behind it
-      
-      ✗ TEXT OVER PHOTO WITHOUT SHADOW:
-        - If text sits on top of a photograph (not a solid color band) and has no shadow → FAIL
-        - Only text on a SOLID, HIGH-CONTRAST block of color can skip shadow
-      
-      ✗ TEXT CUT OFF AT EDGES:
-        - Any text going past the image boundary → FAIL
-      
-      ✗ TEXT TOO CLOSE TO EDGE (SAFE ZONE):
-        - ALL text (except FinePrint) must have at least 3% margin from ANY edge of the image
-        - In normalized coordinates (0-1000): text must not start before 30 or extend past 970
-        - Text crammed against the edge looks cheap and unprofessional → FAIL
-        - FinePrint is allowed to be closer to the bottom edge (min 1.5% / 15 in normalized coords)
+      ${positionChecks}
+      ${styleChecks}
       
       NOTE ON FINE PRINT: Legal disclaimers, terms, and conditions (hierarchy="FinePrint") are ALLOWED to be very small (font_size 8-16). Do NOT fail them for being small. That is intentional.
       
@@ -1596,8 +1621,22 @@ ${zoneList}
    */
   async extractComponentStrokeBboxes(
     components: Array<{ label: string; buffer: Buffer; position: any }>,
-  ): Promise<Array<{ label: string; top: number; left: number; width: number; height: number }>> {
-    const results: Array<{ label: string; top: number; left: number; width: number; height: number }> = [];
+  ): Promise<
+    Array<{
+      label: string;
+      top: number;
+      left: number;
+      width: number;
+      height: number;
+    }>
+  > {
+    const results: Array<{
+      label: string;
+      top: number;
+      left: number;
+      width: number;
+      height: number;
+    }> = [];
 
     for (const comp of components) {
       if (!comp.buffer || !comp.position) continue;
@@ -1607,7 +1646,10 @@ ${zoneList}
           .raw()
           .toBuffer({ resolveWithObject: true });
 
-        let minX = info.width, minY = info.height, maxX = 0, maxY = 0;
+        let minX = info.width,
+          minY = info.height,
+          maxX = 0,
+          maxY = 0;
         let found = false;
 
         for (let y = 0; y < info.height; y++) {

@@ -1086,7 +1086,7 @@ export const createCampaign = async (req: Request, res: Response) => {
           const lh = s.style?.line_height || 1.2;
           const w = Math.max(
             s.position?.width || 0,
-            ((longestLine * fontSize * 0.55) / imgW0) * 1000,
+            ((longestLine * fontSize * 0.6) / imgW0) * 1000,
           );
           const h = Math.max(
             s.position?.height || 0,
@@ -1207,7 +1207,7 @@ export const createCampaign = async (req: Request, res: Response) => {
           const longestLine = Math.max(...lines.map((l: string) => l.length));
           const lineHeight = s.style?.line_height || 1.2;
           // fontSize is in PIXELS; compute pixel dimensions then convert to 0-1000
-          const textWidthPx = longestLine * fontSize * 0.55;
+          const textWidthPx = longestLine * fontSize * 0.6;
           const textHeightPx = lines.length * fontSize * lineHeight;
           const computedW = (textWidthPx / imgW) * 1000;
           const computedH = (textHeightPx / imgH) * 1000;
@@ -1303,12 +1303,13 @@ export const createCampaign = async (req: Request, res: Response) => {
             actionable_steps: overlapDetails,
           };
         } else {
-          // No code-detected overlap, proceed with AI critique for other checks
+          // No code-detected overlap — safe zones handle positions, only check style
           critique = await vertexService.critiqueLayout(
             imageBuffer,
             previewBuffer,
             mimeType,
             targetText,
+            true, // styleOnly: positions guaranteed by safe zones
           );
         }
 
