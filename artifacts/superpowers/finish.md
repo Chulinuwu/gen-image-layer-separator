@@ -1,44 +1,42 @@
-# Finish: Inpaint Pipeline Debug + 3 Iterations
+# Finish: Kanit Font System (Options A + B)
 
 ## Summary of Changes
 
-### Backend (`vertex.service.ts`)
+### Option B — Backend (2 layers of enforcement)
 
-- `inpaintBackground()` now accepts optional `onMaskReady` callback
-- Invoked with 25%-downscaled mask base64 before calling Imagen API
+1. **AI Prompt** (`vertex.service.ts`): Hard mandate — "MUST use Kanit, NEVER use other fonts" + weight by hierarchy
+2. **Controller normalize** (`image.controller.ts`): Post-process pass forces `font_family: "Kanit"` on every suggestion
 
-### Backend (`image.controller.ts`)
+### Option A — Frontend (fallback + token system)
 
-- Inpainting now runs **3 passes** (was 1)
-- Each pass feeds the previous result as input (chained refinement)
-- Emits `inpaint_mask` SSE on pass 1 (mask stays constant)
-- Emits `inpaint_iteration` SSE after each pass with `previewUrl` and `elapsedSeconds`
+3. **Google Fonts** (`AIRefinementPreview.vue`): Added Kanit wght 400–900 to @import
+4. **getTextStyle()**: Full rewrite with KANIT_TOKENS type-safe map:
 
-### Frontend (`AIRefinementPreview.vue`)
-
-- New SSE handlers: `inpaint_mask` → filmstrip; `inpaint_iteration` → canvas + filmstrip
-- **Pipeline Filmstrip**: horizontal thumbnail strip in sidebar showing Mask → Iter1 → Iter2 → Iter3, clickable to jump to that step on canvas
-- **Bbox Debug Overlay**: colored border boxes on canvas (blue=text, orange=component)
-- **Toggle Button**: "BBOX ON/OFF" in top-right of canvas (default: ON)
+| Hierarchy | Weight | Letter-spacing | Line-height | Notes                      |
+| --------- | ------ | -------------- | ----------- | -------------------------- |
+| headline  | 800    | -0.5px         | 1.1         | + auto-shadow if no stroke |
+| body      | 600    | 0px            | 1.4         |                            |
+| badge     | 700    | +1px           | 1.2         |                            |
+| fineprint | 400    | 0px            | 1.3         | opacity 0.85               |
+| number    | 900    | -1px           | 1.0         | large promo numbers        |
 
 ## Verification Commands
 
 | Command                          | Result       |
 | -------------------------------- | ------------ |
 | `cd backend && npx tsc --noEmit` | ✅ Clean     |
-| `git log --oneline -3`           | ✅ Committed |
+| `git log --oneline -1`           | ✅ Committed |
 
 ## Manual Validation Steps
 
-1. Upload an image and click "Create Campaign Layers"
-2. Watch the Sidebar — SESSION LOG should show: "Inpaint mask preview ready", "Pass 1/3 done in Xs", "Pass 2/3...", "Pass 3/3..."
-3. Canvas should update after each inpaint pass (showing progressive cleanup)
-4. PIPELINE STEPS filmstrip should populate: Mask → Inpaint 1/3 → Inpaint 2/3 → Inpaint 3/3 → ...
-5. After layout is done, blue/orange bboxes appear on canvas — click "BBOX ON/OFF" to toggle
-6. Click any filmstrip frame to jump to that step's image on canvas
+1. Generate a campaign — check SESSION LOG for "Found N text" message
+2. Wait for layout → text on canvas should use Kanit (Thai glyphs look different from Inter)
+3. Headline text should be heavier/bolder than body text
+4. Fineprint should be slightly dimmer (opacity 0.85)
+5. Check browser DevTools → Network → filter "Kanit" → font file should load
 
 ## Follow-ups
 
-- If 3 iterations are too slow (~60-90s), expose `INPAINT_ITERS` as env var or allow user to set iteration count in UI
-- May add "Original" as the first filmstrip frame for comparison
-- Consider adding iteration comparison view (side-by-side iter1 vs iter3)
+- Option D (collision nudge): auto-move text that overlaps components into nearest safe zone
+- Consider adding `text-transform: uppercase` for badge hierarchy
+- May want user-toggleable font override in the UI for brand customization

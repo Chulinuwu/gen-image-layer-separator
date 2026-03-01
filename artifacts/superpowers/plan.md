@@ -1,116 +1,112 @@
-# Plan: Inpaint Pipeline Debug Live Preview + 3 Iterations
+# Plan: Force Kanit Font + Thai Typography System (Options A + B)
 
 ## Goal
 
-1. Run inpainting **3 iterations** (currently 1) so each pass cleans up leftover artifacts from the previous
-2. Add a **step-by-step live preview pipeline** in the left canvas showing:
-   - 📸 Original image → 🎭 Mask preview → 🖼 Inpaint iter 1/2/3 → 📦 Component layout with **colored stroke bbox overlays**
+1. **Option B (Backend):** Force `font_family: "Kanit"` ใน AI prompt + normalize ใน post-processing pipeline
+2. **Option A (Frontend):** Override `getTextStyle()` ให้ใช้ Kanit เสมอ + apply Thai typography weight tokens ตาม hierarchy
 
 ## Assumptions
 
-- Backend SSE infrastructure exists (`sendSSE(event, data)` in `image.controller.ts`)
-- Frontend `AIRefinementPreview.vue` handles SSE events in `handleSSEEvent()`
-- The main canvas (`currentPreviewUrl`) shows the live image state
-- `inpaintBackground()` in `vertex.service.ts` generates the mask internally and returns `{ buffer }`
-- Stroke overlay = colored bounding-box rectangles drawn on top of the canvas image for each text layer + component
+- Backend `vertex.service.ts` มี prompt section `FONT SELECTION RULES` บรรทัด ~512
+- Controller `image.controller.ts` มี post-process block ที่ clamp text right edges (บรรทัด ~651)
+- Frontend `AIRefinementPreview.vue` มี `getTextStyle()` บรรทัด 254 → ใช้ `style.font_family || "Inter, sans-serif"`
+- Google Fonts import ปัจจุบันอยู่บรรทัด 495 (Inter + Outfit เท่านั้น)
+- สรุป `hierarchy` values จาก AI: `"headline"`, `"body"`, `"fineprint"`, `"badge"` (ตาม prompt เดิม)
 
 ## Plan
 
-### Step 1 — Backend: Emit mask preview as SSE (before calling Imagen)
+### Step 1 — Backend: Update FONT SELECTION RULES prompt
 
-**Files:** `backend/src/services/vertex.service.ts`  
+**Files:** `backend/src/services/vertex.service.ts` (~line 512-518)
 **Change:**
 
-- In `inpaintBackground()`, after generating `bwMaskBuffer`, call a callback/return the mask buffer so the controller can emit it
-- Add optional `onMaskReady?: (maskBase64: string) => void` param to `inpaintBackground()`
-- Controller passes a callback that does `sendSSE("inpaint_mask", { imageBase64: maskBase64 })`  
-  **Verify:** `tsc --noEmit` clean; SSE log shows `inpaint_mask` event
+- ลบ option fonts อื่น (Mitr, Sriracha, Playfair Display, Inter) ออก
+- เปลี่ยนเป็น hard rule: "You MUST ALWAYS use `font_family: 'Kanit'` for EVERY text element without exception."
+- เพิ่ม weight guidance per hierarchy ใน prompt:
+  ```
+  Kanit weights by hierarchy:
+  - headline → font_weight: "800"
+  - body     → font_weight: "600"
+  - badge    → font_weight: "700"
+  - fineprint → font_weight: "400"
+  - number (large promotional) → font_weight: "900"
+  ```
+  **Verify:** `tsc --noEmit` clean
 
 ---
 
-### Step 2 — Backend: 3 inpaint iterations with per-iter SSE
+### Step 2 — Backend: Normalize font_family in post-processing
 
-**Files:** `backend/src/controllers/image.controller.ts`  
+**Files:** `backend/src/controllers/image.controller.ts` (~line 646-675)
 **Change:**
 
-- Wrap the single `inpaintBackground()` call in a `for (let iter = 1; iter <= 3; iter++)` loop
-- Each iteration: use the **same original RMBG mask** (`fullImageAlphaMask`) but the **result of the previous iteration** as the new `imageBuffer` (so each pass builds on the last)
-- After each call: save the buffer to disk as `bg-inpaint-iter${iter}-${ts}.png` and emit:
+- หลัง TextClamp block อยู่แล้ว → เพิ่ม Kanit normalize pass:
+  ```typescript
+  // Force Kanit for all text suggestions regardless of AI output
+  textSuggestions = textSuggestions.map((s: any) => ({
+    ...s,
+    style: { ...s.style, font_family: "Kanit" },
+  }));
   ```
-  sendSSE("inpaint_iteration", { iteration: iter, totalIterations: 3, previewUrl: "/uploads/..." })
-  ```
-- After the loop: `generatedBackgroundImageUrl` = last successful iteration result
-- Still emit `background_ready` at the end (no change to downstream pipeline)  
-  **Verify:** `tsc --noEmit`; 3 `inpaint_iteration` events visible in browser console
+  **Verify:** `tsc --noEmit` clean
 
 ---
 
-### Step 3 — Frontend: Handle new SSE events in AIRefinementPreview.vue
+### Step 3 — Frontend: Add Kanit to Google Fonts import
 
-**Files:** `frontend/src/components/AIRefinementPreview.vue`  
+**Files:** `frontend/src/components/AIRefinementPreview.vue` (~line 495)
 **Change:**
 
-- In `handleSSEEvent()`, add two cases:
-
+- เพิ่ม Kanit weights 400,600,700,800,900 ใน import URL:
+  ```css
+  @import url("https://fonts.googleapis.com/css2?family=Kanit:wght@400;600;700;800;900&family=Inter:wght@400;600;700&family=Outfit:wght@500;700&display=swap");
   ```
-  case "inpaint_mask":
-    // Show mask as a semi-transparent overlay OR as a separate pipeline step card
-    pipelineSteps.value.push({ label: "Mask", src: `data:image/png;base64,${data.imageBase64}` })
-
-  case "inpaint_iteration":
-    // Update canvas to show latest inpaint result + update sidebar step counter
-    currentPreviewUrl.value = `http://localhost:5001${data.previewUrl}`
-    pipelineSteps.value.push({ label: `Inpaint ${data.iteration}/${data.totalIterations}`, src: currentPreviewUrl.value })
-  ```
-
-- Add `pipelineSteps = ref<Array<{label, src}>>([])` reactive state
-- Add a **"PIPELINE STEPS" horizontal filmstrip** in the sidebar below the SESSION LOG — shows small thumbnails of each step: Original → Mask → Iter1 → Iter2 → Iter3  
-  **Verify:** During generation, filmstrip populates left-to-right in real-time
+  **Verify:** Font loads ใน DevTools Network tab
 
 ---
 
-### Step 4 — Frontend: Stroke bbox overlay in canvas (debug mode)
+### Step 4 — Frontend: Rewrite getTextStyle() with Thai Typography Tokens
 
-**Files:** `frontend/src/components/AIRefinementPreview.vue`  
+**Files:** `frontend/src/components/AIRefinementPreview.vue` (line 254-275)
 **Change:**
 
-- Add `showDebugBoxes = ref(true)` toggle (small button in top-right of canvas)
-- In the canvas overlay template, render colored `<div>` borders for each text layer and component:
-  ```html
-  <!-- Debug bbox strokes -->
-  <div
-    v-if="showDebugBoxes"
-    v-for="(t, i) in liveTextLayers"
-    class="debug-bbox text-bbox"
-    :style="getBboxStyle(t.position, '#3B82F6')"
-  />
-  <div
-    v-if="showDebugBoxes"
-    v-for="(c, i) in liveComponents"
-    class="debug-bbox comp-bbox"
-    :style="getBboxStyle(c.position, '#F59E0B')"
-  />
+- Override `fontFamily` → always `"Kanit, sans-serif"` (ignore AI value)
+- Derive `fontWeight` from `t.hierarchy` using token map (AI value used as fallback only):
+  ```typescript
+  const KANIT_WEIGHT: Record<string, string> = {
+    headline: "800",
+    body: "600",
+    badge: "700",
+    fineprint: "400",
+    number: "900",
+  };
+  const weight =
+    KANIT_WEIGHT[t.hierarchy?.toLowerCase()] || style.font_weight || "700";
   ```
-- `getBboxStyle(pos, color)`: returns `{ position:'absolute', top, left, width, height, border: '2px solid {color}', boxSizing:'border-box', pointerEvents:'none', zIndex:30 }`
-- Blue = text layers, Orange = components
-- Add `.debug-bbox` CSS with `border` only (transparent fill) so it doesn't block the image  
-  **Verify:** After layout loads, colored boxes appear on canvas; toggle button hides them
+- Add Thai-specific `letterSpacing`:
+  - headline → `-0.5px`
+  - body → `0px`
+  - fineprint → `0px`
+  - badge → `1px`
+- Add `lineHeight` token: headline=1.1, body=1.4, fineprint=1.3
+- Add `textShadow` improvement: if no stroke_hex AND hierarchy=headline → auto-shadow `0 1px 4px rgba(0,0,0,0.5)` for readability
+  **Verify:** Canvas text shows Kanit font + correct weights in live preview
 
 ---
 
 ## Risks & Mitigations
 
-| Risk                                                      | Mitigation                                                      |
-| --------------------------------------------------------- | --------------------------------------------------------------- |
-| Iter2/3 may produce worse results if first pass was clean | Log each iter result; keep best result if later passes degrade  |
-| Large mask base64 in SSE may be slow                      | Downscale mask to 25% before sending for preview                |
-| 3× Imagen calls = 3× cost & latency (~30–60s total)       | Display elapsed time per iter in SSE log                        |
-| Canvas overlay z-index conflicts                          | Use `zIndex: 30` for debug bboxes, `zIndex: 20` for text layers |
+| Risk                                                  | Mitigation                                           |
+| ----------------------------------------------------- | ---------------------------------------------------- |
+| Kanit ไม่ได้ render เพราะยังไม่ load                  | Step 3 ต้องทำก่อน Step 4; add `font-display: swap`   |
+| AI ยังส่ง other font บ้าง                             | Step 2 (normalize) เป็น safety net 100%              |
+| Fineprint ที่เล็กมาก (size 8-12) อ่านยากกับ Kanit 400 | ยอมรับได้ — fineprint by design ไม่ต้องอ่านได้ชัด    |
+| letter-spacing ลบอาจทำให้ Thai ชิดเกิน                | Test ด้วย headline ท่อนยาว; ถ้าชิดเกิน revert เป็น 0 |
 
 ## Rollback Plan
 
-- Step 1-2 (backend): `git revert` the controller commit; inpainting reverts to single iteration
-- Step 3-4 (frontend): All behind `showDebugBoxes` toggle and new `pipelineSteps` state — no breaking changes to existing SSE handlers
+- Step 1-2 (backend): `git revert` commit → AI กลับไปใช้ font อื่นได้
+- Step 3-4 (frontend): revert `getTextStyle()` → กลับเป็น `style.font_family || "Inter"`
 
 ---
 
