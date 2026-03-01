@@ -398,7 +398,7 @@ ${zoneList}
         .map(c => `  - "${c.label}": occupies left=${c.left} to ${c.left + c.width}, top=${c.top} to ${c.top + c.height}`)
         .join("\n");
       const zoneDesc = textZone
-        ? `left=${textZone.left}, width=${textZone.width}, height=${textZone.height} (x-range: ${textZone.left} to ${textZone.left + textZone.width})`
+        ? `top=${textZone.top}, left=${textZone.left}, width=${textZone.width}, height=${textZone.height} (x-range: ${textZone.left} to ${textZone.left + textZone.width}, y-range: ${textZone.top} to ${textZone.top + textZone.height})`
         : "the open area not occupied by components";
       fixedComponentNote = `
 ══════════════════════════════════════
@@ -460,13 +460,17 @@ COMPOSITION RULES FOR TEXT:
          MASCOTS / SECONDARY ELEMENTS: bottom-corner placement, height = 300-450
          LOGOS / BADGES / RIBBONS: keep near detected position, scale width/height up by 20%
 
-         After placing ALL components, calculate composition_text_zone (the open horizontal space left for text):
-         - If main character is LEFT-anchored (left < 400):
-           text_zone = { "top": 0, "left": character_right + 20, "width": 1000 - character_right - 50, "height": 1000 }
-           where character_right = suggested_position.left + suggested_position.width
-         - If main character is RIGHT-anchored (left ≥ 400):
-           text_zone = { "top": 0, "left": 30, "width": character_left - 50, "height": 1000 }
-           where character_left = suggested_position.left
+         After placing ALL components, compute composition_text_zone as the open horizontal space for text:
+         - Compute character_right = suggested_position.left + suggested_position.width
+         - Compute character_left = suggested_position.left
+         - If main character is LEFT-anchored (suggested_position.left < 400):
+           Set composition_text_zone.left = character_right + 20
+           Set composition_text_zone.width = 1000 - character_right - 50
+           Set composition_text_zone.top = 0, composition_text_zone.height = 1000
+         - If main character is RIGHT-anchored (suggested_position.left >= 400):
+           Set composition_text_zone.left = 30
+           Set composition_text_zone.width = character_left - 50
+           Set composition_text_zone.top = 0, composition_text_zone.height = 1000
 
       2. SKIP TEXT TASKS: Do NOT analyze or suggest text layouts for this request.
       `
@@ -517,7 +521,7 @@ COMPOSITION RULES FOR TEXT:
         "background_description": "Describe the background scene (without any overlaid elements)",
         "campaign_vibe": "Energetic, Minimalist, Luxury, etc.",
         "composition_text_zone": { "top": 0, "left": 0, "width": 400, "height": 1000, "rationale": "Character anchored bottom-right, left column 0-400 is open for text" },
-        "composition_vibe": "energetic",
+        "composition_vibe": "Overall visual energy of the composition (e.g. 'energetic', 'bold', 'luxury', 'playful', 'calm')",
         "spatial_analysis": {
              "safe_zone": "LEFT | CENTER | RIGHT | TOP",
              "blocked_zones": ["CENTER (Woman)", "RIGHT (Mascot)"],
