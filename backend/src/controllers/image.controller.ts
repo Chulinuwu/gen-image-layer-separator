@@ -1097,7 +1097,6 @@ export const createCampaign = async (req: Request, res: Response) => {
           targetText,
           "text",
           textNoGoZones,
-          [], // safeZones — not used for text pass
           fixedPositions,
           artDirectorTextZone || undefined,
         );
