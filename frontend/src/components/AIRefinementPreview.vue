@@ -73,16 +73,16 @@
               {{ t.part }}
             </div>
 
-            <!-- Live component overlay -->
+            <!-- Live component overlay: drop-shadow outline when debug ON follows PNG shape -->
             <img
               v-for="(c, idx) in liveComponents"
               :key="'lc' + idx"
               :src="'http://localhost:5001' + c.imageUrl"
               class="live-component-overlay"
-              :style="getComponentStyle(c)"
+              :style="getComponentStyle(c, showDebugBoxes)"
             />
 
-            <!-- Debug bbox overlays: blue=text, orange=component -->
+            <!-- Debug bbox overlays: blue rect for TEXT layers only -->
             <template v-if="showDebugBoxes">
               <div
                 v-for="(t, idx) in liveTextLayers"
@@ -90,13 +90,6 @@
                 class="debug-bbox"
                 :style="getBboxStyle(t.position, '#3B82F6')"
                 :title="t.part"
-              />
-              <div
-                v-for="(c, idx) in liveComponents"
-                :key="'cb' + idx"
-                class="debug-bbox"
-                :style="getBboxStyle(c.position, '#F59E0B')"
-                :title="c.label"
               />
             </template>
           </template>
@@ -281,7 +274,7 @@ const getTextStyle = (t: any) => {
   };
 };
 
-const getComponentStyle = (c: any) => {
+const getComponentStyle = (c: any, debugMode = false) => {
   const pos = c.position || {};
   return {
     position: "absolute" as const,
@@ -293,6 +286,10 @@ const getComponentStyle = (c: any) => {
     pointerEvents: "none" as const,
     zIndex: c.z_index || 10,
     transform: pos.rotation ? `rotate(${pos.rotation}deg)` : undefined,
+    // Pixel-perfect outline via drop-shadow: follows actual PNG alpha channel, not bbox
+    filter: debugMode
+      ? "drop-shadow(2px 0 0 #F59E0B) drop-shadow(-2px 0 0 #F59E0B) drop-shadow(0 2px 0 #F59E0B) drop-shadow(0 -2px 0 #F59E0B)"
+      : undefined,
   };
 };
 
