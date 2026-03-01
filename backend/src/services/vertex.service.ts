@@ -314,7 +314,7 @@ export class AIService {
         .toBuffer();
       processingMime = "image/jpeg";
     } catch (e) {
-      console.warn("[GenAI] Grid/Resize failed, using original:", e);
+      console.warn("[GenAI] Resize failed, using original:", e);
     }
 
     // 2. Select Model: Prefer configured endpoints
@@ -355,7 +355,7 @@ export class AIService {
     if (safeZones && safeZones.length > 0) {
       const zoneList = safeZones
         .slice(0, 6)
-        .map((z, i) => `  Zone ${i + 1} [${z.label}]: top=${z.top}, left=${z.left}, width=${z.width}, height=${z.height} (area=${z.area})`)
+        .map((z, i) => `  Zone ${i + 1} [${z.label || `zone-${i + 1}`}]: top=${z.top}, left=${z.left}, width=${z.width}, height=${z.height} (area=${z.area})`)
         .join("\n");
       safeZoneInstruction = `
       ═══════════════════════════════════════
@@ -387,12 +387,12 @@ ${zoneList}
       ═══════════════════════════════════════
       TASK 0: PRECISION OBJECT DETECTION
       ═══════════════════════════════════════
-      1. Use the VISIBLE GRID to pinpoint ALL people and characters.
+      1. Pinpoint ALL people and characters in the image.
       2. Create tight bounding boxes for each significant body part.
-      3. Use the grid lines to ensure accuracy.
+      3. Use the 0-1000 coordinate scale to specify coordinates accurately.
       4. For mascots: Head area, Body area.
       5. Each zone should have its own tight bounding box (top, left, width, height in 0-1000).
-      6. Do NOT guess. Map to the grid.
+      6. Do NOT guess. Use the visible image to estimate positions.
 
       ═══════════════════════════════════════
       
@@ -406,11 +406,15 @@ ${zoneList}
       2. SKIP TEXT TASKS: Do NOT analyze or suggest text layouts for this request.
       `
           : `
-      1. SPATIAL ANALYSIS (CRITICAL FIRST STEP):
-         - Divide the image into 3 vertical columns: LEFT (0-333), CENTER (334-666), RIGHT (667-1000).
+      1. PLACEMENT STRATEGY:
+         ${
+           safeZones.length > 0
+             ? `Place text within the VERIFIED SAFE ZONES listed above. Use "preferred_zone" to indicate which zone each text element belongs in.`
+             : `- Divide the image into 3 vertical columns: LEFT (0-333), CENTER (334-666), RIGHT (667-1000).
          - Identify which column is EMPTY/SAFE.
-         - **RULE: PLACE 90% OF TEXT IN THE 'SAFE COLUMN' ONLY.**
-      
+         - **RULE: PLACE 90% OF TEXT IN THE 'SAFE COLUMN' ONLY.**`
+         }
+
       2. TEXT EXTRACTION & SMART LINE BREAKING:
          - Read the AD BRIEF.
          - Split long sentences into multiple visual lines to fit the Safe Zone.
@@ -458,7 +462,7 @@ ${zoneList}
         "suggestions": [
           {
             "part": "The exact text (e.g. 'SUMMER SALE')",
-            "preferred_zone": "top-left",
+            "preferred_zone": "REQUIRED when safe zones are provided — use the zone label (e.g. 'top-left', 'bottom-center')",
             "position": {
               "top": 0, "left": 0, "width": 0, "height": 0, "rotation": 0,
               "explanation": "Normalized coordinates 0-1000. Rotation in degrees (0 for normal, 90 for vertical)."
