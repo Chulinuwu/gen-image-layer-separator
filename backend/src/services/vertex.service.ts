@@ -305,6 +305,8 @@ export class AIService {
       area: number;
       label: string;
     }> = [],
+    fixedComponentPositions?: Array<{ label: string; top: number; left: number; width: number; height: number }>,
+    textZone?: { top: number; left: number; width: number; height: number },
   ) {
     // 1. Resize for faster analysis & stay within model limits
     let processingBuffer = imageBuffer;
@@ -390,6 +392,31 @@ ${zoneList}
 
     const isCompOnly = mode === "only_bg_comp";
 
+    let fixedComponentNote = "";
+    if (fixedComponentPositions && fixedComponentPositions.length > 0) {
+      const compList = fixedComponentPositions
+        .map(c => `  - "${c.label}": occupies left=${c.left} to ${c.left + c.width}, top=${c.top} to ${c.top + c.height}`)
+        .join("\n");
+      const zoneDesc = textZone
+        ? `left=${textZone.left}, width=${textZone.width}, height=${textZone.height} (x-range: ${textZone.left} to ${textZone.left + textZone.width})`
+        : "the open area not occupied by components";
+      fixedComponentNote = `
+══════════════════════════════════════
+COMPONENT POSITIONS ARE FIXED (pre-placed by art director — do NOT suggest moving them):
+${compList}
+
+TEXT ZONE (ALL text MUST stay within this area):
+  ${zoneDesc}
+
+COMPOSITION RULES FOR TEXT:
+  - Place ALL text elements within the TEXT ZONE boundaries
+  - Pull text toward the component's nearest edge — text should relate to the character's action/gaze
+  - If character is on RIGHT → text should right-align or center toward the character
+  - If character is on LEFT → text should left-align from the left of the text zone
+══════════════════════════════════════
+`;
+    }
+
     const prompt = `
       Act as a professional graphic designer. 
       Use 0-1000 normalized coordinates (0 = top/left edge, 1000 = bottom/right edge).
@@ -399,6 +426,7 @@ ${zoneList}
       ${targetText}
       """
 
+      ${fixedComponentNote}
       ${safeZoneInstruction || noGoInstruction}
 
       ═══════════════════════════════════════
@@ -415,10 +443,31 @@ ${zoneList}
       ${
         isCompOnly
           ? `
-      1. COMPONENT EXTRACTION (MAIN TASK):
-         - Identify ALL foreground visual elements: Ribbons, banners, price badges, mascots, stickers, logos, person cutouts.
-         - ❌ STRICTLY EXCLUDE: Decorative backgrounds, geometric/hexagonal textures, gradient overlays, or any element that IS the background template itself.
-         - For EACH element, provide a detailed description.
+      1. ART DIRECTOR COMPONENT PLACEMENT:
+         You are an award-winning Thai advertising art director (SCB EASY, Grab, True style).
+         Your job: compose the components on the canvas like a high-budget poster shoot.
+
+         CHARACTERS / PERSONS (label contains: person, woman, man, boy, girl, mascot, character, figure, human):
+         - Scale to FILL 70-90% of canvas HEIGHT → suggested_position.height MUST be 700 to 900
+         - Anchor to BOTTOM edge → suggested_position.top = 1000 - height (feet at canvas bottom, e.g. top=100 if height=900)
+         - Choose LEFT or RIGHT side based on subject's gaze direction:
+           * Subject faces/looks RIGHT → place on LEFT side (left = 0 to 100)
+           * Subject faces/looks LEFT → place on RIGHT side (left = 1000 - width)
+           * Subject faces camera directly → default to RIGHT side
+         - BLEED to edge: if left-anchored → left ≤ 50. If right-anchored → (left + width) ≥ 950
+         - Width: typically 350-500 for full-body characters
+
+         MASCOTS / SECONDARY ELEMENTS: bottom-corner placement, height = 300-450
+         LOGOS / BADGES / RIBBONS: keep near detected position, scale width/height up by 20%
+
+         After placing ALL components, calculate composition_text_zone (the open horizontal space left for text):
+         - If main character is LEFT-anchored (left < 400):
+           text_zone = { "top": 0, "left": character_right + 20, "width": 1000 - character_right - 50, "height": 1000 }
+           where character_right = suggested_position.left + suggested_position.width
+         - If main character is RIGHT-anchored (left ≥ 400):
+           text_zone = { "top": 0, "left": 30, "width": character_left - 50, "height": 1000 }
+           where character_left = suggested_position.left
+
       2. SKIP TEXT TASKS: Do NOT analyze or suggest text layouts for this request.
       `
           : `
@@ -467,6 +516,8 @@ ${zoneList}
       {
         "background_description": "Describe the background scene (without any overlaid elements)",
         "campaign_vibe": "Energetic, Minimalist, Luxury, etc.",
+        "composition_text_zone": { "top": 0, "left": 0, "width": 400, "height": 1000, "rationale": "Character anchored bottom-right, left column 0-400 is open for text" },
+        "composition_vibe": "energetic",
         "spatial_analysis": {
              "safe_zone": "LEFT | CENTER | RIGHT | TOP",
              "blocked_zones": ["CENTER (Woman)", "RIGHT (Mascot)"],
