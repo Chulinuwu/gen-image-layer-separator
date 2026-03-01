@@ -42,6 +42,15 @@
       <!-- Background reference / working area -->
       <div class="canvas-container shadow-sm">
         <div class="canvas-label">LIVE DESIGN CANVAS</div>
+        <!-- Debug toggle button -->
+        <button
+          class="debug-toggle-btn"
+          :class="{ active: showDebugBoxes }"
+          @click="showDebugBoxes = !showDebugBoxes"
+          title="Toggle bounding box overlay"
+        >
+          {{ showDebugBoxes ? "🔲 BBOX ON" : "⬜ BBOX OFF" }}
+        </button>
         <div class="canvas-content">
           <img
             v-if="currentPreviewUrl"
@@ -72,6 +81,24 @@
               class="live-component-overlay"
               :style="getComponentStyle(c)"
             />
+
+            <!-- Debug bbox overlays: blue=text, orange=component -->
+            <template v-if="showDebugBoxes">
+              <div
+                v-for="(t, idx) in liveTextLayers"
+                :key="'tb' + idx"
+                class="debug-bbox"
+                :style="getBboxStyle(t.position, '#3B82F6')"
+                :title="t.part"
+              />
+              <div
+                v-for="(c, idx) in liveComponents"
+                :key="'cb' + idx"
+                class="debug-bbox"
+                :style="getBboxStyle(c.position, '#F59E0B')"
+                :title="c.label"
+              />
+            </template>
           </template>
         </div>
       </div>
@@ -155,6 +182,26 @@
             </div>
           </div>
         </div>
+
+        <!-- Pipeline Filmstrip -->
+        <div v-if="pipelineSteps.length" class="pipeline-strip mt-8">
+          <div class="panel-label">PIPELINE STEPS</div>
+          <div class="filmstrip">
+            <div
+              v-for="(step, idx) in pipelineSteps"
+              :key="idx"
+              class="film-frame"
+              @click="currentPreviewUrl = step.src"
+              :title="step.label"
+            >
+              <img :src="step.src" class="film-thumb" />
+              <span class="film-label">{{ step.label }}</span>
+              <span v-if="step.elapsed" class="film-elapsed">{{
+                step.elapsed
+              }}</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="sidebar-footer">
@@ -205,6 +252,12 @@ const isCollapsed = ref(false);
 const liveTextLayers = ref<any[]>([]);
 const liveComponents = ref<any[]>([]);
 
+// Pipeline debug state
+const pipelineSteps = ref<
+  Array<{ label: string; src: string; elapsed?: string }>
+>([]);
+const showDebugBoxes = ref(true);
+
 const getTextStyle = (t: any) => {
   const pos = t.position || {};
   const style = t.style || {};
@@ -243,6 +296,19 @@ const getComponentStyle = (c: any) => {
   };
 };
 
+// Returns border-only box style for debug overlay (no fill — don't block image)
+const getBboxStyle = (pos: any, color: string) => ({
+  position: "absolute" as const,
+  top: (pos?.top ?? 0) / 10 + "%",
+  left: (pos?.left ?? 0) / 10 + "%",
+  width: (pos?.width ?? 0) / 10 + "%",
+  height: (pos?.height ?? 0) / 10 + "%",
+  border: `2px solid ${color}`,
+  boxSizing: "border-box" as const,
+  pointerEvents: "none" as const,
+  zIndex: 30,
+});
+
 const progressPercent = computed(() => {
   return (currentIteration.value / maxIterations.value) * 100;
 });
@@ -274,6 +340,7 @@ const connectSSE = async (formData: FormData) => {
     isComplete.value = false;
     liveTextLayers.value = [];
     liveComponents.value = [];
+    pipelineSteps.value = [];
     statusText.value = "Initializing design suite...";
 
     addMessage("Establishing design connection...", "info");
@@ -394,6 +461,27 @@ const handleSSEEvent = (event: string, data: any) => {
         liveComponents.value = data.components;
       }
       break;
+    case "inpaint_mask":
+      // Mask preview — add to pipeline filmstrip (don't show on main canvas)
+      pipelineSteps.value.push({
+        label: "Mask",
+        src: `data:image/png;base64,${data.imageBase64}`,
+      });
+      addMessage("Inpaint mask preview ready", "info");
+      break;
+    case "inpaint_iteration":
+      // Each inpaint pass — show result on canvas + add to filmstrip
+      currentPreviewUrl.value = `http://localhost:5001${data.previewUrl}`;
+      pipelineSteps.value.push({
+        label: `Inpaint ${data.iteration}/${data.totalIterations}`,
+        src: currentPreviewUrl.value,
+        elapsed: `${data.elapsedSeconds}s`,
+      });
+      addMessage(
+        `Pass ${data.iteration}/${data.totalIterations} done in ${data.elapsedSeconds}s`,
+        "success",
+      );
+      break;
     case "error":
       addMessage(`Engine Error: ${data.error}`, "error");
       statusText.value = "Design session failed";
@@ -486,6 +574,95 @@ defineExpose({ connectSSE });
   position: absolute;
   pointer-events: none;
   transition: all 0.3s ease;
+}
+
+/* Debug bbox overlay — border only, no fill */
+.debug-bbox {
+  position: absolute;
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
+/* Debug toggle button positioned top-right of canvas */
+.debug-toggle-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 40;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.debug-toggle-btn:hover {
+  background: rgba(0, 0, 0, 0.85);
+}
+.debug-toggle-btn.active {
+  background: #3b82f6;
+}
+
+/* Pipeline Filmstrip */
+.pipeline-strip {
+  padding-top: 8px;
+}
+
+.filmstrip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+}
+
+.film-frame {
+  flex: 0 0 auto;
+  width: 72px;
+  cursor: pointer;
+  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: #f9fafb;
+  transition:
+    border-color 0.2s,
+    transform 0.15s;
+}
+.film-frame:hover {
+  border-color: var(--primary);
+  transform: translateY(-2px);
+}
+
+.film-thumb {
+  width: 100%;
+  height: 56px;
+  object-fit: contain;
+  display: block;
+  background: #e5e7eb;
+}
+
+.film-label {
+  display: block;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--secondary);
+  padding: 3px 4px 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+}
+
+.film-elapsed {
+  display: block;
+  font-size: 8px;
+  color: #10b981;
+  padding-bottom: 3px;
 }
 
 .empty-canvas {

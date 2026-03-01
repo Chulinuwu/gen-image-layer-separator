@@ -1557,7 +1557,8 @@ ${zoneList}
   async inpaintBackground(
     imageBuffer: Buffer,
     maskedFullImageBuffer: Buffer,
-    analysis: any, // Pass the full analysis object to get background_description
+    analysis: any,
+    onMaskReady?: (maskBase64: string) => void, // Called with downscaled mask PNG for live preview
   ): Promise<{ buffer: Buffer | null }> {
     try {
       console.log(
@@ -1591,6 +1592,15 @@ ${zoneList}
       })
         .png()
         .toBuffer();
+
+      // Downscale mask to 25% for SSE preview (keeps payload small)
+      if (onMaskReady) {
+        const previewMask = await sharp(bwMaskBuffer)
+          .resize(Math.round(maskW * 0.25), Math.round(maskH * 0.25))
+          .png()
+          .toBuffer();
+        onMaskReady(previewMask.toString("base64"));
+      }
 
       const { MaskReferenceImage, RawReferenceImage } =
         await import("@google/genai");

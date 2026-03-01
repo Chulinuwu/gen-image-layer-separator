@@ -998,31 +998,71 @@ export const createCampaign = async (req: Request, res: Response) => {
         });
       }
 
-      // Task B: Inpaint background (using the mask from Task A)
+      // Task B: Inpaint background — 3 passes, each refines the previous result
       try {
         sendSSE("progress", {
           step: "inpaint_background",
-          message: "AI is cleaning the background...",
+          message: "AI is cleaning the background (3 passes)...",
         });
 
-        const metadata = await sharp(imageBuffer).metadata();
-        const w = metadata.width || 1,
-          h = metadata.height || 1,
-          ratio = w / h;
-        let aspect_ratio = "3:4";
-        if (ratio > 1.2) aspect_ratio = "4:3";
-        else if (ratio >= 0.8) aspect_ratio = "1:1";
-
+        const INPAINT_ITERS = 3;
         let bgBufferedResponse: Buffer | null = null;
+        // currentSource starts as the original image; each iter feeds its output as next source
+        let currentSource: Buffer = imageBuffer;
 
         if (fullImageAlphaMask) {
-          // Use True Inpainting with the Alpha Mask — prompt is built inside inpaintBackground
-          const inpaintRes = await vertexService.inpaintBackground(
-            imageBuffer,
-            fullImageAlphaMask,
-            analysis,
-          );
-          bgBufferedResponse = inpaintRes.buffer;
+          for (let iter = 1; iter <= INPAINT_ITERS; iter++) {
+            sendSSE("progress", {
+              step: "inpaint_background",
+              message: `Inpainting pass ${iter}/${INPAINT_ITERS}...`,
+            });
+
+            const iterStart = Date.now();
+
+            // Emit mask preview only on first iteration (mask doesn't change)
+            const onMaskReady =
+              iter === 1
+                ? (maskBase64: string) => {
+                    sendSSE("inpaint_mask", { imageBase64: maskBase64 });
+                  }
+                : undefined;
+
+            const inpaintRes = await vertexService.inpaintBackground(
+              currentSource,
+              fullImageAlphaMask,
+              analysis,
+              onMaskReady,
+            );
+
+            if (inpaintRes.buffer) {
+              bgBufferedResponse = inpaintRes.buffer;
+              currentSource = inpaintRes.buffer; // chain: next pass refines this result
+
+              const iterFilename = `bg-inpaint-iter${iter}-${Date.now()}.png`;
+              fs.writeFileSync(
+                path.join(uploadDir, iterFilename),
+                inpaintRes.buffer,
+              );
+              const iterUrl = `/uploads/${iterFilename}`;
+              const elapsed = ((Date.now() - iterStart) / 1000).toFixed(1);
+
+              sendSSE("inpaint_iteration", {
+                iteration: iter,
+                totalIterations: INPAINT_ITERS,
+                previewUrl: iterUrl,
+                elapsedSeconds: elapsed,
+              });
+
+              console.log(
+                `[Build-Up] Inpaint iter ${iter}/${INPAINT_ITERS} done in ${elapsed}s → ${iterUrl}`,
+              );
+            } else {
+              console.warn(
+                `[Build-Up] Inpaint iter ${iter} returned null, keeping previous result`,
+              );
+              break; // stop early if Imagen fails — don't lose previous good result
+            }
+          }
         }
 
         if (bgBufferedResponse) {
@@ -1033,7 +1073,7 @@ export const createCampaign = async (req: Request, res: Response) => {
           );
           generatedBackgroundImageUrl = `/uploads/${bgFilename}`;
           console.log(
-            `[Build-Up] Inpainted BG: ${generatedBackgroundImageUrl}`,
+            `[Build-Up] Final inpainted BG: ${generatedBackgroundImageUrl}`,
           );
           sendSSE("background_ready", {
             previewUrl: generatedBackgroundImageUrl,
