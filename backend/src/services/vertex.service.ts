@@ -1574,47 +1574,26 @@ ${zoneList}
       const maskW = maskOutput.info.width;
       const maskH = maskOutput.info.height;
 
-      // Step 1: Binarize — foreground (alpha > 5) → white, background → black
+      // Binarize: alpha > 15 → white (foreground), else black.
+      // Threshold 15 (not 5) to skip pure noise pixels at feet-floor contacts
+      // while still catching real semi-transparent shadow edges.
       for (let i = 0; i < maskData.length; i += 4) {
-        const isForeground = maskData[i + 3] > 5;
-        const val = isForeground ? 255 : 0;
+        const val = maskData[i + 3] > 15 ? 255 : 0;
         maskData[i] = val;
         maskData[i + 1] = val;
         maskData[i + 2] = val;
         maskData[i + 3] = 255;
       }
 
-      // Step 2: Extend mask DOWNWARD per-column to cover cast shadows.
-      // Cast shadows fall BELOW subjects and have alpha≈0 in RMBG output,
-      // so they're not caught by step 1. We scan each X column for the lowest
-      // white pixel and paint white for an extra 8% of image height below it.
-      const shadowExtendPx = Math.round(maskH * 0.08);
-      for (let x = 0; x < maskW; x++) {
-        let bottomY = -1;
-        for (let y = maskH - 1; y >= 0; y--) {
-          if (maskData[(y * maskW + x) * 4] === 255) {
-            bottomY = y;
-            break;
-          }
-        }
-        if (bottomY >= 0) {
-          const extendTo = Math.min(bottomY + shadowExtendPx, maskH - 1);
-          for (let y = bottomY + 1; y <= extendTo; y++) {
-            const idx = (y * maskW + x) * 4;
-            maskData[idx] = 255;
-            maskData[idx + 1] = 255;
-            maskData[idx + 2] = 255;
-            maskData[idx + 3] = 255;
-          }
-        }
-      }
-
-      // Step 3: Blur + re-threshold to smooth edges of the expanded mask
+      // Dilate with blur(12) + low re-threshold(15).
+      // blur(12) expands the white region by ~12px in ALL directions (including downward
+      // toward the shadow zone) without directional bias or cross-zone bleed.
+      // Low re-threshold(15) ensures the dilated fringe is kept wide.
       const bwMaskBuffer = await sharp(maskData, {
         raw: { width: maskW, height: maskH, channels: 4 },
       })
-        .blur(6) // smooth expanded edges
-        .threshold(30) // re-binarize
+        .blur(12)
+        .threshold(15)
         .png()
         .toBuffer();
 
@@ -1647,13 +1626,14 @@ ${zoneList}
       const bgDescription =
         analysis.background_description ||
         "a clean empty background matching the surrounding area";
-      // Focus prompt on WHAT TO FILL (background texture) — not on what to avoid.
-      // Negative framing ("don't add people") anchors the model on people.
+      // Instruct Imagen to erase ALL traces including shadows/reflections.
+      // Keep framing POSITIVE (what TO fill) — negative framing anchors the model on removed subjects.
       const bgPrompt = [
-        `Fill the masked region with only the background.`,
+        `Fill the masked area with only the background.`,
         `Background: ${bgDescription}`,
-        `Match the exact colors, textures, lighting, and patterns of the visible background.`,
-        `The result must look like the region was always empty — just background.`,
+        `Match the exact colors, textures, lighting, and patterns of the surrounding background.`,
+        `Erase any shadows, reflections, or traces left by removed subjects.`,
+        `The result must look as if the masked area was always empty — pure background only.`,
       ].join(" ");
 
       const response = await this.client.models.editImage({
