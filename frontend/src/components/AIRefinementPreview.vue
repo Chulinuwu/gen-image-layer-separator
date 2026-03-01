@@ -282,7 +282,7 @@ const getTextStyle = (t: any, debugMode = false) => {
     position: "absolute" as const,
     top: pos.top / 10 + "%",
     left: pos.left / 10 + "%",
-    fontSize: Math.max(8, (style.font_size_normalized || 16) * 0.4) + "px",
+    fontSize: (style.font_size_normalized || 16) * 0.1 + "cqw",
     fontFamily: "'Kanit', sans-serif", // always Kanit
     fontWeight: weight,
     color: style.color_hex || "#FFFFFF",
@@ -563,6 +563,7 @@ defineExpose({ connectSSE });
   min-height: 400px;
   position: relative;
   overflow: hidden;
+  container-type: inline-size;
 }
 
 .design-preview {
