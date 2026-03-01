@@ -869,12 +869,13 @@ const downloadAsSvg = async () => {
                   height: layer.h + '%',
                   transform: `rotate(${layer.rotation || 0}deg)`,
                   zIndex: layer.z_index,
+                  padding: '0',
                 }
               : {
                   top: layer.y + '%',
                   left: layer.x + '%',
                   color: layer.style.color_hex,
-                  fontSize: layer.style.font_size_normalized + 'px',
+                  fontSize: layer.style.font_size_normalized * 0.1 + 'cqw',
                   fontFamily: `${layer.style.font_family}, sans-serif`,
                   fontWeight: layer.style.font_weight,
                   letterSpacing: (layer.style.letter_spacing || 0) + 'px',
@@ -1199,6 +1200,7 @@ select {
   width: 100%;
   line-height: 0;
   cursor: crosshair;
+  container-type: inline-size;
 }
 .bg-img {
   width: 100%;
