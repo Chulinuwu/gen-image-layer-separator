@@ -133,6 +133,7 @@ export const processImage = async (req: Request, res: Response) => {
       label: string;
       description: string;
       position: any;
+      suggested_position?: any; // AI's composition recommendation — where component SHOULD GO
       z_index: number;
     }> = analysisData.components || [];
 
@@ -228,16 +229,15 @@ export const processImage = async (req: Request, res: Response) => {
         (result: { label: string; buffer: Buffer }, i: number) => {
           const filename = `component-${Date.now()}-${i}.png`;
           fs.writeFileSync(path.join(uploadDir, filename), result.buffer);
+          const comp = components[i];
+          // suggested_position = AI's composition recommendation; prefer over raw detected position
+          const pos = comp?.suggested_position ||
+            comp?.position || { top: 0, left: 0, width: 200, height: 200 };
           return {
             label: result.label,
             imageUrl: `/uploads/${filename}`,
-            position: components[i]?.position || {
-              top: 0,
-              left: 0,
-              width: 200,
-              height: 200,
-            },
-            z_index: components[i]?.z_index || 1,
+            position: pos,
+            z_index: comp?.z_index || 1,
           };
         },
       );
@@ -674,11 +674,41 @@ export const createCampaign = async (req: Request, res: Response) => {
       });
     }
 
-    // Safety net: force Kanit on every text suggestion regardless of AI output
+    // Helper: enforce readable contrast — if text is on dark bg and color is dark, swap to light
+    // Uses position-based heuristic: lower half (top > 450) of Thai ad templates → usually dark bg
+    const enforceContrast = (
+      colorHex: string | undefined,
+      pos: any,
+    ): string => {
+      if (!colorHex) return "#FFFFFF";
+      // Parse hex luminance (0-255 average of R,G,B)
+      const hex = colorHex.replace("#", "");
+      if (hex.length < 6) return "#FFFFFF";
+      const r = parseInt(hex.slice(0, 2), 16);
+      const g = parseInt(hex.slice(2, 4), 16);
+      const b = parseInt(hex.slice(4, 6), 16);
+      const luminance = 0.299 * r + 0.587 * g + 0.114 * b; // ITU-R BT.601 luma
+      const isOnDarkBg = (pos?.top || 0) > 450; // below midpoint → likely dark/purple zone
+      if (isOnDarkBg && luminance < 100) {
+        // Dark text on dark bg — swap to white (default safe) or yellow for badges
+        const swapped = "#FFFFFF";
+        console.log(
+          `[Contrast] "${colorHex}" (luma:${Math.round(luminance)}) → ${swapped} (dark bg fix)`,
+        );
+        return swapped;
+      }
+      return colorHex;
+    };
+
+    // Safety net: force Kanit + enforce contrast on every text suggestion
     if (textSuggestions.length > 0) {
       textSuggestions = textSuggestions.map((s: any) => ({
         ...s,
-        style: { ...s.style, font_family: "Kanit" },
+        style: {
+          ...s.style,
+          font_family: "Kanit",
+          color_hex: enforceContrast(s.style?.color_hex, s.position),
+        },
       }));
     }
 
@@ -884,15 +914,23 @@ export const createCampaign = async (req: Request, res: Response) => {
             const matched =
               componentSuggestions.find((c: any) => c.label === res.label) ||
               componentSuggestions[idx];
-            return {
-              label: res.label,
-              imageUrl: `/uploads/${fn}`,
-              position: matched?.position || {
+            // suggested_position = AI's active composition choice; prefer over detected position
+            const pos = matched?.suggested_position ||
+              matched?.position || {
                 top: 0,
                 left: 0,
                 width: 200,
                 height: 200,
-              },
+              };
+            if (matched?.suggested_position) {
+              console.log(
+                `[Compose] "${res.label}" repositioned → ${JSON.stringify(matched.suggested_position)}`,
+              );
+            }
+            return {
+              label: res.label,
+              imageUrl: `/uploads/${fn}`,
+              position: pos,
               z_index: matched?.z_index || 1,
             };
           },

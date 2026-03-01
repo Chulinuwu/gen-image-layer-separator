@@ -362,10 +362,11 @@ export class AIService {
     if (safeZones && safeZones.length > 0) {
       const zoneList = safeZones
         .slice(0, 6)
-        .map(
-          (z, i) =>
-            `  Zone ${i + 1} [${z.label || `zone-${i + 1}`}]: top=${z.top}, left=${z.left}, width=${z.width}, height=${z.height} (area=${z.area})`,
-        )
+        .map((z, i) => {
+          // Heuristic: sqrt(area)/10 → recommended minimum font_size for headline in this zone
+          const minFont = Math.max(40, Math.round(Math.sqrt(z.area) / 10));
+          return `  Zone ${i + 1} [${z.label || `zone-${i + 1}`}]: top=${z.top}, left=${z.left}, width=${z.width}, height=${z.height} (area=${z.area}) → headline font_size ≥ ${minFont}`;
+        })
         .join("\n");
       safeZoneInstruction = `
       ═══════════════════════════════════════
@@ -377,6 +378,12 @@ ${zoneList}
 
       For each text suggestion, set "preferred_zone" to the label of the zone you chose (e.g. "top-left").
       Your position coordinates MUST fall within that zone's boundaries.
+
+      📐 FONT SIZE RULE — SCALE TEXT TO OWN THE SPACE:
+      - Large zones (area > 50000) → headline MUST be font_size ≥ 80. Do NOT use small fonts in big empty zones.
+      - Medium zones (area 20000-50000) → headline ≥ 50.
+      - Small zones (area < 20000) → headline ≥ 30.
+      - NEVER use font_size < 20 for Headline or Body text. Only FinePrint can be below 20.
       ═══════════════════════════════════════
       `;
     }
@@ -437,14 +444,23 @@ ${zoneList}
       
       ${
         mode === "full" || mode === "text"
-          ? `4. COMPONENT LIST: Identify ALL foreground visual elements overlaid on the background.
+          ? `4. COMPONENT COMPOSITION (Active Design Decision):
+         These components will be die-cut PNGs that CAN be repositioned anywhere on the canvas.
          ✅ INCLUDE: Ribbons, banners, price badges, mascots, characters, stickers, person cutouts, product images, logos, icons.
-         ❌ STRICTLY EXCLUDE: Decorative background textures, geometric patterns (hexagons, diamonds, etc.), gradient overlays, template background designs, placeholder color blocks, or any element that IS the background itself. If it looks like it belongs to the background, DO NOT list it as a component.
-         For each component, provide a DETAILED visual description.`
-          : `4. COMPONENT LIST: Identify ALL foreground visual elements overlaid on the background.
+         ❌ STRICTLY EXCLUDE: Decorative background textures, geometric patterns (hexagons, diamonds, etc.), gradient overlays, or any element that IS the background.
+         For EACH component:
+           - Detect its current position in the image (for die-cutting accuracy)
+           - ALSO recommend a 'suggested_position' where it SHOULD GO for best overall composition
+           - Composition rules for suggested_position:
+             * Primary person/character → upper-center or right, tall (height 500-800)
+             * Mascot / secondary → bottom-right corner
+             * Decorative badges/ribbons → overlay on text zone for emphasis
+             * Leave the LEFT column (left 0-400) primarily for text`
+          : `4. COMPONENT COMPOSITION (Active Design Decision):
+         These components will be die-cut PNGs that CAN be repositioned anywhere on the canvas.
          ✅ INCLUDE: Ribbons, banners, price badges, mascots, characters, stickers, person cutouts, product images, logos, icons.
-         ❌ STRICTLY EXCLUDE: Decorative background textures, geometric patterns (hexagons, diamonds, etc.), gradient overlays, template background designs, placeholder color blocks, or any element that IS the background itself. If it looks like it belongs to the background, DO NOT list it as a component.
-         For each component, provide a DETAILED visual description.`
+         ❌ STRICTLY EXCLUDE: Decorative background textures, geometric patterns (hexagons, diamonds, etc.), gradient overlays, or any element that IS the background.
+         For EACH component, detect position + recommend 'suggested_position' for best composition.`
       }
       
       Return the result as a STRICT JSON object:
@@ -501,6 +517,10 @@ ${zoneList}
             "label": "Short label (e.g. 'Thai boy mascot')",
             "description": "Visual description for recreation",
             "position": { "top": 0, "left": 0, "width": 0, "height": 0, "rotation": 0 },
+            "suggested_position": {
+              "top": 0, "left": 0, "width": 0, "height": 0, "rotation": 0,
+              "rationale": "e.g. Moved right to free left column for text. Person spans full height of purple zone."
+            },
             "z_index": 1
           }
         ]
