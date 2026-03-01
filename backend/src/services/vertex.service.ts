@@ -1728,8 +1728,8 @@ ${zoneList}
 
       const maskData = maskOutput.data;
       for (let i = 0; i < maskData.length; i += 4) {
-        // If alpha (i+3) is > threshold, this is foreground we want to REMOVE
-        const isForeground = maskData[i + 3] > 30;
+        // Lower threshold to 5 (was 30) to catch semi-transparent edge/shadow pixels
+        const isForeground = maskData[i + 3] > 5;
         const val = isForeground ? 255 : 0;
         maskData[i] = val; // R
         maskData[i + 1] = val; // G
@@ -1737,6 +1737,8 @@ ${zoneList}
         maskData[i + 3] = 255; // solid mask alpha
       }
 
+      // Dilate the mask: blur then re-threshold to expand white region by ~15px.
+      // This ensures shadow fringe and semi-transparent RMBG edges are fully covered.
       const bwMaskBuffer = await sharp(maskData, {
         raw: {
           width: maskOutput.info.width,
@@ -1744,6 +1746,8 @@ ${zoneList}
           channels: 4,
         },
       })
+        .blur(15) // expand white area by ~15px in all directions
+        .threshold(30) // re-binarize: anything touched by blur > 30 becomes white
         .png()
         .toBuffer();
 
