@@ -1556,6 +1556,119 @@ ${zoneList}
    * converts the alpha mask into a solid Black & White inverted inpaint mask,
    * and sends it to the model.
    */
+  async inpaintBackground(
+    imageBuffer: Buffer,
+    maskedFullImageBuffer: Buffer,
+    analysis: any, // Pass the full analysis object to get background_description
+  ): Promise<{ buffer: Buffer | null }> {
+    try {
+      console.log(
+        "[Inpaint] Generating B&W inpaint mask from RMBG alpha channel...",
+      );
+      // Convert RMBG alpha mask (where subjects have alpha > 0)
+      // to Imagen 3 Inpaint Mask (where regions to REMOVE are White 255, keep are Black 0)
+      const maskOutput = await sharp(maskedFullImageBuffer)
+        .ensureAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+
+      const maskData = maskOutput.data;
+      for (let i = 0; i < maskData.length; i += 4) {
+        // Lower threshold to 5 (was 30) to catch semi-transparent edge/shadow pixels
+        const isForeground = maskData[i + 3] > 5;
+        const val = isForeground ? 255 : 0;
+        maskData[i] = val; // R
+        maskData[i + 1] = val; // G
+        maskData[i + 2] = val; // B
+        maskData[i + 3] = 255; // solid mask alpha
+      }
+
+      // Dilate the mask: blur then re-threshold to expand white region by ~15px.
+      // This ensures shadow fringe and semi-transparent RMBG edges are fully covered.
+      const bwMaskBuffer = await sharp(maskData, {
+        raw: {
+          width: maskOutput.info.width,
+          height: maskOutput.info.height,
+          channels: 4,
+        },
+      })
+        .blur(6) // dilate mask by ~6px to cover edge fringe
+        .threshold(30) // re-binarize after blur
+        .png()
+        .toBuffer();
+
+      const { MaskReferenceImage, RawReferenceImage } =
+        await import("@google/genai");
+
+      const maskRef = new MaskReferenceImage();
+      maskRef.referenceId = 1;
+      maskRef.referenceImage = {
+        imageBytes: bwMaskBuffer.toString("base64"),
+        mimeType: "image/png",
+      };
+      maskRef.config = {
+        maskMode: "MASK_MODE_USER_PROVIDED" as any,
+      };
+
+      const rawRef = new RawReferenceImage();
+      rawRef.referenceId = 2;
+      rawRef.referenceImage = {
+        imageBytes: imageBuffer.toString("base64"),
+        mimeType: "image/png",
+      };
+
+      const editModel =
+        process.env.IMAGEN_EDIT_ENDPOINT || "imagen-3.0-capability-001";
+      console.log(
+        `[Inpaint] Calling Imagen 3 (${editModel}) context: inpaint_removal`,
+      );
+
+      const bgDescription =
+        analysis.background_description ||
+        "a clean empty background matching the surrounding area";
+      // Focus prompt on WHAT TO FILL (background texture) — not on what to avoid.
+      // Negative framing ("don't add people") anchors the model on people.
+      const bgPrompt = [
+        `Fill the masked region with only the background.`,
+        `Background: ${bgDescription}`,
+        `Match the exact colors, textures, lighting, and patterns of the visible background.`,
+        `The result must look like the region was always empty — just background.`,
+      ].join(" ");
+
+      const response = await this.client.models.editImage({
+        model: editModel,
+        prompt: bgPrompt,
+        referenceImages: [maskRef, rawRef],
+        config: {
+          editMode: "EDIT_MODE_INPAINT_REMOVAL" as any,
+          numberOfImages: 1,
+          outputMimeType: "image/png",
+          personGeneration: "ALLOW_ALL" as any,
+        },
+      });
+
+      if (
+        response.generatedImages &&
+        response.generatedImages.length > 0 &&
+        response.generatedImages[0].image
+      ) {
+        const imageBytes = response.generatedImages[0].image.imageBytes;
+        if (!imageBytes) {
+          console.warn("[Inpaint] editImage returned image without imageBytes");
+          return { buffer: null };
+        }
+        console.log("[Inpaint] ✅ Successfully inpainted background");
+        return { buffer: Buffer.from(imageBytes, "base64") };
+      }
+
+      console.warn("[Inpaint] editImage returned no image data");
+      return { buffer: null };
+    } catch (err) {
+      console.error("[Inpaint] Error during editImage:", err);
+      return { buffer: null };
+    }
+  }
+
   /**
    * Run RMBG-2.0 and detect Bounding Boxes of subjects.
    * This is used by the controller to identify "No-Go Zones".
@@ -1708,107 +1821,6 @@ ${zoneList}
     }
 
     return results;
-  }
-
-  async inpaintBackground(
-    imageBuffer: Buffer,
-    maskedFullImageBuffer: Buffer,
-    prompt: string,
-  ): Promise<{ buffer: Buffer | null }> {
-    try {
-      console.log(
-        "[Inpaint] Generating B&W inpaint mask from RMBG alpha channel...",
-      );
-      // Convert RMBG alpha mask (where subjects have alpha > 0)
-      // to Imagen 3 Inpaint Mask (where regions to REMOVE are White 255, keep are Black 0)
-      const maskOutput = await sharp(maskedFullImageBuffer)
-        .ensureAlpha()
-        .raw()
-        .toBuffer({ resolveWithObject: true });
-
-      const maskData = maskOutput.data;
-      for (let i = 0; i < maskData.length; i += 4) {
-        // Lower threshold to 5 (was 30) to catch semi-transparent edge/shadow pixels
-        const isForeground = maskData[i + 3] > 5;
-        const val = isForeground ? 255 : 0;
-        maskData[i] = val; // R
-        maskData[i + 1] = val; // G
-        maskData[i + 2] = val; // B
-        maskData[i + 3] = 255; // solid mask alpha
-      }
-
-      // Dilate the mask: blur then re-threshold to expand white region by ~15px.
-      // This ensures shadow fringe and semi-transparent RMBG edges are fully covered.
-      const bwMaskBuffer = await sharp(maskData, {
-        raw: {
-          width: maskOutput.info.width,
-          height: maskOutput.info.height,
-          channels: 4,
-        },
-      })
-        .blur(15) // expand white area by ~15px in all directions
-        .threshold(30) // re-binarize: anything touched by blur > 30 becomes white
-        .png()
-        .toBuffer();
-
-      const { MaskReferenceImage, RawReferenceImage } =
-        await import("@google/genai");
-
-      const maskRef = new MaskReferenceImage();
-      maskRef.referenceId = 1;
-      maskRef.referenceImage = {
-        imageBytes: bwMaskBuffer.toString("base64"),
-        mimeType: "image/png",
-      };
-      maskRef.config = {
-        maskMode: "MASK_MODE_USER_PROVIDED" as any,
-      };
-
-      const rawRef = new RawReferenceImage();
-      rawRef.referenceId = 2;
-      rawRef.referenceImage = {
-        imageBytes: imageBuffer.toString("base64"),
-        mimeType: "image/png",
-      };
-
-      const editModel =
-        process.env.IMAGEN_EDIT_ENDPOINT || "imagen-3.0-capability-001";
-      console.log(
-        `[Inpaint] Calling Imagen 3 (${editModel}) context: inpaint_removal`,
-      );
-
-      const response = await this.client.models.editImage({
-        model: editModel,
-        prompt: prompt,
-        referenceImages: [maskRef, rawRef],
-        config: {
-          editMode: "EDIT_MODE_INPAINT_REMOVAL" as any,
-          numberOfImages: 1,
-          outputMimeType: "image/png",
-          personGeneration: "ALLOW_ALL" as any,
-        },
-      });
-
-      if (
-        response.generatedImages &&
-        response.generatedImages.length > 0 &&
-        response.generatedImages[0].image
-      ) {
-        const imageBytes = response.generatedImages[0].image.imageBytes;
-        if (!imageBytes) {
-          console.warn("[Inpaint] editImage returned image without imageBytes");
-          return { buffer: null };
-        }
-        console.log("[Inpaint] ✅ Successfully inpainted background");
-        return { buffer: Buffer.from(imageBytes, "base64") };
-      }
-
-      console.warn("[Inpaint] editImage returned no image data");
-      return { buffer: null };
-    } catch (err) {
-      console.error("[Inpaint] Error during editImage:", err);
-      return { buffer: null };
-    }
   }
 
   /**

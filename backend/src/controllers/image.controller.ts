@@ -987,27 +987,14 @@ export const createCampaign = async (req: Request, res: Response) => {
         if (ratio > 1.2) aspect_ratio = "4:3";
         else if (ratio >= 0.8) aspect_ratio = "1:1";
 
-        const bgDescription =
-          analysis.background_description || "the same background scene";
-        const bgPrompt = [
-          `Seamlessly fill the masked region with the background that surrounds it.`,
-          `Background context: ${bgDescription}`,
-          `RULES:`,
-          `- Match the EXACT colors, textures, lighting, and atmosphere of the surrounding background.`,
-          `- Do NOT add any people, characters, animals, or new objects.`,
-          `- Do NOT change any part of the image outside the masked region.`,
-          `- The filled area must be completely clean with no ghosting, shadows, or remnants of the removed subjects.`,
-          `- Preserve the existing background pattern (hexagons, gradients, etc.) if visible near the masked area.`,
-        ].join(" ");
-
         let bgBufferedResponse: Buffer | null = null;
 
         if (fullImageAlphaMask) {
-          // Use True Inpainting with the Alpha Mask
+          // Use True Inpainting with the Alpha Mask — prompt is built inside inpaintBackground
           const inpaintRes = await vertexService.inpaintBackground(
             imageBuffer,
             fullImageAlphaMask,
-            bgPrompt,
+            analysis,
           );
           bgBufferedResponse = inpaintRes.buffer;
         }
