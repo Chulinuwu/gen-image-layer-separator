@@ -618,61 +618,31 @@ export const createCampaign = async (req: Request, res: Response) => {
       );
     }
 
-    // ───── Step 1B: AI Suggest Text + Components (now with accurate bboxes) ─────
+    // ───── Step 1B: Pass 1 — Art Director Component Placement ─────────────────
     sendSSE("progress", {
       step: "initial_analysis",
-      message: "AI is planning layout with pixel-accurate subject positions...",
+      message: "AI art director is composing component placement...",
     });
 
-    const analysis = await vertexService.suggestCampaignLayout(
+    const componentAnalysis = await vertexService.suggestCampaignLayout(
       imageBuffer,
       mimeType,
       targetText,
-      mode || "full",
+      "only_bg_comp",
       parsedNoGoZones,
     );
+    let componentSuggestions = componentAnalysis.components || [];
+    const artDirectorTextZone = componentAnalysis.composition_text_zone || null;
 
-    let textSuggestions = analysis.suggestions || [];
-    let componentSuggestions = analysis.components || [];
+    // textSuggestions will be populated in Pass 2 (after die-cut)
+    let textSuggestions: any[] = [];
 
-    // FORCE: Strip text if mode is 'only_bg_comp'
-    if (mode === "only_bg_comp" && textSuggestions.length > 0) {
-      console.warn(
-        `[WARNING] AI returned ${textSuggestions.length} text suggestions in only_bg_comp mode! Stripping them.`,
-      );
-      textSuggestions = [];
-    }
-
-    // ── POST-PROCESS: Clamp text right/bottom edges to no-go zone boundaries ──
-    // AI often returns text elements that are technically within a safe column
-    // but whose computed width bleeds into the subject area.
-    // Code-clamp ensures no text element's right edge ever exceeds the leftmost
-    // no-go zone boundary that is to the right of the text's left edge.
-    if (textSuggestions.length > 0 && parsedNoGoZones.length > 0) {
-      textSuggestions = textSuggestions.map((s: any) => {
-        if (!s.position) return s;
-        const textLeft = s.position.left || 0;
-        const textRight = textLeft + (s.position.width || 200);
-
-        // Find the nearest no-go zone wall to the right of this text's left edge
-        let minNoGoLeft = 970; // max allowed right edge (safe margin from border)
-        for (const zone of parsedNoGoZones) {
-          const zLeft = zone.area?.left ?? zone.left ?? 1000;
-          if (zLeft > textLeft && zLeft < minNoGoLeft) {
-            minNoGoLeft = zLeft - 10; // 10px safety margin
-          }
-        }
-
-        if (textRight > minNoGoLeft) {
-          const clampedWidth = Math.max(50, minNoGoLeft - textLeft);
-          console.log(
-            `[TextClamp] "${(s.part || "").substring(0, 20)}..." width ${s.position.width} → ${clampedWidth} (right was ${textRight}, clamped to ${minNoGoLeft})`,
-          );
-          return { ...s, position: { ...s.position, width: clampedWidth } };
-        }
-        return s;
-      });
-    }
+    // Mutable analysis object used throughout for no_go_zones, metadata, and inpainting context
+    const analysis: any = {
+      ...componentAnalysis,
+      suggestions: [],
+      components: componentSuggestions,
+    };
 
     // Helper: enforce readable contrast — if text is on dark bg and color is dark, swap to light
     // Uses position-based heuristic: lower half (top > 450) of Thai ad templates → usually dark bg
@@ -699,25 +669,6 @@ export const createCampaign = async (req: Request, res: Response) => {
       }
       return colorHex;
     };
-
-    // Safety net: force Kanit + enforce contrast on every text suggestion
-    if (textSuggestions.length > 0) {
-      textSuggestions = textSuggestions.map((s: any) => ({
-        ...s,
-        style: {
-          ...s.style,
-          font_family: "Kanit",
-          color_hex: enforceContrast(s.style?.color_hex, s.position),
-        },
-      }));
-    }
-
-    sendSSE("progress", {
-      step: "initial_analysis_complete",
-      message: `Found ${textSuggestions.length} text + ${componentSuggestions.length} components`,
-      textCount: textSuggestions.length,
-      componentCount: componentSuggestions.length,
-    });
 
     // ════════════════════════════════════════════════════════════════
     // Step 1.5 + 2: INPAINT BG + DIE-CUT COMPONENTS (parallel, BEFORE refinement)
@@ -880,6 +831,7 @@ export const createCampaign = async (req: Request, res: Response) => {
     );
 
     // --- Run die-cut FIRST, so we get the full-image RMBG mask for true inpainting ---
+    let strokeBboxes: Array<{ label: string; top: number; left: number; width: number; height: number }> = [];
     let fullImageAlphaMask: Buffer | null = null;
     if (componentSuggestions.length > 0) {
       // Task A: Generate die-cut components
@@ -945,13 +897,6 @@ export const createCampaign = async (req: Request, res: Response) => {
 
         // ── SAFE ZONE COMPUTATION from die-cut stroke bboxes ──────────────────
         // Extract pixel-accurate bboxes from component PNGs, then compute safe zones
-        let strokeBboxes: Array<{
-          label: string;
-          top: number;
-          left: number;
-          width: number;
-          height: number;
-        }> = [];
         try {
           const diecutWithPositions = diecutResults.map(
             (res: any, idx: number) => ({
@@ -998,44 +943,8 @@ export const createCampaign = async (req: Request, res: Response) => {
           message: `Computed ${safeZones.length} safe placement zones from component boundaries`,
         });
 
-        // ── RE-RUN LAYOUT with safe zones (text placement within verified zones) ──
-        if (mode !== "only_bg_comp" && safeZones.length > 0 && targetText) {
-          sendSSE("progress", {
-            step: "layout_with_safe_zones",
-            message: "Placing text in verified safe zones...",
-          });
-
-          try {
-            const refinedAnalysis = await vertexService.suggestCampaignLayout(
-              imageBuffer,
-              mimeType,
-              targetText,
-              mode || "full",
-              parsedNoGoZones,
-              safeZones,
-            );
-
-            if (refinedAnalysis.suggestions?.length > 0) {
-              const imgMeta2 = await sharp(imageBuffer).metadata();
-              const finalTextLayers = assignTextToZones(
-                refinedAnalysis.suggestions,
-                safeZones,
-                imgMeta2.width || 1000,
-                imgMeta2.height || 1000,
-              );
-              textSuggestions = finalTextLayers;
-              safeZonePlacementDone = true;
-              console.log(
-                `[SafeZone] Placed ${textSuggestions.length} text layers in safe zones`,
-              );
-            }
-          } catch (szErr) {
-            console.warn(
-              "[SafeZone] Safe zone layout failed, keeping initial layout:",
-              szErr,
-            );
-          }
-        }
+        // NOTE: Text layout (Pass 2) now runs AFTER the die-cut block closes,
+        // so strokeBboxes and visualComponents are fully available.
       } catch (err) {
         console.error("[Build-Up] Die-cut failed:", err);
         sendSSE("progress", {
@@ -1155,6 +1064,101 @@ export const createCampaign = async (req: Request, res: Response) => {
         components: componentSuggestions,
         visualComponents,
       });
+    }
+
+    // ───── Step 1C: Pass 2 — Text Layout Around Fixed Components ──────────────
+    if (mode !== "only_bg_comp") {
+      sendSSE("progress", {
+        step: "text_layout",
+        message: "AI is fitting text around the composed layout...",
+      });
+
+      // Build no-go zones for text: prefer accurate die-cut stroke bboxes, fallback to RMBG bboxes
+      const textNoGoZones = strokeBboxes.length > 0
+        ? strokeBboxes.map(b => ({
+            label: b.label,
+            area: { top: b.top, left: b.left, width: b.width, height: b.height },
+          }))
+        : parsedNoGoZones;
+
+      // Tell the AI where components are (use their final suggested_position or position)
+      const fixedPositions = visualComponents.map(c => ({
+        label: c.label,
+        top: c.position.top || 0,
+        left: c.position.left || 0,
+        width: c.position.width || 200,
+        height: c.position.height || 200,
+      }));
+
+      try {
+        const textAnalysis = await vertexService.suggestCampaignLayout(
+          imageBuffer,
+          mimeType,
+          targetText,
+          "text",
+          textNoGoZones,
+          [], // safeZones — not used for text pass
+          fixedPositions,
+          artDirectorTextZone || undefined,
+        );
+        textSuggestions = textAnalysis.suggestions || [];
+        // Sync Pass 2 no_go_zones into the shared analysis object for the refinement loop
+        if (textAnalysis.no_go_zones) {
+          analysis.no_go_zones = textAnalysis.no_go_zones;
+        }
+      } catch (pass2Err) {
+        console.warn("[Pass2] Text layout failed, proceeding with empty text suggestions:", pass2Err);
+      }
+
+      sendSSE("progress", {
+        step: "initial_analysis_complete",
+        message: `Found ${textSuggestions.length} text + ${visualComponents.length} components`,
+        textCount: textSuggestions.length,
+        componentCount: visualComponents.length,
+      });
+    }
+
+    // ── POST-PROCESS: Clamp text right/bottom edges to no-go zone boundaries ──
+    // AI often returns text elements that are technically within a safe column
+    // but whose computed width bleeds into the subject area.
+    // Code-clamp ensures no text element's right edge ever exceeds the leftmost
+    // no-go zone boundary that is to the right of the text's left edge.
+    if (textSuggestions.length > 0 && parsedNoGoZones.length > 0) {
+      textSuggestions = textSuggestions.map((s: any) => {
+        if (!s.position) return s;
+        const textLeft = s.position.left || 0;
+        const textRight = textLeft + (s.position.width || 200);
+
+        // Find the nearest no-go zone wall to the right of this text's left edge
+        let minNoGoLeft = 970; // max allowed right edge (safe margin from border)
+        for (const zone of parsedNoGoZones) {
+          const zLeft = zone.area?.left ?? zone.left ?? 1000;
+          if (zLeft > textLeft && zLeft < minNoGoLeft) {
+            minNoGoLeft = zLeft - 10; // 10px safety margin
+          }
+        }
+
+        if (textRight > minNoGoLeft) {
+          const clampedWidth = Math.max(50, minNoGoLeft - textLeft);
+          console.log(
+            `[TextClamp] "${(s.part || "").substring(0, 20)}..." width ${s.position.width} → ${clampedWidth} (right was ${textRight}, clamped to ${minNoGoLeft})`,
+          );
+          return { ...s, position: { ...s.position, width: clampedWidth } };
+        }
+        return s;
+      });
+    }
+
+    // Safety net: force Kanit + enforce contrast on every text suggestion
+    if (textSuggestions.length > 0) {
+      textSuggestions = textSuggestions.map((s: any) => ({
+        ...s,
+        style: {
+          ...s.style,
+          font_family: "Kanit",
+          color_hex: enforceContrast(s.style?.color_hex, s.position),
+        },
+      }));
     }
 
     // ════════════════════════════════════════════════════════════════
