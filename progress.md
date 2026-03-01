@@ -1,5 +1,53 @@
 # Progress Log — gen-image-layer-separator
 
+## 2026-03-01 Session (Safe Zone Placement)
+
+### Summary
+
+Replaced the unreliable AI-driven spatial text placement with a hybrid safe zone system. Code now computes pixel-precise safe zones from die-cut component strokes, and AI places text within those verified zones. Refinement loop reduced from 3→1 iteration (style-only).
+
+### Major Changes
+
+#### 1. Safe Zone Utilities (`backend/src/utils/safeZones.ts`)
+
+- `computeSafeZones(obstacles)` — subtracts no-go bboxes from full canvas, returns sorted safe rectangles
+- `assignTextToZones(suggestions, zones)` — deterministically assigns text to safe zones with stacking
+- 9 unit tests passing (`safeZones.test.ts`)
+
+#### 2. Stroke Bbox Extraction (`vertex.service.ts`)
+
+- `extractComponentStrokeBboxes(components)` — scans alpha channel of die-cut PNGs for pixel-precise bounding boxes
+- Maps local pixel coords back to 0-1000 normalized source image coords
+
+#### 3. Safe Zone Pipeline in Controller (`image.controller.ts`)
+
+- After die-cut: extract stroke bboxes → compute safe zones → re-run layout with safe zones → assign text to zones
+- `MAX_ITERATIONS` reduced 3→1 (safe zones make first round reliable)
+
+#### 4. Style-Only Critique (`vertex.service.ts`)
+
+- `critiqueLayout()` now accepts `styleOnly` flag — skips position checks when safe zones guarantee placement
+- Focuses on color contrast, shadow readability, visual hierarchy
+
+#### 5. Thai Text Width Fix
+
+- Changed char width multiplier from 0.55→0.6 in both controller `computeTextBBox` functions
+- Consistent with `safeZones.ts` `computeTextSize()`
+
+### State
+
+- **Backend:** All code changes complete ✅
+- **Tests:** 9/9 safe zone tests passing ✅
+- **TypeScript:** Clean compilation ✅
+- **Integration:** Needs end-to-end test with real image upload
+
+### Design Doc
+
+- `docs/plans/2026-03-01-safe-zone-placement-design.md` (approved)
+- `docs/plans/2026-03-01-safe-zone-placement-plan.md` (9 tasks, all complete)
+
+---
+
 ## 2026-03-01 Session (Final)
 
 ### Summary
