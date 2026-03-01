@@ -62,13 +62,13 @@
             <span>INITIALIZING AI CREATIVE SUITE...</span>
           </div>
 
-          <!-- Live text overlay (only when preview is ready) -->
+          <!-- Live text overlay: drop-shadow outline when debug ON follows glyph shape -->
           <template v-if="currentPreviewUrl">
             <div
               v-for="(t, idx) in liveTextLayers"
               :key="'lt' + idx"
               class="live-text-overlay"
-              :style="getTextStyle(t)"
+              :style="getTextStyle(t, showDebugBoxes)"
             >
               {{ t.part }}
             </div>
@@ -81,17 +81,6 @@
               class="live-component-overlay"
               :style="getComponentStyle(c, showDebugBoxes)"
             />
-
-            <!-- Debug bbox overlays: blue rect for TEXT layers only -->
-            <template v-if="showDebugBoxes">
-              <div
-                v-for="(t, idx) in liveTextLayers"
-                :key="'tb' + idx"
-                class="debug-bbox"
-                :style="getBboxStyle(t.position, '#3B82F6')"
-                :title="t.part"
-              />
-            </template>
           </template>
         </div>
       </div>
@@ -263,7 +252,7 @@ const KANIT_TOKENS: Record<
   number: { weight: "900", letterSpacing: "-1px", lineHeight: "1.0" },
 };
 
-const getTextStyle = (t: any) => {
+const getTextStyle = (t: any, debugMode = false) => {
   const pos = t.position || {};
   const style = t.style || {};
   const hierarchyKey = (t.hierarchy || "body").toLowerCase();
@@ -284,6 +273,11 @@ const getTextStyle = (t: any) => {
     ? `0 0 2px ${style.stroke_hex}, 0 0 5px ${style.stroke_hex}, 0 0 1px ${style.stroke_hex}`
     : autoShadow;
 
+  // Debug: drop-shadow outlines follow actual glyph shapes (not the container box)
+  const debugFilter = debugMode
+    ? "drop-shadow(1px 0 0 #3B82F6) drop-shadow(-1px 0 0 #3B82F6) drop-shadow(0 1px 0 #3B82F6) drop-shadow(0 -1px 0 #3B82F6)"
+    : undefined;
+
   return {
     position: "absolute" as const,
     top: pos.top / 10 + "%",
@@ -300,6 +294,7 @@ const getTextStyle = (t: any) => {
     lineHeight: tokens.lineHeight,
     transform: pos.rotation ? `rotate(${pos.rotation}deg)` : undefined,
     opacity: hierarchyKey === "fineprint" ? 0.85 : 1,
+    filter: debugFilter,
   };
 };
 
@@ -321,19 +316,6 @@ const getComponentStyle = (c: any, debugMode = false) => {
       : undefined,
   };
 };
-
-// Returns border-only box style for debug overlay (no fill — don't block image)
-const getBboxStyle = (pos: any, color: string) => ({
-  position: "absolute" as const,
-  top: (pos?.top ?? 0) / 10 + "%",
-  left: (pos?.left ?? 0) / 10 + "%",
-  width: (pos?.width ?? 0) / 10 + "%",
-  height: (pos?.height ?? 0) / 10 + "%",
-  border: `2px solid ${color}`,
-  boxSizing: "border-box" as const,
-  pointerEvents: "none" as const,
-  zIndex: 30,
-});
 
 const progressPercent = computed(() => {
   return (currentIteration.value / maxIterations.value) * 100;
