@@ -397,12 +397,10 @@ ${zoneList}
       ═══════════════════════════════════════
       TASK 0: PRECISION OBJECT DETECTION
       ═══════════════════════════════════════
-      1. Pinpoint ALL people and characters in the image.
-      2. Create tight bounding boxes for each significant body part.
+      1. Pinpoint ALL distinct people and characters in the image as separate subjects.
+      2. For EACH subject, create EXACTLY ONE tight full-body bounding box — do NOT split one person/character into multiple boxes (no separate "head", "upper body", "legs" boxes).
       3. Use the 0-1000 coordinate scale to specify coordinates accurately.
-      4. For mascots: Head area, Body area.
-      5. Each zone should have its own tight bounding box (top, left, width, height in 0-1000).
-      6. Do NOT guess. Use the visible image to estimate positions.
+      4. Do NOT guess. Use the visible image to estimate positions.
 
       ═══════════════════════════════════════
       

@@ -800,10 +800,36 @@ export const createCampaign = async (req: Request, res: Response) => {
     };
     const deduped: any[] = [];
     for (const comp of componentSuggestions) {
-      const isDuplicate = deduped.some((kept) => computeIoU(kept, comp) > 0.7);
+      const pos = comp.position || {};
+      const compArea = (pos.width || 0) * (pos.height || 0);
+
+      const isDuplicate = deduped.some((kept) => {
+        // Standard IoU check
+        if (computeIoU(kept, comp) > 0.7) return true;
+
+        // Containment check: if one bbox is mostly inside the other, keep the larger one.
+        // Handles case where AI returns "woman full body" + "woman upper body" for the same person.
+        const kPos = kept.position || {};
+        const kArea = (kPos.width || 0) * (kPos.height || 0);
+        if (kArea === 0 || compArea === 0) return false;
+
+        const xA = Math.max(pos.left, kPos.left);
+        const yA = Math.max(pos.top, kPos.top);
+        const xB = Math.min(pos.left + pos.width, kPos.left + kPos.width);
+        const yB = Math.min(pos.top + pos.height, kPos.top + kPos.height);
+        if (xB <= xA || yB <= yA) return false;
+        const inter = (xB - xA) * (yB - yA);
+
+        // If smaller bbox is >60% contained within larger bbox → duplicate
+        const smallerArea = Math.min(compArea, kArea);
+        if (inter / smallerArea > 0.6) return true;
+
+        return false;
+      });
+
       if (isDuplicate) {
         console.log(
-          `[Build-Up] 🔁 Removed overlapping duplicate: "${comp.label}"`,
+          `[Build-Up] 🔁 Removed overlapping/contained duplicate: "${comp.label}"`,
         );
       } else {
         deduped.push(comp);
@@ -1126,10 +1152,52 @@ export const createCampaign = async (req: Request, res: Response) => {
           };
         };
 
+        // 1. Pinpoint ALL distinct people and characters in the image as separate subjects.
+        // 2. For EACH subject, create EXACTLY ONE tight full-body bounding box — do NOT split one person/character into multiple boxes (e.g. no separate "head", "upper body", "legs").
+        // 3. Use the 0-1000 coordinate scale to specify coordinates accurately.
+        // 4. Do NOT guess. Use the visible image to estimate positions.
+        // Add containment dedup logic for no-go zones (after IoU dedup, if any)
+        const dedupedNoGoZones = [];
+        for (const zoneA of allNoGoZones) {
+          let isContained = false;
+          const aTop = zoneA.area?.top ?? zoneA.top ?? 0;
+          const aLeft = zoneA.area?.left ?? zoneA.left ?? 0;
+          const aW = zoneA.area?.width ?? zoneA.width ?? 0;
+          const aH = zoneA.area?.height ?? zoneA.height ?? 0;
+          const aRight = aLeft + aW;
+          const aBottom = aTop + aH;
+
+          for (const zoneB of allNoGoZones) {
+            if (zoneA === zoneB) continue; // Don't compare with self
+
+            const bTop = zoneB.area?.top ?? zoneB.top ?? 0;
+            const bLeft = zoneB.area?.left ?? zoneB.left ?? 0;
+            const bW = zoneB.area?.width ?? zoneB.width ?? 0;
+            const bH = zoneB.area?.height ?? zoneB.height ?? 0;
+            const bRight = bLeft + bW;
+            const bBottom = bTop + bH;
+
+            // Check if zoneA is completely contained within zoneB
+            if (
+              aLeft >= bLeft &&
+              aRight <= bRight &&
+              aTop >= bTop &&
+              aBottom <= bBottom
+            ) {
+              isContained = true;
+              break;
+            }
+          }
+          if (!isContained) {
+            dedupedNoGoZones.push(zoneA);
+          }
+        }
+
         for (const s of textSuggestions) {
           if (!s.position) continue;
           const t = computeTextBBox0(s);
-          for (const zone of allNoGoZones) {
+          for (const zone of dedupedNoGoZones) {
+            // Use deduped zones here
             const zTop = zone.area?.top ?? zone.top ?? 0;
             const zLeft = zone.area?.left ?? zone.left ?? 0;
             const zW = zone.area?.width ?? zone.width ?? 0;
