@@ -1574,26 +1574,24 @@ ${zoneList}
       const maskW = maskOutput.info.width;
       const maskH = maskOutput.info.height;
 
-      // Binarize: alpha > 15 → white (foreground), else black.
-      // Threshold 15 (not 5) to skip pure noise pixels at feet-floor contacts
-      // while still catching real semi-transparent shadow edges.
+      // Binarize: alpha > 5 → white (foreground to remove), else black (background to keep).
+      // Threshold 5 catches semi-transparent edge pixels (shadows, hair fringes) from RMBG.
       for (let i = 0; i < maskData.length; i += 4) {
-        const val = maskData[i + 3] > 15 ? 255 : 0;
+        const val = maskData[i + 3] > 5 ? 255 : 0;
         maskData[i] = val;
         maskData[i + 1] = val;
         maskData[i + 2] = val;
         maskData[i + 3] = 255;
       }
 
-      // Dilate with blur(12) + low re-threshold(15).
-      // blur(12) expands the white region by ~12px in ALL directions (including downward
-      // toward the shadow zone) without directional bias or cross-zone bleed.
-      // Low re-threshold(15) ensures the dilated fringe is kept wide.
+      // Dilate: blur(6) expands white region ~6px to capture shadow fringe edges.
+      // Keep blur SMALL — a large blur (>8px) causes Imagen to treat the mask as
+      // "open canvas" and hallucinate new subjects into the enlarged empty region.
       const bwMaskBuffer = await sharp(maskData, {
         raw: { width: maskW, height: maskH, channels: 4 },
       })
-        .blur(12)
-        .threshold(15)
+        .blur(6)
+        .threshold(30)
         .png()
         .toBuffer();
 
