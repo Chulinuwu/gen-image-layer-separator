@@ -1571,27 +1571,50 @@ ${zoneList}
         .toBuffer({ resolveWithObject: true });
 
       const maskData = maskOutput.data;
+      const maskW = maskOutput.info.width;
+      const maskH = maskOutput.info.height;
+
+      // Step 1: Binarize — foreground (alpha > 5) → white, background → black
       for (let i = 0; i < maskData.length; i += 4) {
-        // Lower threshold to 5 (was 30) to catch semi-transparent edge/shadow pixels
         const isForeground = maskData[i + 3] > 5;
         const val = isForeground ? 255 : 0;
-        maskData[i] = val; // R
-        maskData[i + 1] = val; // G
-        maskData[i + 2] = val; // B
-        maskData[i + 3] = 255; // solid mask alpha
+        maskData[i] = val;
+        maskData[i + 1] = val;
+        maskData[i + 2] = val;
+        maskData[i + 3] = 255;
       }
 
-      // Dilate the mask: blur then re-threshold to expand white region by ~15px.
-      // This ensures shadow fringe and semi-transparent RMBG edges are fully covered.
+      // Step 2: Extend mask DOWNWARD per-column to cover cast shadows.
+      // Cast shadows fall BELOW subjects and have alpha≈0 in RMBG output,
+      // so they're not caught by step 1. We scan each X column for the lowest
+      // white pixel and paint white for an extra 8% of image height below it.
+      const shadowExtendPx = Math.round(maskH * 0.08);
+      for (let x = 0; x < maskW; x++) {
+        let bottomY = -1;
+        for (let y = maskH - 1; y >= 0; y--) {
+          if (maskData[(y * maskW + x) * 4] === 255) {
+            bottomY = y;
+            break;
+          }
+        }
+        if (bottomY >= 0) {
+          const extendTo = Math.min(bottomY + shadowExtendPx, maskH - 1);
+          for (let y = bottomY + 1; y <= extendTo; y++) {
+            const idx = (y * maskW + x) * 4;
+            maskData[idx] = 255;
+            maskData[idx + 1] = 255;
+            maskData[idx + 2] = 255;
+            maskData[idx + 3] = 255;
+          }
+        }
+      }
+
+      // Step 3: Blur + re-threshold to smooth edges of the expanded mask
       const bwMaskBuffer = await sharp(maskData, {
-        raw: {
-          width: maskOutput.info.width,
-          height: maskOutput.info.height,
-          channels: 4,
-        },
+        raw: { width: maskW, height: maskH, channels: 4 },
       })
-        .blur(6) // dilate mask by ~6px to cover edge fringe
-        .threshold(30) // re-binarize after blur
+        .blur(6) // smooth expanded edges
+        .threshold(30) // re-binarize
         .png()
         .toBuffer();
 
