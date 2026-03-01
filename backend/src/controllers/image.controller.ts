@@ -549,6 +549,7 @@ export const createCampaign = async (req: Request, res: Response) => {
     if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
     const refFilename = `ref-${Date.now()}.png`;
+    const refImageUrl = `/uploads/${refFilename}`;
     fs.writeFileSync(path.join(uploadDir, refFilename), imageBuffer);
 
     // Setup SSE
@@ -919,22 +920,17 @@ export const createCampaign = async (req: Request, res: Response) => {
             message: "Background cleaned!",
           });
         } else {
-          // Imagen inpaint failed — canvas will use original image as background
-          // (intentionally no Gemini fallback: it generates grid artifacts)
-          console.warn(
-            "[Build-Up] Inpaint returned null — canvas will use original image as BG",
-          );
-          sendSSE("progress", {
-            step: "inpaint_skipped",
+          sendSSE("background_ready", {
+            previewUrl: refImageUrl,
             message:
               "⚠️ Background inpainting could not complete. Using original image.",
           });
         }
       } catch (err) {
         console.error("[Build-Up] BG inpaint failed:", err);
-        sendSSE("progress", {
-          step: "inpaint_error",
-          message: "⚠️ Background cleaning failed.",
+        sendSSE("background_ready", {
+          previewUrl: refImageUrl,
+          message: "⚠️ Background cleaning failed. Using original image.",
         });
       }
 
@@ -1069,6 +1065,9 @@ export const createCampaign = async (req: Request, res: Response) => {
           : lastCritique.status !== "PASS")
       ) {
         currentIteration++;
+        console.log(
+          `\n[Refinement] 🔄 Iteration ${currentIteration}/${MAX_ITERATIONS} starting...`,
+        );
 
         sendSSE("iteration_start", {
           iteration: currentIteration,

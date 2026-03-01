@@ -16,6 +16,19 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Simple Request Logger
+app.use((req, res, next) => {
+  const start = Date.now();
+  console.log(`[${new Date().toISOString()}] ➡️  ${req.method} ${req.url}`);
+  res.on("finish", () => {
+    const duration = Date.now() - start;
+    console.log(
+      `[${new Date().toISOString()}] 🚀 ${req.method} ${req.url} - ${res.statusCode} (${duration}ms)`,
+    );
+  });
+  next();
+});
+
 // Static files (for uploads and generated assets)
 app.use(
   "/uploads",
@@ -39,8 +52,18 @@ app.get("/", (req: Request, res: Response) => {
 });
 
 app.listen(port, () => {
-  console.log(`⚡️[server]: Backend is running at http://localhost:${port}`);
-  // Pre-warm RMBG-2.0 model in the background so Branch B never causes
-  // a 30s+ first-request stall that drops SSE connections.
-  vertexService.warmupRMBG2().catch(() => {});
+  console.log(`\n──────────────────────────────────────────────────`);
+  console.log(`⚡️ [server]: Backend is running at http://localhost:${port}`);
+  console.log(`📡 [server]: Watching for requests...`);
+  console.log(`──────────────────────────────────────────────────\n`);
+
+  // Pre-warm RMBG-2.0 model in the background
+  vertexService
+    .warmupRMBG2()
+    .then(() => {
+      console.log(`\n✨ [ML] RMBG-2.0 system is ready and idle.`);
+    })
+    .catch((err) => {
+      console.error(`\n❌ [ML] Warmup failed:`, err);
+    });
 });

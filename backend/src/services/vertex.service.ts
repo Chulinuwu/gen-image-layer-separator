@@ -1613,11 +1613,7 @@ export class AIService {
         .png()
         .toBuffer();
 
-      console.log(
-        `[Inpaint] Calling Imagen 3 editImage (EDIT_MODE_INPAINT_REMOVAL)...`,
-      );
-
-      const { MaskReferenceMode, MaskReferenceImage, RawReferenceImage } =
+      const { MaskReferenceImage, RawReferenceImage } =
         await import("@google/genai");
 
       const maskRef = new MaskReferenceImage();
@@ -1627,7 +1623,7 @@ export class AIService {
         mimeType: "image/png",
       };
       maskRef.config = {
-        maskMode: MaskReferenceMode.MASK_MODE_USER_PROVIDED,
+        maskMode: "MASK_MODE_USER_PROVIDED" as any,
       };
 
       const rawRef = new RawReferenceImage();
@@ -1637,8 +1633,14 @@ export class AIService {
         mimeType: "image/png",
       };
 
+      const editModel =
+        process.env.IMAGEN_EDIT_ENDPOINT || "imagen-3.0-capability-001";
+      console.log(
+        `[Inpaint] Calling Imagen 3 (${editModel}) context: inpaint_removal`,
+      );
+
       const response = await this.client.models.editImage({
-        model: process.env.IMAGEN_ENDPOINT || "imagen-4.0-fast-generate-001",
+        model: editModel,
         prompt: prompt,
         referenceImages: [maskRef, rawRef],
         config: {
@@ -1863,7 +1865,8 @@ export class AIService {
               const { AutoModel, AutoProcessor, env } =
                 await import("@huggingface/transformers");
 
-              // Apply ONNX stability fix before any model is loaded
+              // Silence excessive ONNX warnings (Shape mismatch, etc.)
+              (env as any).backends.onnx.logLevel = "error";
               (env as any).backends.onnx.preferredOutputLocation = null;
               (env as any).backends.onnx.numThreads = 1;
 
@@ -1887,8 +1890,11 @@ export class AIService {
 
       const { RawImage } = await import("@huggingface/transformers");
 
-      // Use sharp to get raw pixels (most robust way to bypass RawImage.read buffer detection issues)
+      // RMBG-2.0 is trained on 1024x1024. Forcing this size avoids ONNX buffer reallocations
+      // and eliminates the "Shape mismatch" logs entirely.
+      const MODEL_SIZE = 1024;
       const { data: pixels, info } = await sharp(imageBuffer)
+        .resize(MODEL_SIZE, MODEL_SIZE, { fit: "fill" }) // Standard size for BiRefNet
         .removeAlpha()
         .raw()
         .toBuffer({ resolveWithObject: true });
