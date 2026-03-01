@@ -1338,19 +1338,20 @@ export const createCampaign = async (req: Request, res: Response) => {
         const imgW = imgMeta.width || 1000;
         const imgH = imgMeta.height || 1000;
 
-        // Helper: compute REAL text bounding box from text content + fontSize
+        // Trust AI position.width as primary bbox — AI has visual context.
+        // Fallback to character estimate only if AI returned 0 width.
         const computeTextBBox = (s: any) => {
           const fontSize = s.style?.font_size_normalized || 40;
           const lines = (s.part || "").split("\n");
           const longestLine = Math.max(...lines.map((l: string) => l.length));
           const lineHeight = s.style?.line_height || 1.2;
-          // fontSize is in PIXELS; compute pixel dimensions then convert to 0-1000
-          const textWidthPx = longestLine * fontSize * 0.6;
+          // 0.45 coefficient for Thai Kanit (narrower than Latin 0.6)
+          const textWidthPx = longestLine * fontSize * 0.45;
           const textHeightPx = lines.length * fontSize * lineHeight;
           const computedW = (textWidthPx / imgW) * 1000;
           const computedH = (textHeightPx / imgH) * 1000;
-          // Use LARGER of AI prediction vs computed (be conservative)
-          const w = Math.max(s.position?.width || 0, computedW);
+          // Prefer AI width; use estimate only when AI width is missing/zero
+          const w = (s.position?.width || 0) > 0 ? s.position.width : computedW;
           const h = Math.max(s.position?.height || 0, computedH);
           const top = s.position?.top || 0;
           const left = s.position?.left || 0;

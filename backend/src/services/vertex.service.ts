@@ -410,6 +410,7 @@ ${zoneList}
           ? `
       1. COMPONENT EXTRACTION (MAIN TASK):
          - Identify ALL foreground visual elements: Ribbons, banners, price badges, mascots, stickers, logos, person cutouts.
+         - ❌ STRICTLY EXCLUDE: Decorative backgrounds, geometric/hexagonal textures, gradient overlays, or any element that IS the background template itself.
          - For EACH element, provide a detailed description.
       2. SKIP TEXT TASKS: Do NOT analyze or suggest text layouts for this request.
       `
@@ -436,12 +437,14 @@ ${zoneList}
       
       ${
         mode === "full" || mode === "text"
-          ? `4. COMPONENT LIST: Identify ALL non-text visual elements overlaid on the background.
-         Examples: Ribbons, banners, price badges, mascots, characters, stickers, person cutouts.
-         For each, provide a DETAILED visual description.`
-          : `4. COMPONENT LIST: Identify ALL non-text visual elements overlaid on the background.
-         Examples: Ribbons, banners, price badges, mascots, characters, stickers, person cutouts.
-         For each, provide a DETAILED visual description.`
+          ? `4. COMPONENT LIST: Identify ALL foreground visual elements overlaid on the background.
+         ✅ INCLUDE: Ribbons, banners, price badges, mascots, characters, stickers, person cutouts, product images, logos, icons.
+         ❌ STRICTLY EXCLUDE: Decorative background textures, geometric patterns (hexagons, diamonds, etc.), gradient overlays, template background designs, placeholder color blocks, or any element that IS the background itself. If it looks like it belongs to the background, DO NOT list it as a component.
+         For each component, provide a DETAILED visual description.`
+          : `4. COMPONENT LIST: Identify ALL foreground visual elements overlaid on the background.
+         ✅ INCLUDE: Ribbons, banners, price badges, mascots, characters, stickers, person cutouts, product images, logos, icons.
+         ❌ STRICTLY EXCLUDE: Decorative background textures, geometric patterns (hexagons, diamonds, etc.), gradient overlays, template background designs, placeholder color blocks, or any element that IS the background itself. If it looks like it belongs to the background, DO NOT list it as a component.
+         For each component, provide a DETAILED visual description.`
       }
       
       Return the result as a STRICT JSON object:
