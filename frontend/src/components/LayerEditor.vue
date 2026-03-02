@@ -119,6 +119,7 @@ watch(
           h: t.position.height / 10,
           rotation: t.position.rotation || 0,
           z_index: t.z_index || 10,
+          visual_container: t.visual_container || "none",
         });
       });
     }
@@ -168,6 +169,25 @@ watch(
   },
   { deep: true },
 );
+
+const getEditorContainerStyle = (layer: any): Record<string, string> => {
+  const container = layer.visual_container || "none";
+  if (container === "none") return {};
+  const shieldMap: Record<string, string> = {
+    ribbon:           "rgba(0,0,0,0.65)",
+    pill:             "rgba(0,0,0,0.72)",
+    solid_block:      "rgba(20,20,40,0.80)",
+    gradient_overlay: "rgba(0,0,0,0.70)",
+    glassmorphism:    "rgba(255,255,255,0.15)",
+  };
+  const bg = shieldMap[container] ?? "rgba(0,0,0,0.65)";
+  return {
+    backgroundColor: bg,
+    backdropFilter:  container === "glassmorphism" ? "blur(8px)" : "",
+    borderRadius:    container === "pill" ? "999px" : container === "glassmorphism" ? "12px" : "4px",
+    padding:         container === "ribbon" ? "4px 16px" : "4px 8px",
+  };
+};
 
 const getShadowStyle = (shadow: string) => {
   switch (shadow) {
@@ -909,6 +929,7 @@ const downloadAsSvg = async () => {
             @focus="selectAll(idx)"
             @blur="onBlurText"
             class="editable-text"
+            :style="getEditorContainerStyle(layer)"
           ></span>
           <div
             v-if="selectedLayerId === idx"

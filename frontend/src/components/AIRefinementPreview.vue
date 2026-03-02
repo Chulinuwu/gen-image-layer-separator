@@ -70,7 +70,7 @@
               class="live-text-overlay"
               :style="getTextStyle(t, showDebugBoxes)"
             >
-              {{ t.part }}
+              <span :style="getContainerStyle(t)">{{ t.part }}</span>
             </div>
 
             <!-- Live component overlay: drop-shadow outline when debug ON follows PNG shape -->
@@ -250,6 +250,26 @@ const KANIT_TOKENS: Record<
   badge: { weight: "700", letterSpacing: "1px", lineHeight: "1.2" },
   fineprint: { weight: "400", letterSpacing: "0px", lineHeight: "1.3" },
   number: { weight: "900", letterSpacing: "-1px", lineHeight: "1.0" },
+};
+
+const getContainerStyle = (suggestion: any): Record<string, string> => {
+  const container = suggestion.visual_container || "none";
+  if (container === "none") return {};
+  const shieldMap: Record<string, string> = {
+    ribbon:           "rgba(0,0,0,0.65)",
+    pill:             "rgba(0,0,0,0.72)",
+    solid_block:      "rgba(20,20,40,0.80)",
+    gradient_overlay: "rgba(0,0,0,0.70)",
+    glassmorphism:    "rgba(255,255,255,0.15)",
+  };
+  const bg = shieldMap[container] ?? "rgba(0,0,0,0.65)";
+  return {
+    backgroundColor: container === "glassmorphism" ? "rgba(255,255,255,0.15)" : bg,
+    backdropFilter:  container === "glassmorphism" ? "blur(8px)" : "",
+    borderRadius:    container === "pill" ? "999px" : container === "glassmorphism" ? "12px" : "4px",
+    padding:         container === "ribbon" ? "4px 16px" : "4px 8px",
+    display:         "inline-block",
+  };
 };
 
 const getTextStyle = (t: any, debugMode = false) => {
