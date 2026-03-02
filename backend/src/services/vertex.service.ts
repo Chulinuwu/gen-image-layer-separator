@@ -493,9 +493,11 @@ COMPOSITION RULES FOR TEXT:
            - "2 ต่อ", "50%", "1.5%" → treat as ONE element, same position block.
            - Do NOT create separate suggestion items for the number and the unit.
            - Place them in a SINGLE suggestion with the combined text (e.g. "part": "2 ต่อ" or "part": "50%"), with font_size_normalized ≥ 150.
-           - Only split into two items if they are visually on DIFFERENT lines AND have very different font sizes.
+           - Only split into two items if the number and unit are on separate visual rows AND the font size ratio between them is 2× or greater (e.g. huge "2" with tiny "ต่อ" subscript).
 
-         Promotion Offer Hierarchy:
+         For non-numeric text (headlines, body copy): split into multiple visual lines to fit the text zone width.
+
+         ⚠️ PROMOTION OFFER HIERARCHY (CRITICAL):
            - If the AD BRIEF contains a number/offer (e.g., "2 ต่อ", "50% off", "1.5% ต่อปี"):
              * Make it the LARGEST element on screen (font_size_normalized: 150-200)
              * Position it in the CENTER of the text zone
@@ -570,7 +572,7 @@ COMPOSITION RULES FOR TEXT:
               "text_gradient": "[Optional] Array of 2 colors for gradient e.g. ['#FF512F', '#DD2476']",
               "stroke_hex": "[Optional] Use #FFFFFF (White) for most cases. AVOID #000000 (Black) on dark backgrounds as it looks messy.",
               "stroke_width": "[Optional] Numeric scale 0-10. For high visibility, use 4-6 (No 'px' unit).",
-              "font_size_normalized": "Relative size (e.g. 10 to 120)",
+              "font_size_normalized": "Relative size (e.g. 10 to 200; promotional numbers and offer lock-ups: 150-200)",
               "text_align": "left | center | right",
               "letter_spacing": "Numeric tracking (e.g. 0, -1)",
               "line_height": "Default 1.2",
