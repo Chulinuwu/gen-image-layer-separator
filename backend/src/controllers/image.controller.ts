@@ -123,6 +123,7 @@ export const processImage = async (req: Request, res: Response) => {
       imageUrl: string;
       position: any;
       z_index: number;
+      interaction_zone?: any;
     }> = [];
     const stackImageUrls: string[] = [];
 
@@ -135,6 +136,7 @@ export const processImage = async (req: Request, res: Response) => {
       position: any;
       suggested_position?: any; // AI's composition recommendation — where component SHOULD GO
       z_index: number;
+      interaction_zone?: any;
     }> = analysisData.components || [];
 
     const CHARACTER_KEYWORDS = [
@@ -237,7 +239,8 @@ export const processImage = async (req: Request, res: Response) => {
             label: result.label,
             imageUrl: `/uploads/${filename}`,
             position: pos,
-            z_index: comp?.z_index || 1,
+            z_index: comp?.z_index || 15,
+            interaction_zone: comp?.interaction_zone || null,
           };
         },
       );
@@ -679,6 +682,7 @@ export const createCampaign = async (req: Request, res: Response) => {
       imageUrl: string;
       position: any;
       z_index: number;
+      interaction_zone?: any;
     }> = [];
     const stackImageUrls: string[] = [];
     let safeZonePlacementDone = false;
@@ -883,7 +887,8 @@ export const createCampaign = async (req: Request, res: Response) => {
               label: res.label,
               imageUrl: `/uploads/${fn}`,
               position: pos,
-              z_index: matched?.z_index || 1,
+              z_index: matched?.z_index || 15,
+              interaction_zone: matched?.interaction_zone || null,
             };
           },
         );
@@ -1064,10 +1069,15 @@ export const createCampaign = async (req: Request, res: Response) => {
       });
 
       // Build no-go zones for text: prefer accurate die-cut stroke bboxes, fallback to RMBG bboxes
+      // noGoInstruction builder reads z.top/left/width/height directly (not z.area.*),
+      // so use flat format consistent with parsedNoGoZones
       const textNoGoZones = strokeBboxes.length > 0
         ? strokeBboxes.map(b => ({
             label: b.label,
-            area: { top: b.top, left: b.left, width: b.width, height: b.height },
+            top: b.top,
+            left: b.left,
+            width: b.width,
+            height: b.height,
           }))
         : parsedNoGoZones;
 
@@ -1092,7 +1102,8 @@ export const createCampaign = async (req: Request, res: Response) => {
           artDirectorTextZone || undefined, // 8: textZone
         );
         textSuggestions = textAnalysis.suggestions || [];
-        // Sync Pass 2 no_go_zones into the shared analysis object for the refinement loop
+        // Sync Pass 2 results into analysis so refineLayout has full context
+        analysis.suggestions = textSuggestions;
         if (textAnalysis.no_go_zones) {
           analysis.no_go_zones = textAnalysis.no_go_zones;
         }

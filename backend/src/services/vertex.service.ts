@@ -462,6 +462,16 @@ COMPOSITION RULES FOR TEXT:
          - Width: 350-500 for full-body characters (preserve width for the text zone)
 
          MASCOTS / SECONDARY ELEMENTS: bottom-corner placement, height = 300-450
+         DEPTH INTERACTION (creates premium 3D feel — SCB standard):
+         - PRIMARY characters/models: set z_index = 15 (character appears IN FRONT of text)
+         - Compute interaction_zone: area where character body overlaps the text zone
+           * overlap_top = suggested_position.top + 100 (skip head, start at shoulder level)
+           * overlap_left = suggested_position.left
+           * overlap_width = min(200, suggested_position.width / 2)
+           * overlap_height = suggested_position.height - 200
+           * Set interaction_zone.enabled = true for primary characters
+         - MASCOTS / SECONDARY elements: z_index = 10 (same level as text)
+         - LOGOS / BADGES: z_index = 20 (always on top)
          LOGOS / BADGES / RIBBONS: keep near detected position, scale width/height up by 20%
 
          After placing ALL components, compute composition_text_zone as the open horizontal space for text:
@@ -596,7 +606,14 @@ COMPOSITION RULES FOR TEXT:
               "top": 0, "left": 0, "width": 0, "height": 0, "rotation": 0,
               "rationale": "e.g. Moved right to free left column for text. Person spans full height of purple zone."
             },
-            "z_index": 1
+            "z_index": 15,
+            "interaction_zone": {
+              "enabled": true,
+              "overlap_top": 200,
+              "overlap_left": 350,
+              "overlap_width": 300,
+              "overlap_height": 400
+            }
           }
         ]
       }

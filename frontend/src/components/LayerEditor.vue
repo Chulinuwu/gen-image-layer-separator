@@ -100,7 +100,8 @@ watch(
           w: comp.position.width / 10,
           h: comp.position.height / 10,
           rotation: comp.position.rotation || 0,
-          z_index: comp.z_index || 1,
+          z_index: comp.z_index || 15,
+          interaction_zone: comp.interaction_zone || null,
         });
       });
     }
@@ -121,6 +122,28 @@ watch(
           z_index: t.z_index || 10,
           visual_container: t.visual_container || "none",
         });
+      });
+    }
+
+    // Character depth interaction: lower z_index of text inside character's interaction_zone
+    const characterLayers = imageLayers.filter((l: any) => l.interaction_zone?.enabled);
+    if (characterLayers.length > 0) {
+      textLayers.forEach((tl: any) => {
+        const tLeft = tl.x;
+        const tTop = tl.y;
+        const tRight = tl.x + tl.w;
+        const tBottom = tl.y + tl.h;
+        for (const cl of characterLayers) {
+          const iz = cl.interaction_zone;
+          const izLeft = iz.overlap_left / 10;
+          const izTop = iz.overlap_top / 10;
+          const izRight = (iz.overlap_left + iz.overlap_width) / 10;
+          const izBottom = (iz.overlap_top + iz.overlap_height) / 10;
+          const overlaps = !(tRight <= izLeft || tLeft >= izRight || tBottom <= izTop || tTop >= izBottom);
+          if (overlaps) {
+            tl.z_index = Math.min(tl.z_index, cl.z_index - 5);
+          }
+        }
       });
     }
 
