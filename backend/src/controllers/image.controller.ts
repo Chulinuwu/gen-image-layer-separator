@@ -835,7 +835,13 @@ export const createCampaign = async (req: Request, res: Response) => {
     );
 
     // --- Run die-cut FIRST, so we get the full-image RMBG mask for true inpainting ---
-    let strokeBboxes: Array<{ label: string; top: number; left: number; width: number; height: number }> = [];
+    let strokeBboxes: Array<{
+      label: string;
+      top: number;
+      left: number;
+      width: number;
+      height: number;
+    }> = [];
     let fullImageAlphaMask: Buffer | null = null;
     if (componentSuggestions.length > 0) {
       // Task A: Generate die-cut components
@@ -1058,7 +1064,6 @@ export const createCampaign = async (req: Request, res: Response) => {
         step: "assets_ready",
         message: `Assets: BG ${generatedBackgroundImageUrl ? "✅" : "❌"} | Components: ${visualComponents.length}`,
       });
-
     }
 
     // ───── Step 1C: Pass 2 — Text Layout Around Fixed Components ──────────────
@@ -1072,7 +1077,7 @@ export const createCampaign = async (req: Request, res: Response) => {
       // Character depth (interaction_zone z-index) handles visual separation instead.
 
       // Tell the AI where components are (use their final suggested_position or position)
-      const fixedPositions = visualComponents.map(c => ({
+      const fixedPositions = visualComponents.map((c) => ({
         label: c.label,
         top: c.position.top || 0,
         left: c.position.left || 0,
@@ -1086,9 +1091,9 @@ export const createCampaign = async (req: Request, res: Response) => {
           mimeType,
           targetText,
           "text",
-          [],                               // 5: no forbidden zones — character depth handles layering
-          [],                               // 6: safeZones (empty — not pre-computed for text pass)
-          fixedPositions,                   // 7: fixedComponentPositions
+          [], // 5: no forbidden zones — character depth handles layering
+          [], // 6: safeZones (empty — not pre-computed for text pass)
+          fixedPositions, // 7: fixedComponentPositions
           artDirectorTextZone || undefined, // 8: textZone
         );
         textSuggestions = textAnalysis.suggestions || [];
@@ -1098,7 +1103,10 @@ export const createCampaign = async (req: Request, res: Response) => {
           analysis.no_go_zones = textAnalysis.no_go_zones;
         }
       } catch (pass2Err) {
-        console.warn("[Pass2] Text layout failed, proceeding with empty text suggestions:", pass2Err);
+        console.warn(
+          "[Pass2] Text layout failed, proceeding with empty text suggestions:",
+          pass2Err,
+        );
       }
 
       sendSSE("progress", {
@@ -1385,11 +1393,14 @@ export const createCampaign = async (req: Request, res: Response) => {
             const t = computeTextBBox(s);
 
             for (const zone of noGoZones) {
-              if (!zone.area) continue;
-              const zTop = zone.area.top || 0;
-              const zLeft = zone.area.left || 0;
-              const zRight = zLeft + (zone.area.width || 0);
-              const zBottom = zTop + (zone.area.height || 0);
+              // Handle both flat {top,left,width,height} and nested {area:{...}} formats
+              const zTop = zone.area?.top ?? zone.top ?? 0;
+              const zLeft = zone.area?.left ?? zone.left ?? 0;
+              const zW = zone.area?.width ?? zone.width ?? 0;
+              const zH = zone.area?.height ?? zone.height ?? 0;
+              if (zW === 0 && zH === 0) continue; // skip degenerate zones
+              const zRight = zLeft + zW;
+              const zBottom = zTop + zH;
 
               const overlaps = !(
                 t.right <= zLeft ||
@@ -1402,7 +1413,7 @@ export const createCampaign = async (req: Request, res: Response) => {
                 overlapFound = true;
                 const textSnippet = (s.part || "").substring(0, 30);
                 overlapDetails.push(
-                  `Text "${textSnippet}..." (top:${t.top}, left:${t.left}, computed_w:${Math.round(t.width)}, h:${Math.round(t.height)}) overlaps PERSON "${zone.label}" (top:${zTop}, left:${zLeft}, w:${zone.area.width}, h:${zone.area.height}). Move text COMPLETELY OUTSIDE.`,
+                  `Text "${textSnippet}..." (top:${t.top}, left:${t.left}, computed_w:${Math.round(t.width)}, h:${Math.round(t.height)}) overlaps PERSON "${zone.label}" (top:${zTop}, left:${zLeft}, w:${zW}, h:${zH}). Move text COMPLETELY OUTSIDE.`,
                 );
                 console.log(
                   `[OVERLAP] ❌ "${textSnippet}..." overlaps "${zone.label}" | text_right:${Math.round(t.right)} > zone_left:${zLeft}`,
