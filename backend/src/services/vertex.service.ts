@@ -1401,6 +1401,81 @@ ${
   }
 
   /**
+   * Extractor helper: parses AI response containing <META> and <HTML_OVERLAY> tags
+   * to avoid embedding unescaped HTML quotes/newlines inside a JSON string.
+   */
+  private parseHTMLResponse(raw: string): any {
+    let meta = {};
+    let htmlContent = "";
+
+    const metaMatch = raw.match(/<META>([\s\S]*?)<\/META>/i);
+    const htmlMatch = raw.match(/<HTML_OVERLAY>([\s\S]*?)<\/HTML_OVERLAY>/i);
+
+    if (metaMatch || htmlMatch) {
+      if (metaMatch) {
+        const metaStr = metaMatch[1].trim();
+        try {
+          meta = JSON.parse(metaStr);
+        } catch {
+          console.warn(
+            "[parseHTMLResponse] META JSON parse failed, attempting repair",
+          );
+          const repaired =
+            metaStr.replace(/,\s*$/, "") +
+            "}".repeat(
+              Math.max(
+                0,
+                (metaStr.match(/{/g) || []).length -
+                  (metaStr.match(/}/g) || []).length,
+              ),
+            );
+          const cleaned = repaired
+            .replace(/\\'/g, "'")
+            .replace(/\\([^"\\\/bfnrtu])/g, "$1")
+            .replace(/[\x00-\x1F\x7F]/g, " ");
+          try {
+            meta = JSON.parse(cleaned);
+          } catch (e) {
+            console.error("[parseHTMLResponse] META JSON repair failed too", e);
+          }
+        }
+      }
+      if (htmlMatch) {
+        htmlContent = htmlMatch[1].trim();
+      }
+      return { ...meta, html_overlay: htmlContent };
+    }
+
+    // Fallback: Legacy full-JSON mode if tags completely missing
+    console.warn(
+      "[parseHTMLResponse] Delimiter tags missing, falling back to legacy JSON parse.",
+    );
+    const cleanedRaw = raw
+      .trim()
+      .replace(/```json|```|```html/g, "")
+      .trim();
+    try {
+      return JSON.parse(cleanedRaw);
+    } catch {
+      const repaired =
+        cleanedRaw.replace(/,\s*$/, "") +
+        "}".repeat(
+          Math.max(
+            0,
+            (cleanedRaw.match(/{/g) || []).length -
+              (cleanedRaw.match(/}/g) || []).length,
+          ),
+        ) +
+        '"'.repeat((cleanedRaw.match(/(?<![\\])"([^"]*?)$/g) || []).length % 2);
+      const cleaned = repaired
+        .replace(/\\'/g, "'")
+        .replace(/\\([^"\\\/bfnrtu])/g, "$1")
+        .replace(/[\x00-\x1F\x7F]/g, " ");
+      return JSON.parse(cleaned);
+    }
+  }
+
+  /**
    * Task B: HTML/CSS layout generation — AI outputs html_overlay string
    * instead of JSON coordinates. Uses cqw units for font sizes and
    * text-shadow/text-stroke for contrast (no dark boxes).
@@ -1560,15 +1635,16 @@ COMPONENT SIDE-ANCHOR PATTERN (preferred):
 ═══════════════════════════════════════
 WHAT TO RETURN
 ═══════════════════════════════════════
-Return ONLY valid JSON (no markdown fences). Use single-quote attributes inside html_overlay string.
+Return TWO parts exactly using these XML delimiters: <META> and <HTML_OVERLAY>.
+Do NOT wrap the HTML inside a JSON string. Separate them!
 
+<META>
 {
   "background_description": "Scene without overlaid elements",
   "campaign_vibe": "Energetic | Bold | Luxury | Playful",
   "no_go_zones": [
     { "label": "Woman face", "priority": "HIGH", "area": { "top": 50, "left": 400, "width": 200, "height": 200 }, "reason": "face" }
   ],
-  "html_overlay": "<div style='position:absolute;inset:0;pointer-events:none;overflow:hidden'>CONTENT_HERE</div>",
   "components": [
     {
       "label": "Thai mascot",
@@ -1580,6 +1656,12 @@ Return ONLY valid JSON (no markdown fences). Use single-quote attributes inside 
     }
   ]
 }
+</META>
+<HTML_OVERLAY>
+<div style='position:absolute;inset:0;pointer-events:none;overflow:hidden'>
+  CONTENT_HERE
+</div>
+</HTML_OVERLAY>
 
 Example html_overlay for "2 ต่อ รับฟรี บัตรขึ้นชิงช้าสวรรค์":
 "<div style='position:absolute;inset:0;pointer-events:none;overflow:hidden'><div style='position:absolute;top:52%;left:4%;z-index:5;display:flex;flex-direction:column;gap:0.5cqw;max-width:45%'><span style='font-family:Kanit,sans-serif;font-size:16cqw;font-weight:900;color:#FFD700;line-height:1.0;letter-spacing:-0.03em;text-shadow:2px 2px 0 #000,-2px -2px 0 #000,2px -2px 0 #000,-2px 2px 0 #000,0 4px 12px rgba(0,0,0,0.8);-webkit-text-stroke:2px rgba(0,0,0,0.4)'>2 ต่อ</span><span style='font-family:Kanit,sans-serif;font-size:3.5cqw;font-weight:700;color:#fff;line-height:1.25;text-shadow:1px 1px 0 #000,-1px -1px 0 #000,0 3px 8px rgba(0,0,0,0.7)'>รับฟรี บัตรขึ้นชิงช้าสวรรค์</span></div><div style='position:absolute;bottom:1.5%;left:2%;z-index:5'><span style='font-family:Kanit,sans-serif;font-size:1.1cqw;font-weight:400;color:rgba(255,255,255,0.8)'>เงื่อนไขเป็นไปตามที่ธนาคารกำหนด</span></div></div>"`;
@@ -1617,29 +1699,13 @@ Example html_overlay for "2 ต่อ รับฟรี บัตรขึ้�
       }),
     );
 
-    const raw = (response.text || "")
-      .trim()
-      .replace(/```json|```/g, "")
-      .trim();
+    const raw = response.text || "";
     let parsed: any;
     try {
-      parsed = JSON.parse(raw);
-    } catch {
-      // Repair truncated JSON then cleanup escape sequences
-      const repaired =
-        raw.replace(/,\s*$/, "") +
-        "}".repeat(
-          Math.max(
-            0,
-            (raw.match(/{/g) || []).length - (raw.match(/}/g) || []).length,
-          ),
-        ) +
-        '"'.repeat((raw.match(/(?<![\\])"([^"]*?)$/g) || []).length % 2); // close open string
-      const cleaned = repaired
-        .replace(/\\'/g, "'")
-        .replace(/\\([^"\\\/bfnrtu])/g, "$1")
-        .replace(/[\x00-\x1F\x7F]/g, " ");
-      parsed = JSON.parse(cleaned);
+      parsed = this.parseHTMLResponse(raw);
+    } catch (err) {
+      console.error("[suggestLayoutHTML] Failed to parse response.", err);
+      parsed = { html_overlay: "" };
     }
 
     if (
@@ -1734,9 +1800,11 @@ COMPONENT FIX RULES:
 IMPORTANT: Even if the critique says PASS, check component positions yourself and enforce the 5% safe zone.
 
 ═══════════════════════════════════════
-Return ONLY valid JSON (no markdown):
+Return TWO parts exactly using these XML delimiters: <META> and <HTML_OVERLAY>.
+Do NOT wrap the HTML inside a JSON string. Separate them!
+
+<META>
 {
-  "html_overlay": "YOUR_IMPROVED_HTML_STRING_WITH_SINGLE_QUOTE_ATTRIBUTES",
   "components": [
     {
       "label": "component name",
@@ -1746,7 +1814,11 @@ Return ONLY valid JSON (no markdown):
       "interaction_zone": { "enabled": true, "overlap_top": <n>, "overlap_left": <n>, "overlap_width": <n>, "overlap_height": <n> }
     }
   ]
-}`;
+}
+</META>
+<HTML_OVERLAY>
+YOUR_IMPROVED_HTML_STRING_WITH_SINGLE_QUOTE_ATTRIBUTES
+</HTML_OVERLAY>`;
 
     const parts: any[] = [
       { inlineData: { data: imageBuffer.toString("base64"), mimeType } },
@@ -1769,27 +1841,16 @@ Return ONLY valid JSON (no markdown):
       }),
     );
 
-    const raw = (result.text || "")
-      .trim()
-      .replace(/```json|```/g, "")
-      .trim();
+    const raw = result.text || "";
     let parsed: any;
     try {
-      parsed = JSON.parse(raw);
-    } catch {
-      const repaired =
-        raw.replace(/,\s*$/, "") +
-        "}".repeat(
-          Math.max(
-            0,
-            (raw.match(/{/g) || []).length - (raw.match(/}/g) || []).length,
-          ),
-        );
-      const cleaned = repaired
-        .replace(/\\'/g, "'")
-        .replace(/\\([^"\\\/bfnrtu])/g, "$1")
-        .replace(/[\x00-\x1F\x7F]/g, " ");
-      parsed = JSON.parse(cleaned);
+      parsed = this.parseHTMLResponse(raw);
+    } catch (parseErr) {
+      console.error(
+        "[refineLayoutHTML] Completely failed to parse AI response:",
+        parseErr,
+      );
+      parsed = { html_overlay: "" };
     }
 
     if (!parsed.html_overlay || parsed.html_overlay.length < 50) {

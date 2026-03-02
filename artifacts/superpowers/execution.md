@@ -133,3 +133,18 @@
 7. Verify promo number renders large (12-18cqw equivalent)
 8. Verify refinement loop: after 1st critique, `refineLayoutHTML` fires in backend logs
 9. Verify LayerEditor: after finalizing, text shown as HTML overlay, components still draggable
+
+---
+
+## 2026-03-03: HTML_OVERLAY Delimiters Fix Execution
+
+### Step 1-5: Change AI Response Format + Parse Helper
+
+- **Files:** `backend/src/services/vertex.service.ts`
+- **Changes:**
+  - Added `parseHTMLResponse` helper extract `<META>` and `<HTML_OVERLAY>` blocks via regex to bypass JSON parsing failures caused by raw HTML inside JSON strings.
+  - Updated `WHAT TO RETURN` in `suggestLayoutHTML` to strictly use the `<META>` + `<HTML_OVERLAY>` blocks instead of JSON for HTML.
+  - Updated `WHAT TO RETURN` in `refineLayoutHTML` to strictly use the new layout blocks and simplified the META block.
+  - Replaced legacy JSON-based parsing logic in both generator functions with the new helper.
+- **Verify:** `npm run build`
+- **Result:** ✅ PASS
