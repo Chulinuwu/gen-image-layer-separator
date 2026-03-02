@@ -1054,16 +1054,6 @@ export const createCampaign = async (req: Request, res: Response) => {
         message: `Assets: BG ${generatedBackgroundImageUrl ? "✅" : "❌"} | Components: ${visualComponents.length}`,
       });
 
-      // Send initial layout to canvas before refinement loop
-      sendSSE("iteration_end", {
-        iteration: 0,
-        message: "Initial layout mapped to canvas.",
-        textCount: textSuggestions.length,
-        componentCount: componentSuggestions.length,
-        textLayers: textSuggestions,
-        components: componentSuggestions,
-        visualComponents,
-      });
     }
 
     // ───── Step 1C: Pass 2 — Text Layout Around Fixed Components ──────────────
@@ -1160,6 +1150,17 @@ export const createCampaign = async (req: Request, res: Response) => {
         },
       }));
     }
+
+    // Send initial layout to canvas (fires after Pass 2 + post-processing — has full text + components)
+    sendSSE("iteration_end", {
+      iteration: 0,
+      message: "Initial layout mapped to canvas.",
+      textCount: textSuggestions.length,
+      componentCount: visualComponents.length,
+      textLayers: textSuggestions,
+      components: componentSuggestions,
+      visualComponents,
+    });
 
     // ════════════════════════════════════════════════════════════════
     // Step 3: REFINEMENT LOOP — adjusts BOTH text AND component positions

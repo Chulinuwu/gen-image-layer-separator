@@ -875,7 +875,7 @@ const downloadAsSvg = async () => {
                   top: layer.y + '%',
                   left: layer.x + '%',
                   color: layer.style.color_hex,
-                  fontSize: layer.style.font_size_normalized * 0.1 + 'cqw',
+                  fontSize: (layer.style.font_size_normalized || 40) * 0.1 + 'cqw',
                   fontFamily: `${layer.style.font_family}, sans-serif`,
                   fontWeight: layer.style.font_weight,
                   letterSpacing: (layer.style.letter_spacing || 0) + 'px',
