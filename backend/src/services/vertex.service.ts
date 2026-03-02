@@ -370,7 +370,7 @@ SCB ad style rules I follow:
               ],
             },
           ],
-          config: { maxOutputTokens: 1024, temperature: 0.7 },
+          config: { maxOutputTokens: 2048, temperature: 0.7 },
         }),
       );
 
@@ -378,11 +378,54 @@ SCB ad style rules I follow:
         .trim()
         .replace(/```json|```/g, "")
         .trim();
-      const strategy = JSON.parse(raw || "{}");
+
+      // Attempt parse with truncation repair (AI sometimes cuts off mid-JSON)
+      let strategy: any = null;
+      try {
+        strategy = JSON.parse(raw || "{}");
+      } catch {
+        // Try to close truncated JSON by appending missing braces/brackets
+        const repaired =
+          raw.replace(/,\s*$/, "") + // trailing comma
+          "}".repeat(
+            (raw.match(/{/g) || []).length - (raw.match(/}/g) || []).length,
+          ) +
+          "]".repeat(
+            (raw.match(/\[/g) || []).length - (raw.match(/]/g) || []).length,
+          );
+        try {
+          strategy = JSON.parse(repaired);
+          console.log("[Plan] JSON repaired successfully");
+        } catch {
+          console.warn(
+            "[Plan] JSON repair failed — using structure extraction",
+          );
+          // Extract fields from raw string as last resort
+          strategy = {};
+          const conceptMatch = raw.match(/"layout_concept"\s*:\s*"([^"]+)"/);
+          const domMatch = raw.match(/"dominant_element"\s*:\s*"([^"]+)"/);
+          const notesMatch = raw.match(/"composition_notes"\s*:\s*"([^"]+)"/);
+          if (conceptMatch) strategy.layout_concept = conceptMatch[1];
+          if (domMatch) strategy.dominant_element = domMatch[1];
+          if (notesMatch) strategy.composition_notes = notesMatch[1];
+        }
+      }
+
+      // Ensure all required fields have valid values
+      const result = {
+        layout_concept: strategy?.layout_concept || "default",
+        dominant_element: strategy?.dominant_element || "",
+        text_hierarchy: Array.isArray(strategy?.text_hierarchy)
+          ? strategy.text_hierarchy
+          : [],
+        composition_notes: strategy?.composition_notes || "",
+        recommended_text_zone: strategy?.recommended_text_zone || "left",
+      };
+
       console.log(
-        `[Plan] Strategy: "${strategy.layout_concept}" | dominant: "${strategy.dominant_element}"`,
+        `[Plan] Strategy: "${result.layout_concept}" | dominant: "${result.dominant_element}"`,
       );
-      return strategy;
+      return result;
     } catch (err) {
       // Non-fatal: fallback to no strategy hint (current behavior preserved)
       console.warn(
@@ -1518,7 +1561,17 @@ Example html_overlay for "2 ต่อ รับฟรี บัตรขึ้�
     try {
       parsed = JSON.parse(raw);
     } catch {
-      const cleaned = raw
+      // Repair truncated JSON then cleanup escape sequences
+      const repaired =
+        raw.replace(/,\s*$/, "") +
+        "}".repeat(
+          Math.max(
+            0,
+            (raw.match(/{/g) || []).length - (raw.match(/}/g) || []).length,
+          ),
+        ) +
+        '"'.repeat((raw.match(/(?<![\\])"([^"]*?)$/g) || []).length % 2); // close open string
+      const cleaned = repaired
         .replace(/\\'/g, "'")
         .replace(/\\([^"\\\/bfnrtu])/g, "$1")
         .replace(/[\x00-\x1F\x7F]/g, " ");
@@ -1629,7 +1682,15 @@ Return ONLY valid JSON (no markdown):
     try {
       parsed = JSON.parse(raw);
     } catch {
-      const cleaned = raw
+      const repaired =
+        raw.replace(/,\s*$/, "") +
+        "}".repeat(
+          Math.max(
+            0,
+            (raw.match(/{/g) || []).length - (raw.match(/}/g) || []).length,
+          ),
+        );
+      const cleaned = repaired
         .replace(/\\'/g, "'")
         .replace(/\\([^"\\\/bfnrtu])/g, "$1")
         .replace(/[\x00-\x1F\x7F]/g, " ");
