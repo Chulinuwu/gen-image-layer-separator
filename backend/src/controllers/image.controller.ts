@@ -960,7 +960,7 @@ export const createCampaign = async (req: Request, res: Response) => {
           message: "AI is cleaning the background (3 passes)...",
         });
 
-        const INPAINT_ITERS = 3;
+        const INPAINT_ITERS = 1;
         let bgBufferedResponse: Buffer | null = null;
         // currentSource starts as the original image; each iter feeds its output as next source
         let currentSource: Buffer = imageBuffer;
