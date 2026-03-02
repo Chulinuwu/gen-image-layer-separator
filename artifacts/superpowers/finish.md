@@ -1,42 +1,72 @@
-# Finish: Smart Layout Composition (Options A+B+C)
+# Finish: Composition Upgrade (2026-03-03)
 
 ## Summary
 
-### Option A — Component Composition (2 files)
+5 tasks completed, all building on the previous session's dynamic-composition work (Tasks 1-3 from dynamic-composition.md).
 
-- **Prompt**: AI told components are die-cut PNGs → recommends `suggested_position` (not just detection)
-- **Composition rules in prompt**: person → right/center, mascot → bottom-right, left column for text
-- **Controller**: uses `suggested_position` over detected `position` (fallback chain preserved)
-- **Log**: `[Compose]` printed when AI reposition is applied
+### Task 1 — Zone Format Bug Fix
 
-### Option B — Contrast Enforcement
+- **What:** In-loop overlap check now handles both `{area:{top,...}}` and flat `{top,...}` zone formats
+- **Why:** `if (!zone.area) continue` was silently skipping all zones from `parsedNoGoZones` (flat format), sending wrong context to critiqueLayout
 
-- `enforceContrast()` helper using ITU-R BT.601 luminance
-- Heuristic: top > 450 → dark bg → if text luma < 100 → force #FFFFFF
-- Applied alongside Kanit normalize pass
+### Task 2 — DesignAsCode Plan Phase ⭐
 
-### Option C — Zone Font Size Hints
+- **What:** New `planLayoutStrategy()` in AIService; called before Pass 2; output injected as `layoutHint` into `suggestCampaignLayout` prompt
+- **Why:** DesignAsCode paper proves separating "plan" from "implement" significantly improves visual hierarchy. AI now brainstorms concept before committing to pixel coordinates
+- **Pattern:** Plan→Implement→Reflect (mirrors DesignAsCode PIR pipeline)
 
-- `safeZoneInstruction` now includes `headline font_size ≥ N` per zone
-- Global thresholds: area>50000→≥80, area>20000→≥50, else→≥30
-- sqrt(area)/10 gives per-zone minimum
+### Task 3 — Visual Quality Gate
 
-## Verification
+- **What:** `enforceDesignRules()` auto-boosts promotional numbers to font_size 160 when AI under-sizes them
+- **Why:** Common SCB ad failure — "2 ต่อ" rendered at small size instead of being the dominant element. Gate catches this programmatically
 
-| Command                          | Result                |
-| -------------------------------- | --------------------- |
-| `cd backend && npx tsc --noEmit` | ✅ Clean              |
-| `git log --oneline -1`           | ✅ Committed: 7582de8 |
+### Task 4 — Critique Confidence Gate
+
+- **What:** `critiqueLayout` returns `confidence` (0.0-1.0); controller logs it per iteration; both PASS branches exit loop
+- **Why:** Informs logging and future differential behavior; currently confidence gates at ≥85% for "high confidence PASS" log
+
+### Task 5 — Documentation
+
+- `progress.md` and `understanding.md` updated with full pipeline diagram
+
+## Verification Commands
+
+| Command                       | Result                         |
+| ----------------------------- | ------------------------------ |
+| `cd backend && npm run build` | ✅ Zero TypeScript errors      |
+| `git log --oneline -5`        | ✅ 5 commits from this session |
+
+## Commits This Session
+
+```
+36ed05f docs: update progress + understanding
+c3354a5 feat: critique confidence gate
+bbc0145 feat: visual quality gate — auto-boost promotional number dominance
+522c91d feat: layout strategy planning phase (DesignAsCode Plan step)
+9897ba6 fix: in-loop zone check handles both flat and nested coordinate formats
+```
 
 ## Manual Validation Steps
 
-1. Generate campaign → check server logs for `[Compose]` (shows AI repositioned a component)
-2. Check server logs for `[Contrast]` (shows dark text was swapped to white)
-3. Headline text in large zones should be font_size ≥ 80 in next generation
-4. Canvas: components should appear at AI-suggested positions (not just where they were in original)
+1. **Upload SCB-style ad** with brief like "ชวนลูกค้าแอป SCB EASY มาสนุก 2 ต่อ รับฟรี บัตร"
+2. **Check backend logs for:**
+   - `[Plan] Requesting layout strategy...` → AI calls plan phase
+   - `[Plan] Strategy: "hero-right text-left stacked"` → strategy visible
+   - `🎨 Layout strategy: "..."` → SSE event emitted
+   - `[QualityGate] Boosting promo number "2 ต่อ"` → font boosted (if AI under-sized)
+   - `[Compose] Iteration 1 → PASS (confidence: 87%)` → confidence logged
+3. **Check canvas:** "2 ต่อ" should be the largest element; character should render in front of any overlapping text
+
+## Review
+
+- **Blocker:** None
+- **Major:** None
+- **Minor:** confidence gate both PASS branches currently use `break` — intended, as confidence is informational only for now
+- **Nit:** `catch (_) {}` in `planLayoutStrategy` — harmless but could be `catch (_e) {}` for strict tsconfig
 
 ## Follow-ups
 
-- Validate composition rules work for right-side person (should move to right column)
-- Consider adding `opacity` enforcement for fineprint hierarchy (currently 0.85 in frontend only)
-- Option D (collision nudge): after suggested_position, verify no overlap and nudge if detected
+- Display confidence score in frontend progress bar (`critique_complete` SSE now includes `confidence`)
+- Tune `PROMO_RE` regex for edge cases like "3× คืน", "½ ราคา"
+- Consider `planLayoutStrategy` caching for same brief re-runs within session
+- Long-term: explore HTML/CSS output approach (full DesignAsCode) for native layout engine

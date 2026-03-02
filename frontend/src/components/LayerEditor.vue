@@ -126,7 +126,9 @@ watch(
     }
 
     // Character depth interaction: lower z_index of text inside character's interaction_zone
-    const characterLayers = imageLayers.filter((l: any) => l.interaction_zone?.enabled);
+    const characterLayers = imageLayers.filter(
+      (l: any) => l.interaction_zone?.enabled,
+    );
     if (characterLayers.length > 0) {
       textLayers.forEach((tl: any) => {
         const tLeft = tl.x;
@@ -139,7 +141,12 @@ watch(
           const izTop = iz.overlap_top / 10;
           const izRight = (iz.overlap_left + iz.overlap_width) / 10;
           const izBottom = (iz.overlap_top + iz.overlap_height) / 10;
-          const overlaps = !(tRight <= izLeft || tLeft >= izRight || tBottom <= izTop || tTop >= izBottom);
+          const overlaps = !(
+            tRight <= izLeft ||
+            tLeft >= izRight ||
+            tBottom <= izTop ||
+            tTop >= izBottom
+          );
           if (overlaps) {
             tl.z_index = Math.min(tl.z_index, cl.z_index - 5);
           }
@@ -193,24 +200,8 @@ watch(
   { deep: true },
 );
 
-const getEditorContainerStyle = (layer: any): Record<string, string> => {
-  const container = layer.visual_container || "none";
-  if (container === "none") return {};
-  const shieldMap: Record<string, string> = {
-    ribbon:           "rgba(0,0,0,0.65)",
-    pill:             "rgba(0,0,0,0.72)",
-    solid_block:      "rgba(20,20,40,0.80)",
-    gradient_overlay: "rgba(0,0,0,0.70)",
-    glassmorphism:    "rgba(255,255,255,0.15)",
-  };
-  const bg = shieldMap[container] ?? "rgba(0,0,0,0.65)";
-  return {
-    backgroundColor: bg,
-    backdropFilter:  container === "glassmorphism" ? "blur(8px)" : "",
-    borderRadius:    container === "pill" ? "999px" : container === "glassmorphism" ? "12px" : "4px",
-    padding:         container === "ribbon" ? "4px 16px" : "4px 8px",
-  };
-};
+// visual_container system removed — containers stripped at source
+const getEditorContainerStyle = (_layer: any): Record<string, string> => ({});
 
 const getShadowStyle = (shadow: string) => {
   switch (shadow) {
@@ -919,7 +910,8 @@ const downloadAsSvg = async () => {
                   top: layer.y + '%',
                   left: layer.x + '%',
                   color: layer.style.color_hex,
-                  fontSize: (layer.style.font_size_normalized || 40) * 0.1 + 'cqw',
+                  fontSize:
+                    (layer.style.font_size_normalized || 40) * 0.1 + 'cqw',
                   fontFamily: `${layer.style.font_family}, sans-serif`,
                   fontWeight: layer.style.font_weight,
                   letterSpacing: (layer.style.letter_spacing || 0) + 'px',

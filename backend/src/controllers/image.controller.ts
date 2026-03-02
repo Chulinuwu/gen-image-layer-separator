@@ -1177,16 +1177,32 @@ export const createCampaign = async (req: Request, res: Response) => {
     // POST-PROCESS width clamp removed: intentional text-character overlap is now
     // by design (character renders in front via z-index / interaction_zone depth).
 
-    // Safety net: force Kanit + enforce contrast on every text suggestion
+    // Safety net: force Kanit + strip containers + auto-fill stroke/shadow for contrast
     if (textSuggestions.length > 0) {
-      textSuggestions = textSuggestions.map((s: any) => ({
-        ...s,
-        style: {
-          ...s.style,
-          font_family: "Kanit",
-          color_hex: enforceContrast(s.style?.color_hex, s.position),
-        },
-      }));
+      textSuggestions = textSuggestions.map((s: any) => {
+        const isFinePrint = (s.hierarchy || "").toLowerCase() === "fineprint";
+        return {
+          ...s,
+          visual_container: "none", // containers stripped — stroke+shadow handles contrast
+          style: {
+            ...s.style,
+            font_family: "Kanit",
+            color_hex: enforceContrast(s.style?.color_hex, s.position),
+            // Ensure stroke exists for all non-fineprint text
+            stroke_hex:
+              s.style?.stroke_hex || (isFinePrint ? undefined : "#000000"),
+            stroke_width:
+              s.style?.stroke_width ?? (isFinePrint ? undefined : 4),
+            // Ensure shadow exists and is at least "subtle" for non-fineprint
+            shadow:
+              s.style?.shadow && s.style.shadow !== "none"
+                ? s.style.shadow
+                : isFinePrint
+                  ? "none"
+                  : "strong",
+          },
+        };
+      });
       // Visual Quality Gate: ensure promo numbers are visually dominant
       textSuggestions = enforceDesignRules(textSuggestions);
     }
