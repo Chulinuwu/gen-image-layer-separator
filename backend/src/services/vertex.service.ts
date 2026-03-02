@@ -673,7 +673,7 @@ COMPOSITION RULES FOR TEXT:
       - FILL THE SPACE: If there's a large solid background (like a purple block), DO NOT leave it empty. Scale the text (Headline) up to 120-180 to OWN the space.
       - CONTRAST SHIELD IS NON-NEGOTIABLE: Before finalizing any text suggestion, ask: "Is this text readable if the background has patterns, faces, or buildings?" If the answer is "maybe not" → set visual_container to a shield type. When in doubt, add the shield.
       - COMPOSITION DENSITY: An ad should look 'Full' and 'High-End'. If it looks 'empty', add more decorative components or increase font sizes significantly.
-      - TEXT STYLING: Use professional combinations. E.g., a huge number '2' with a smaller 'ต่อ' next to it, not just a flat line.
+      - TEXT STYLING: Use professional combinations. E.g., a huge lock-up "2 ต่อ" at font_size_normalized 180 with font_weight "900" and a text_gradient to make it dominant — not a flat, same-size line of text.
     `;
 
     const config: any = {
@@ -1459,6 +1459,11 @@ COMPOSITION RULES FOR TEXT:
          (description: "...holding a purple smartphone in her left hand...")
       ✅ A floating logo badge in the corner → separate component
       ❌ Woman holding a phone + "Purple Smartphone" listed separately → WRONG, causes duplicates
+
+      Z-INDEX RULES (set per component type):
+      - PRIMARY characters/persons: z_index = 15, interaction_zone.enabled = true
+      - MASCOTS / secondary characters: z_index = 10, interaction_zone.enabled = false
+      - LOGOS / BADGES / decorative icons: z_index = 20, interaction_zone.enabled = false
 
       Return as STRICT JSON:
       {
