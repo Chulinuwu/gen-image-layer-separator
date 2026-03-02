@@ -485,13 +485,26 @@ COMPOSITION RULES FOR TEXT:
          }
 
       2. TEXT EXTRACTION & SMART LINE BREAKING:
-         - Read the AD BRIEF.
-         - Split long sentences into multiple visual lines to fit the Safe Zone.
+         - Read the AD BRIEF and identify distinct text elements.
          - YOU MUST RETURN AT LEAST ONE TEXT SUGGESTION.
-      
+
+         ⚠️ LOCK-UP RULE (CRITICAL — CARDINAL SIN if violated):
+         Numbers and their unit MUST be a single graphic lock-up:
+           - "2 ต่อ", "50%", "1.5%" → treat as ONE element, same position block.
+           - Do NOT create separate suggestion items for the number and the unit.
+           - Place them in a SINGLE suggestion with the combined text (e.g. "part": "2 ต่อ" or "part": "50%"), with font_size_normalized ≥ 150.
+           - Only split into two items if they are visually on DIFFERENT lines AND have very different font sizes.
+
+         Promotion Offer Hierarchy:
+           - If the AD BRIEF contains a number/offer (e.g., "2 ต่อ", "50% off", "1.5% ต่อปี"):
+             * Make it the LARGEST element on screen (font_size_normalized: 150-200)
+             * Position it in the CENTER of the text zone
+             * All other text (headline, body) is SECONDARY and smaller
+
       3. DESIGN POLISHING:
-         - Group related text visually close together.
-         - Push text block inwards towards subjects to avoid awkward floating gaps.
+         - Related text (same semantic group) MUST be within 30 units of each other (0-1000 scale).
+         - Push text block inwards towards subjects — text should "reach toward" the character.
+         - NEVER leave a gap larger than 200 units between logically related text elements.
       `
       }
       
