@@ -790,17 +790,32 @@ export const createCampaign = async (req: Request, res: Response) => {
     const clampToSafeZone = (pos: any): any => {
       if (!pos) return pos;
       const PAD = 50; // 5% of 1000
-      const top = Math.max(PAD, pos.top ?? 0);
-      const left = Math.max(PAD, pos.left ?? 0);
-      // If width/height would push past edge, translate left/up
-      const w = pos.width ?? 200;
-      const h = pos.height ?? 200;
-      const clampedLeft = Math.min(left, 1000 - PAD - w);
-      const clampedTop = Math.min(top, 1000 - PAD - h);
-      const changed = clampedLeft !== pos.left || clampedTop !== pos.top;
+      const MAX_DIM = 1000 - PAD * 2; // max 900 in either dimension
+
+      // Clamp/scale size first so it fits in the safe area
+      let w = Math.min(pos.width ?? 300, MAX_DIM);
+      let h = Math.min(pos.height ?? 400, MAX_DIM);
+
+      // Clamp top-left to be at least PAD from each edge
+      const clampedLeft = Math.max(
+        PAD,
+        Math.min(pos.left ?? PAD, 1000 - PAD - w),
+      );
+      const clampedTop = Math.max(
+        PAD,
+        Math.min(pos.top ?? PAD, 1000 - PAD - h),
+      );
+
+      const changed =
+        clampedLeft !== pos.left ||
+        clampedTop !== pos.top ||
+        w !== pos.width ||
+        h !== pos.height;
       if (changed) {
         console.log(
-          `[SafeZone] Component clamped: top ${pos.top}→${clampedTop}, left ${pos.left}→${clampedLeft}`,
+          `[SafeZone] Clamped: top ${pos.top}→${clampedTop}, left ${pos.left}→${clampedLeft}` +
+            (w !== pos.width ? `, w ${pos.width}→${w}` : "") +
+            (h !== pos.height ? `, h ${pos.height}→${h}` : ""),
         );
       }
       return {
@@ -1017,16 +1032,18 @@ export const createCampaign = async (req: Request, res: Response) => {
               componentSuggestions.find((c: any) => c.label === res.label) ||
               componentSuggestions[idx];
             // suggested_position = AI's active composition choice; prefer over detected position
-            const pos = matched?.suggested_position ||
+            const rawPos = matched?.suggested_position ||
               matched?.position || {
-                top: 0,
-                left: 0,
-                width: 200,
-                height: 200,
+                top: 50, // default inside safe zone (not 0,0 which is at corner)
+                left: 50,
+                width: 300,
+                height: 400,
               };
+            // Enforce 5% safe zone — hard clamp regardless of what AI returned
+            const pos = clampToSafeZone(rawPos);
             if (matched?.suggested_position) {
               console.log(
-                `[Compose] "${res.label}" repositioned → ${JSON.stringify(matched.suggested_position)}`,
+                `[Compose] "${res.label}" repositioned → ${JSON.stringify(pos)}`,
               );
             }
             return {
