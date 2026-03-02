@@ -407,6 +407,7 @@ const connectSSE = async (formData: FormData) => {
     isComplete.value = false;
     liveTextLayers.value = [];
     liveComponents.value = [];
+    liveHtmlOverlay.value = ""; // clear previous HTML overlay
     pipelineSteps.value = [];
     statusText.value = "Initializing design suite...";
 
