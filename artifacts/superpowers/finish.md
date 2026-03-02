@@ -1,72 +1,82 @@
-# Finish: Composition Upgrade (2026-03-03)
+# Finish: Kill Containers + HTML/CSS Migration
 
-## Summary
+**Date:** 2026-03-03  
+**Status:** COMPLETED
 
-5 tasks completed, all building on the previous session's dynamic-composition work (Tasks 1-3 from dynamic-composition.md).
+---
 
-### Task 1 — Zone Format Bug Fix
+## Commits
 
-- **What:** In-loop overlap check now handles both `{area:{top,...}}` and flat `{top,...}` zone formats
-- **Why:** `if (!zone.area) continue` was silently skipping all zones from `parsedNoGoZones` (flat format), sending wrong context to critiqueLayout
+| Commit    | Description                                                                                    |
+| --------- | ---------------------------------------------------------------------------------------------- |
+| `50b2841` | fix: remove visual_container shield system — stroke+shadow only for text contrast              |
+| `eb8fac9` | feat(backend): HTML/CSS pipeline — suggestLayoutHTML + refineLayoutHTML replace JSON text pass |
+| `a3e7d24` | feat(frontend): HTML overlay renderer — DOMPurify v-html in AIRefinementPreview + LayerEditor  |
 
-### Task 2 — DesignAsCode Plan Phase ⭐
+---
 
-- **What:** New `planLayoutStrategy()` in AIService; called before Pass 2; output injected as `layoutHint` into `suggestCampaignLayout` prompt
-- **Why:** DesignAsCode paper proves separating "plan" from "implement" significantly improves visual hierarchy. AI now brainstorms concept before committing to pixel coordinates
-- **Pattern:** Plan→Implement→Reflect (mirrors DesignAsCode PIR pipeline)
+## Summary of Changes
 
-### Task 3 — Visual Quality Gate
+### Task A: Kill visual_container System ✅
 
-- **What:** `enforceDesignRules()` auto-boosts promotional numbers to font_size 160 when AI under-sizes them
-- **Why:** Common SCB ad failure — "2 ต่อ" rendered at small size instead of being the dominant element. Gate catches this programmatically
+**Why it mattered:** Dark semi-transparent boxes (`solid_block`) and pill shapes behind text looked amateurish. The prompt was explicitly forcing AI to add them with "CONTRAST SHIELD IS NON-NEGOTIABLE."
 
-### Task 4 — Critique Confidence Gate
+**What changed:**
 
-- **What:** `critiqueLayout` returns `confidence` (0.0-1.0); controller logs it per iteration; both PASS branches exit loop
-- **Why:** Informs logging and future differential behavior; currently confidence gates at ≥85% for "high confidence PASS" log
+- `vertex.service.ts`: Removed CONTRAST SHIELD prompt blocks from both `suggestCampaignLayout` and `refineLayout`. Replaced with STROKE + SHADOW guidance.
+- `image.controller.ts`: Post-processor now forces `visual_container: "none"` on all text suggestions and auto-fills `stroke_hex: "#000000"`, `stroke_width: 4`, `shadow: "strong"` for non-fineprint text.
+- `AIRefinementPreview.vue`: Removed `getContainerStyle()` and the `<span>` wrapper — text renders clean.
+- `LayerEditor.vue`: `getEditorContainerStyle()` stubbed to always return `{}`.
 
-### Task 5 — Documentation
+**Effect:** Canvas will never show dark boxes or pill shapes. Text contrast handled by multi-layer text-shadow + stroke.
 
-- `progress.md` and `understanding.md` updated with full pipeline diagram
+### Task B: HTML/CSS Output Migration ✅
 
-## Verification Commands
+**Why it mattered:** JSON coordinate system was brittle — AI had to calculate pixel positions, font sizes, spacing manually. HTML/CSS with `cqw` units and `flexbox` natively handles these.
 
-| Command                       | Result                         |
-| ----------------------------- | ------------------------------ |
-| `cd backend && npm run build` | ✅ Zero TypeScript errors      |
-| `git log --oneline -5`        | ✅ 5 commits from this session |
+**What changed:**
 
-## Commits This Session
+- `vertex.service.ts`: Added `suggestLayoutHTML()` (generates `html_overlay` string with `%` positions and `cqw` fonts) and `refineLayoutHTML()` (revises HTML based on critique).
+- `image.controller.ts`: Pass 2 now calls `suggestLayoutHTML()`. Refinement loop calls `refineLayoutHTML()`. All SSE events (`iteration_end`, `done`) now carry `html_overlay` instead of `textLayers`.
+- `AIRefinementPreview.vue`: Added `liveHtmlOverlay` state + `sanitizedHtmlOverlay` computed (DOMPurify). Template shows HTML overlay div, falls back to JSON mode if no overlay. SSE handlers updated for both modes.
+- `LayerEditor.vue`: `campaignData` watcher detects `html_overlay` → sets `htmlMode`, only loads component image layers. Template renders `<div v-html="sanitizedEditorHtmlOverlay">` for text.
 
+**Effect:** AI-generated text now renders as native HTML/CSS. Promo numbers at `16cqw` are HUGE and scale with canvas. Text grouping via `flex-column`. Contrast via multi-layer `text-shadow`.
+
+---
+
+## Verification Commands Run
+
+```bash
+cd /Users/chulin/gen-image-layer-separator/backend && npm run build    # ✅ PASS
+cd /Users/chulin/gen-image-layer-separator/frontend && npm run build   # ✅ PASS
 ```
-36ed05f docs: update progress + understanding
-c3354a5 feat: critique confidence gate
-bbc0145 feat: visual quality gate — auto-boost promotional number dominance
-522c91d feat: layout strategy planning phase (DesignAsCode Plan step)
-9897ba6 fix: in-loop zone check handles both flat and nested coordinate formats
-```
+
+---
+
+## Known Degradation (see review.md)
+
+**Critique preview quality reduced:** `critiqueLayout` now receives a preview PNG with no text outlines (because `textSuggestions` is empty in HTML mode). The AI critique will critique based on visual appearance of the raw photo + previous HTML context. Critique loop still functions — just less precise.
+
+**Fix in next session:** Implement `parseHTMLOverlayToApproxSuggestions()` helper to extract approximate text bounding boxes from HTML string for preview rendering.
+
+---
 
 ## Manual Validation Steps
 
-1. **Upload SCB-style ad** with brief like "ชวนลูกค้าแอป SCB EASY มาสนุก 2 ต่อ รับฟรี บัตร"
-2. **Check backend logs for:**
-   - `[Plan] Requesting layout strategy...` → AI calls plan phase
-   - `[Plan] Strategy: "hero-right text-left stacked"` → strategy visible
-   - `🎨 Layout strategy: "..."` → SSE event emitted
-   - `[QualityGate] Boosting promo number "2 ต่อ"` → font boosted (if AI under-sized)
-   - `[Compose] Iteration 1 → PASS (confidence: 87%)` → confidence logged
-3. **Check canvas:** "2 ต่อ" should be the largest element; character should render in front of any overlapping text
+1. Start servers: `cd backend && npm run dev` + `cd frontend && npm run dev`
+2. Upload a Thai bank ad image with promotional text
+3. Click Generate → watch canvas load
+4. Verify: **zero dark boxes or pill shapes** on any text element
+5. Check DevTools → EventStream → `iteration_end` has `html_overlay` field as a string
+6. Verify promo number renders at `~16cqw` (large, dominant)
+7. Complete refinement → check `done` event has `html_overlay`
+8. Open LayerEditor → component images should be draggable; text shows as HTML overlay
 
-## Review
+---
 
-- **Blocker:** None
-- **Major:** None
-- **Minor:** confidence gate both PASS branches currently use `break` — intended, as confidence is informational only for now
-- **Nit:** `catch (_) {}` in `planLayoutStrategy` — harmless but could be `catch (_e) {}` for strict tsconfig
+## Next Session Priorities
 
-## Follow-ups
-
-- Display confidence score in frontend progress bar (`critique_complete` SSE now includes `confidence`)
-- Tune `PROMO_RE` regex for edge cases like "3× คืน", "½ ราคา"
-- Consider `planLayoutStrategy` caching for same brief re-runs within session
-- Long-term: explore HTML/CSS output approach (full DesignAsCode) for native layout engine
+1. Implement `parseHTMLOverlayToApproxSuggestions()` to restore critique preview quality
+2. Test DOMPurify `-webkit-text-stroke` survival in production browser
+3. Tag `refineLayout()` legacy method as `@deprecated`

@@ -1,61 +1,135 @@
-# Execution Log — Composition Upgrade (2026-03-03)
+# Execution Log: Kill Containers + HTML/CSS Migration
 
-## Task 1: Fix zone format bug
-
-**File:** `backend/src/controllers/image.controller.ts`
-
-- Changed `if (!zone.area) continue` to dual-format access `zone.area?.top ?? zone.top ?? 0`
-- Fixed corresponding log message to use `zW`/`zH` vars (not `zone.area.width` which crashes on flat-format zone)
-- Verification: `npm run build` → ✅ clean
-- Commit: `9897ba6`
+**Date:** 2026-03-03  
+**Started:** 01:33 ICT  
+**Commits:** 50b2841, eb8fac9, a3e7d24
 
 ---
 
-## Task 2: Semantic Plan Phase (DesignAsCode-inspired)
+## Task A: Kill visual_container System
 
-**Files:** `backend/src/services/vertex.service.ts`, `backend/src/controllers/image.controller.ts`
+### Step A1 — vertex.service.ts: Remove CONTRAST SHIELD from suggestCampaignLayout prompt
 
-- Added `planLayoutStrategy()` method in AIService (~100 lines) — returns `layout_concept`, `dominant_element`, `text_hierarchy`, `composition_notes`, `recommended_text_zone`
-- Added optional `layoutHint` parameter to `suggestCampaignLayout()` — injected as boxed "ART DIRECTOR STRATEGY" block in prompt preamble
-- Controller calls `planLayoutStrategy()` before Pass 2, passes result as `layoutHint` to `suggestCampaignLayout`
-- SSE emits `layout_strategy` progress event showing composition concept
-- Non-fatal: any failure falls back to no-hint (current behavior)
-- Verification: `npm run build` → ✅ clean
-- Commit: `522c91d`
+- **Files:** `backend/src/services/vertex.service.ts`
+- **Changes:**
+  - Removed "CONTRAST SHIELD (CRITICAL)" + "SHIELD TYPE GUIDE" blocks (lines 784-796)
+  - Replaced with "STROKE + SHADOW (MANDATORY)" guidance
+  - Changed `visual_container` schema from enum to `"none"` only
+  - Replaced "CONTRAST SHIELD IS NON-NEGOTIABLE" with "STROKE IS NON-NEGOTIABLE" in DESIGNER MINDSET
+- **Verification:** `npm run build` → ✅ zero errors
+
+### Step A2 — vertex.service.ts: Fix refineLayout prompt
+
+- **Files:** `backend/src/services/vertex.service.ts`
+- **Changes:**
+  - Rule 3: removed `visual_container` from list of changeable fields
+  - Rule 5: changed "ADD shields" to "IMPROVE stroke_width + shadow"
+- **Verification:** `npm run build` → ✅ zero errors
+
+### Step A3 — image.controller.ts: Force visual_container: "none" in post-processor
+
+- **Files:** `backend/src/controllers/image.controller.ts`
+- **Changes:**
+  - Post-processor now strips `visual_container: "none"` on every textSuggestion
+  - Auto-fills `stroke_hex`, `stroke_width`, `shadow` if AI omitted them
+  - Respects fine-print: FinePrint layers skip auto-stroke/shadow
+- **Verification:** `npm run build` → ✅ zero errors
+
+### Step A4 — AIRefinementPreview.vue: Remove getContainerStyle
+
+- **Files:** `frontend/src/components/AIRefinementPreview.vue`
+- **Changes:**
+  - Deleted `getContainerStyle()` entirely (was rendering dark rgba boxes)
+  - Removed `<span :style="getContainerStyle(t)">` wrapper → plain `{{ t.part }}`
+
+### Step A5 — LayerEditor.vue: Neuter getEditorContainerStyle
+
+- **Files:** `frontend/src/components/LayerEditor.vue`
+- **Changes:**
+  - `getEditorContainerStyle()` now always returns `{}` — stub only
+
+**Commit:** `50b2841 fix: remove visual_container shield system`
 
 ---
 
-## Task 3: Visual Quality Gate
+## Task B: HTML/CSS Output Migration
 
-**File:** `backend/src/controllers/image.controller.ts`
+### Step B1 — vertex.service.ts: Add suggestLayoutHTML + refineLayoutHTML
 
-- Added `enforceDesignRules()` helper near `enforceContrast()` — regex targets 1-6 char promo strings
-- Applied after Kanit normalize pass (initial layout)
-- Applied after refinement loop accepts new suggestions (prevents refinement from shrinking promo number)
-- Log: `[QualityGate] Boosting promo number "2 ต่อ" font 60 → 160`
-- Verification: `npm run build` → ✅ clean
-- Commit: `bbc0145`
+- **Files:** `backend/src/services/vertex.service.ts`
+- **Changes:**
+  - New `suggestLayoutHTML()` method: AI generates `html_overlay` string using `%` positions and `cqw` font sizes
+  - Multi-layer text-shadow for contrast (NO dark boxes)
+  - Prompt includes layout strategy, component positions, text zone
+  - New `refineLayoutHTML()` method: takes current HTML + critique → returns improved HTML
+  - Both methods: JSON parse with fallback cleanup, XSS guard (`<script`, `<iframe` blocked)
+  - Safety config via `config: any` pattern (consistent with rest of codebase)
+- **Verification:** `npm run build` → ✅ zero errors
+
+### Step B2 — image.controller.ts: Wire HTML pipeline
+
+- **Files:** `backend/src/controllers/image.controller.ts`
+- **Changes:**
+  - Added `let htmlOverlay: string = ""` state variable
+  - Pass 2: replaced `suggestCampaignLayout(mode:"text")` → `suggestLayoutHTML()`
+  - Initial `iteration_end` SSE: `textLayers` → `html_overlay`
+  - Refinement loop: replaced `refineLayout()` → `refineLayoutHTML()` with try/catch wrapper
+  - Validation changed from text count comparison → HTML string length check (>50 chars)
+  - `iteration_end` in loop: `textLayers` → `html_overlay`
+  - `done` SSE: added `html_overlay`, kept `textLayers: []` for backward compat
+- **Verification:** `npm run build` → ✅ zero errors
+
+### Step B3 — AIRefinementPreview.vue: HTML overlay rendering
+
+- **Files:** `frontend/src/components/AIRefinementPreview.vue`
+- **Changes:**
+  - Added `import createDOMPurify from "dompurify"` + `const DOMPurify = createDOMPurify(window)`
+  - New state: `liveHtmlOverlay = ref<string>("")`
+  - New computed: `sanitizedHtmlOverlay` (DOMPurify with ALLOWED_TAGS: div/span/p/br)
+  - Template: HTML overlay `<div v-html="sanitizedHtmlOverlay" class="html-overlay-layer" />` rendered first
+  - JSON layer fallback: `v-if="currentPreviewUrl && !sanitizedHtmlOverlay"` (backward compat)
+  - Component overlays: always rendered regardless of mode
+  - `iteration_end` handler: prefers `html_overlay` over `textLayers`
+  - `done` handler: prefers `html_overlay` over `textLayers`
+  - Added `.html-overlay-layer` CSS: position absolute, inset 0, pointer-events none, z-index 10
+
+### Step B4 — LayerEditor.vue: HTML overlay in editor
+
+- **Files:** `frontend/src/components/LayerEditor.vue`
+- **Changes:**
+  - Added DOMPurify import + `computed`
+  - New state: `htmlMode = ref(false)`, `htmlOverlay = ref<string>("")`
+  - New computed: `sanitizedEditorHtmlOverlay`
+  - `campaignData` watcher: when `html_overlay` present, only load component image layers; text in HTML
+  - Template: `<div v-html="sanitizedEditorHtmlOverlay" class="editor-html-overlay-layer" />`
+  - Added `.editor-html-overlay-layer` CSS (inset 0, pointer-events none, z-index 10)
+- **Verification:** `npm run build` → ✅ zero errors (frontend)
+
+**Commit:** `eb8fac9 feat(backend): HTML/CSS pipeline`  
+**Commit:** `a3e7d24 feat(frontend): HTML overlay renderer`
 
 ---
 
-## Task 4: Confidence Gate
+## Verification Results
 
-**Files:** `backend/src/services/vertex.service.ts`, `backend/src/controllers/image.controller.ts`
-
-- Added `"confidence": <0.0-1.0>` field to `critiqueLayout` JSON schema in prompt
-- Controller reads `critique.confidence` (default 0.5 if missing)
-- Logs `[Compose] Iteration N → PASS (confidence: 87%)`
-- Both PASS branches break — confidence is informational; foundation for future differential behavior
-- SSE `critique_complete` now includes `confidence` field
-- Verification: `npm run build` → ✅ clean
-- Commit: `c3354a5`
+| Check                          | Status  |
+| ------------------------------ | ------- |
+| `backend npm run build`        | ✅ PASS |
+| `frontend npm run build`       | ✅ PASS |
+| TypeScript zero errors         | ✅ PASS |
+| DOMPurify installed            | ✅ PASS |
+| No unused variable lint errors | ✅ PASS |
 
 ---
 
-## Task 5: Update docs
+## Manual Test Steps
 
-**Files:** `progress.md`, `understanding.md`
-
-- `progress.md` updated with full session summary, tech debt, next steps
-- `understanding.md` rewritten to include Plan Phase (Step 2), Quality Gate (Step 4), Depth Layering system, and Confidence Gate — all with step numbers and rationale
-- Commit: `36ed05f`
+1. Start backend dev server: `cd backend && npm run dev`
+2. Start frontend dev server: `cd frontend && npm run dev`
+3. Generate a campaign with a Thai promotional text ("2 ต่อ รับฟรี บัตรขึ้นชิงช้าสวรรค์")
+4. Verify canvas: **no dark boxes or pill shapes** around text
+5. Verify canvas: text uses stroke + shadow for contrast
+6. Check browser DevTools Network tab → EventStream → `iteration_end` event should have `html_overlay` field (not `textLayers`)
+7. Verify promo number renders large (12-18cqw equivalent)
+8. Verify refinement loop: after 1st critique, `refineLayoutHTML` fires in backend logs
+9. Verify LayerEditor: after finalizing, text shown as HTML overlay, components still draggable

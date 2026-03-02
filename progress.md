@@ -1,6 +1,28 @@
 # Progress Tracking
 
-## 2026-03-03 (Session — Composition Upgrade + DesignAsCode)
+## 2026-03-03 (Session 2 — Kill Containers + HTML/CSS Migration)
+
+### Tasks Completed
+
+- **Task A (Kill visual_container):** Removed entire "CONTRAST SHIELD" system from prompts and frontend renderers. Text contrast now handled purely by `stroke_hex + stroke_width + shadow`. Post-processor auto-fills these if AI omits them. Commits: `50b2841`.
+- **Task B (HTML/CSS Output):** AI now generates `html_overlay` string (complete HTML fragment with `%` positions and `cqw` font sizes) instead of JSON `textLayers`. `suggestLayoutHTML()` + `refineLayoutHTML()` added to `vertex.service.ts`. Controller wired for HTML mode. Frontend `AIRefinementPreview.vue` + `LayerEditor.vue` updated with DOMPurify `v-html` rendering. Commits: `eb8fac9`, `a3e7d24`.
+
+### State (Where we left off)
+
+- Backend: `npm run dev` running. HTML pipeline live.
+- Frontend: `npm run dev` running. HTML overlay renders via `v-html`.
+- All builds passing (zero TypeScript errors).
+
+### Tech Debt
+
+- **[HIGH]** `critiqueLayout` preview PNG has no text boxes in HTML mode — need `parseHTMLOverlayToApproxSuggestions()` helper to restore critique quality.
+- **[MED]** `refineLayout()` (legacy JSON method) in vertex.service.ts should be tagged `@deprecated` or removed.
+- **[LOW]** `htmlMode` ref in LayerEditor.vue is redundant — template uses `sanitizedEditorHtmlOverlay` directly.
+- **[LOW]** Test `-webkit-text-stroke` survival through DOMPurify in production browser.
+
+---
+
+## 2026-03-03 (Session 1 — Composition Upgrade + DesignAsCode)
 
 ### Tasks Completed
 

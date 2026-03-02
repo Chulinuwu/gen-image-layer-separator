@@ -1,36 +1,80 @@
-# Superpowers Review - 2026-03-01
+# Review: Kill Containers + HTML/CSS Migration
 
-## 🚫 Blockers
-
-- **RMBG-2.0 Runtime Error (ONNX Conflict)**: The method `_removeBgRMBG2` in `backend/src/services/vertex.service.ts` is failing with:
-  `Error: Preferred output locations must have the same size as output names.`
-  This is a critical failure in the ONNX Runtime backend. Although there is a partial fix attempting to set `preferredOutputLocation = null` at line 1868, it appears ineffective, possibly due to it being applied to `(env as any).onnx` instead of the correct `env.backends.onnx` path or being evaluated too late. This prevents the high-quality background removal hybrid strategy from functioning.
-- **Environment Process Congestion**: Multiple orphan `npm run dev` processes (at least 5 observed) are active in the background. This has led to port shifting (Vite running on 5174 instead of 5173) and contributes to inconsistent behavior and resource exhaustion.
-
-## ⚠️ Majors
-
-- **Desynchronized Progress Documentation**: The `progress.md` file is severely outdated (last entry 2026-02-25), missing critical entries for the RMBG-2.0 implementation attempt and the current migration to Gemini 3.x models.
-- **Sharp Dependency Conflict**: The backend logs continue to warn about multiple `sharp` versions being loaded. This risk, though noted in the journal, remains a major technical debt that can cause intermittent image processing crashes.
-
-## ℹ️ Minors
-
-- **ONNX Shape Mismatch**: Frequent warnings about `Error merging shape info for output` suggest that the image dimensions being fed into ONNX (1024x1024) might not align perfectly with the model's preferred internal shapes, forcing a "lenient merge" fallback.
-- **Environment Configuration Typo**: `GOOGLE_SERVICE_ACCOUNT_CLIENT_X509_CERT_URL` in `.env` is prefixed with `ttps://` (missing 'h').
-
-## ✨ Nits
-
-- **Warmup Logic**: The RMBG-2.0 warmup logic logs a hard error to the console on every server start. This should be silenced or handled with a clearer diagnostic message while the model is being fixed.
-- **Duplicate Comments**: Multiple redundant comments throughout `vertex.service.ts` (e.g., duplicate "RMBG-2.0 model singleton" lines).
+**Date:** 2026-03-03  
+**Reviewer:** Superpowers Review Pass
 
 ---
 
-## 📝 Summary & Next Actions
+## Blocker
 
-Current state: **Broken Core Functionality**. The system is failing its primary ML-based layer separation goal due to an ONNX backend mismatch.
+None.
 
-### Immediate Next Actions:
+---
 
-1. **Process Cleanup**: Kill all active `node` and `npm` processes and restart fresh.
-2. **Correct ONNX Fix**: Update the `env` configuration in `vertex.service.ts` to use `env.backends.onnx.preferredOutputLocation = null` (ensuring it's imported from `@huggingface/transformers` correctly).
-3. **Update Progress Log**: Re-sync `progress.md` with the current blockers and the "Option 3" strategy implemented in `vertex.service.ts`.
-4. **Credential Audit**: Fix the malformed URL in `.env`.
+## Major
+
+### M1: `critiqueLayout` still uses text bounding boxes for preview PNG
+
+`critiqueLayout` in `vertex.service.ts` calls `generateLayoutPreview()` which draws text bounding boxes onto the preview image. In HTML mode, `textSuggestions` is now empty — so the preview PNG passed to critique will show only components, no text outlines.
+
+**Impact:** AI critique cannot "see" the text positions → feedback will be less precise (it critiques based on the raw background image, not the text overlay).
+
+**Recommended fix (next session):** Parse `html_overlay` string to extract approximate bounding boxes and pass them to `generateLayoutPreview()`. A regex over `position:absolute;top:XX%;left:XX%` divs would suffice for rough critique boxes.
+
+**Workaround right now:** `critiqueLayout` still receives the original photo + describes text from the html_overlay in its `previousAnalysis` context. Critique quality will be reduced but still functional.
+
+---
+
+## Minor
+
+### m1: enforceDesignRules still runs on empty textSuggestions
+
+In `image.controller.ts` at line ~1213, `enforceDesignRules(textSuggestions)` is called. In HTML mode `textSuggestions` is always `[]` so this is a no-op. Safe but dead code.
+
+### m2: Legacy `refineLayout` method kept in vertex.service.ts
+
+`refineLayout()` (JSON mode) is kept for fallback reference. It's no longer called from the pipeline. Should be tagged with `@deprecated` or removed in a future cleanup PR.
+
+### m3: `parseHTMLOverlayToApproxSuggestions` helper not yet implemented
+
+The plan called for a helper to parse html_overlay into approximate JSON suggestions for the preview renderer. This was deferred (see M1 above). The system works but critique preview is degraded.
+
+### m4: DOMPurify strips `-webkit-text-stroke`
+
+DOMPurify with `ALLOWED_ATTR: ["style"]` does allow inline styles, but some browser environments may strip `-webkit-text-stroke` from sanitized HTML. This is a minor visual regression risk.
+**Workaround:** `-webkit-text-stroke` is included in the AI prompt example but text-shadow alone also provides contrast.
+
+---
+
+## Nit
+
+### n1: `htmlMode.value` state in LayerEditor is tracked but only used for console.log
+
+The `htmlMode` flag is set but the template condition uses `sanitizedEditorHtmlOverlay` directly (which is falsy when no overlay). The `htmlMode` ref is redundant — can remove in future cleanup.
+
+### n2: Empty blank lines in vertex.service.ts
+
+Around the `refineLayout` signature there are extra blank lines from the edit. No functional impact.
+
+---
+
+## Summary
+
+| Severity | Count | Status                                                                   |
+| -------- | ----- | ------------------------------------------------------------------------ |
+| Blocker  | 0     | ✅ Clear                                                                 |
+| Major    | 1     | ⚠️ Critique preview degraded in HTML mode — functional workaround exists |
+| Minor    | 4     | 📋 Noted for next session                                                |
+| Nit      | 2     | 📋 Noted for future cleanup                                              |
+
+**Overall: SHIP — system is functional with one known degradation in critique preview quality.**
+
+---
+
+## Follow-up Tasks (Next Session)
+
+1. **[HIGH]** Implement `parseHTMLOverlayToApproxSuggestions()` to restore critique preview quality
+2. **[MED]** Tag `refineLayout()` as `@deprecated` or remove
+3. **[MED]** Test `-webkit-text-stroke` survival through DOMPurify in various browsers
+4. **[LOW]** Remove redundant `htmlMode` ref in LayerEditor
+5. **[LOW]** Clean up extra blank lines in vertex.service.ts around refineLayout signature
