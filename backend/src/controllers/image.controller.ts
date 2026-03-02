@@ -1109,36 +1109,8 @@ export const createCampaign = async (req: Request, res: Response) => {
       });
     }
 
-    // ── POST-PROCESS: Clamp text right/bottom edges to no-go zone boundaries ──
-    // AI often returns text elements that are technically within a safe column
-    // but whose computed width bleeds into the subject area.
-    // Code-clamp ensures no text element's right edge ever exceeds the leftmost
-    // no-go zone boundary that is to the right of the text's left edge.
-    if (textSuggestions.length > 0 && parsedNoGoZones.length > 0) {
-      textSuggestions = textSuggestions.map((s: any) => {
-        if (!s.position) return s;
-        const textLeft = s.position.left || 0;
-        const textRight = textLeft + (s.position.width || 200);
-
-        // Find the nearest no-go zone wall to the right of this text's left edge
-        let minNoGoLeft = 970; // max allowed right edge (safe margin from border)
-        for (const zone of parsedNoGoZones) {
-          const zLeft = zone.area?.left ?? zone.left ?? 1000;
-          if (zLeft > textLeft && zLeft < minNoGoLeft) {
-            minNoGoLeft = zLeft - 10; // 10px safety margin
-          }
-        }
-
-        if (textRight > minNoGoLeft) {
-          const clampedWidth = Math.max(50, minNoGoLeft - textLeft);
-          console.log(
-            `[TextClamp] "${(s.part || "").substring(0, 20)}..." width ${s.position.width} → ${clampedWidth} (right was ${textRight}, clamped to ${minNoGoLeft})`,
-          );
-          return { ...s, position: { ...s.position, width: clampedWidth } };
-        }
-        return s;
-      });
-    }
+    // POST-PROCESS width clamp removed: intentional text-character overlap is now
+    // by design (character renders in front via z-index / interaction_zone depth).
 
     // Safety net: force Kanit + enforce contrast on every text suggestion
     if (textSuggestions.length > 0) {
