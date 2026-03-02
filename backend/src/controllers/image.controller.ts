@@ -703,6 +703,85 @@ export const createCampaign = async (req: Request, res: Response) => {
       });
     };
 
+    /**
+     * Parse html_overlay string → approximate JSON text suggestions for preview rendering.
+     * Called by generateLayoutPreview() in HTML mode so critiqueLayout can see text positions.
+     * Regex extracts: top%, left% from position:absolute divs/spans + font-size cqw + text content.
+     */
+    const parseHTMLOverlayToApproxSuggestions = (html: string): any[] => {
+      if (!html) return [];
+      const results: any[] = [];
+
+      // Match each absolute-positioned group div: top:XX%;left:XX%
+      // Capture inline text content after stripping inner tags
+      const groupRe =
+        /style=['"][^'"]*position:\s*absolute[^'"]*top:\s*([\d.]+)%[^'"]*left:\s*([\d.]+)%[^'"]*['"]/g;
+      let match;
+      // Collect all group positions
+      const positions: Array<{ top: number; left: number; idx: number }> = [];
+      while ((match = groupRe.exec(html)) !== null) {
+        positions.push({
+          top: parseFloat(match[1]) * 10, // % → 0-1000
+          left: parseFloat(match[2]) * 10,
+          idx: match.index,
+        });
+      }
+
+      // For each group position, extract the next font-size:XXcqw and text content
+      for (const pos of positions) {
+        const slice = html.slice(pos.idx, pos.idx + 1500); // look ahead 1500 chars
+
+        // Get largest font in this group
+        const fontMatches = [...slice.matchAll(/font-size:\s*([\d.]+)cqw/g)];
+        const maxCqw = fontMatches.length
+          ? Math.max(...fontMatches.map((m) => parseFloat(m[1])))
+          : 4;
+        // cqw→font_size_normalized: 1cqw ≈ 10 normalized
+        const fontSizeNorm = Math.round(maxCqw * 10);
+
+        // Extract text content (strip tags)
+        const textContent = slice
+          .replace(/<[^>]+>/g, " ")
+          .replace(/\s+/g, " ")
+          .trim()
+          .substring(0, 60);
+
+        if (!textContent) continue;
+
+        // Estimate width from text length and font size
+        const estWidth = Math.min(400, textContent.length * maxCqw * 6);
+        const estHeight = maxCqw * 12;
+
+        results.push({
+          part: textContent,
+          position: {
+            top: pos.top,
+            left: pos.left,
+            width: estWidth,
+            height: estHeight,
+          },
+          style: {
+            font_size_normalized: fontSizeNorm,
+            color_hex: "#FFFFFF",
+            font_family: "Kanit",
+            shadow: "strong",
+          },
+          hierarchy:
+            fontSizeNorm > 80
+              ? "Headline"
+              : fontSizeNorm < 20
+                ? "FinePrint"
+                : "Body",
+          visual_container: "none",
+        });
+      }
+
+      console.log(
+        `[HTML→Preview] Extracted ${results.length} approx text boxes from html_overlay (${html.length} chars)`,
+      );
+      return results;
+    };
+
     // ════════════════════════════════════════════════════════════════
 
     // Step 1.5 + 2: INPAINT BG + DIE-CUT COMPONENTS (parallel, BEFORE refinement)
@@ -1270,8 +1349,13 @@ export const createCampaign = async (req: Request, res: Response) => {
       } else if (
         !shouldSkipIteration &&
         !safeZonePlacementDone &&
-        textSuggestions.length > 0
+        (textSuggestions.length > 0 || htmlOverlay.length > 0)
       ) {
+        // In HTML mode: parse html_overlay into approx bbox for overlap pre-check
+        const preCheckSuggestions = htmlOverlay
+          ? parseHTMLOverlayToApproxSuggestions(htmlOverlay)
+          : textSuggestions;
+
         const allNoGoZones = [
           ...(analysis.no_go_zones || []),
           ...parsedNoGoZones,
@@ -1346,7 +1430,7 @@ export const createCampaign = async (req: Request, res: Response) => {
           }
         }
 
-        for (const s of textSuggestions) {
+        for (const s of preCheckSuggestions) {
           if (!s.position) continue;
           const t = computeTextBBox0(s);
           for (const zone of dedupedNoGoZones) {
@@ -1410,10 +1494,15 @@ export const createCampaign = async (req: Request, res: Response) => {
           message: `Iteration ${currentIteration}/${MAX_ITERATIONS}: Generating preview...`,
         });
 
+        // In HTML mode, textSuggestions is empty — parse html_overlay to get approx boxes for preview
+        const previewTextSuggestions = htmlOverlay
+          ? parseHTMLOverlayToApproxSuggestions(htmlOverlay)
+          : textSuggestions;
+
         // Generate visual preview using SVG overlay (matches editor output)
         const previewBuffer = await vertexService.generateLayoutPreview(
           imageBuffer,
-          textSuggestions,
+          previewTextSuggestions,
           componentSuggestions,
           analysis.no_go_zones || [],
         );

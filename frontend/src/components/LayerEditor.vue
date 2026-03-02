@@ -22,7 +22,6 @@ const hintText = ref("");
 const renderMode = ref("ai"); // 'ai' or 'simple'
 
 // HTML overlay mode (Task B) — set when campaignData has html_overlay
-const htmlMode = ref(false);
 const htmlOverlay = ref<string>("");
 const sanitizedEditorHtmlOverlay = computed(() => {
   if (!htmlOverlay.value) return "";
@@ -169,14 +168,12 @@ watch(
 
     // HTML overlay mode: text is in html_overlay, only load component image layers
     if (data.html_overlay && data.html_overlay.length > 50) {
-      htmlMode.value = true;
       htmlOverlay.value = data.html_overlay;
       layers.value = [...imageLayers]; // components only — text in HTML
       console.log(
         `[Editor] HTML mode: overlay ${data.html_overlay.length} chars, ${imageLayers.length} component layers`,
       );
     } else {
-      htmlMode.value = false;
       htmlOverlay.value = "";
       layers.value = [...imageLayers, ...textLayers];
     }
