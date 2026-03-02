@@ -673,7 +673,36 @@ export const createCampaign = async (req: Request, res: Response) => {
       return colorHex;
     };
 
+    // Visual Quality Gate: SCB pattern enforcement — promo number must dominate
+    // Regex matches: 1-6 char strings of digits, Thai numerals, common promo symbols, and Thai ad units
+    const PROMO_RE =
+      /^[\d๐-๙%+×\s]{1,6}$|^[\d๐-๙.]+\s*(ต่อ|เท่า|ครั้ง|คืน|%|×)\s*$/;
+    const enforceDesignRules = (suggestions: any[]): any[] => {
+      if (suggestions.length === 0) return suggestions;
+      const maxFont = Math.max(
+        ...suggestions.map(
+          (s: any) =>
+            s.font_size_normalized || s.style?.font_size_normalized || 0,
+        ),
+      );
+      return suggestions.map((s: any) => {
+        const part = (s.part || "").trim();
+        const fontSize =
+          s.font_size_normalized || s.style?.font_size_normalized || 0;
+        if (PROMO_RE.test(part) && fontSize < maxFont * 0.8 && maxFont > 0) {
+          const boosted = 160;
+          console.log(
+            `[QualityGate] Boosting promo number "${part}" font ${fontSize} → ${boosted}`,
+          );
+          // font_size_normalized lives at top-level in text suggestions
+          return { ...s, font_size_normalized: boosted };
+        }
+        return s;
+      });
+    };
+
     // ════════════════════════════════════════════════════════════════
+
     // Step 1.5 + 2: INPAINT BG + DIE-CUT COMPONENTS (parallel, BEFORE refinement)
     // ════════════════════════════════════════════════════════════════
     let generatedBackgroundImageUrl: string | null = null;
@@ -1158,6 +1187,8 @@ export const createCampaign = async (req: Request, res: Response) => {
           color_hex: enforceContrast(s.style?.color_hex, s.position),
         },
       }));
+      // Visual Quality Gate: ensure promo numbers are visually dominant
+      textSuggestions = enforceDesignRules(textSuggestions);
     }
 
     // Send initial layout to canvas (fires after Pass 2 + post-processing — has full text + components)
@@ -1560,8 +1591,8 @@ export const createCampaign = async (req: Request, res: Response) => {
             message: `⚠️ Refinement rejected: Too many text elements removed (${prevCount} → ${newCount}).`,
           });
         } else {
-          textSuggestions = refinedAnalysis.suggestions;
-          analysis.suggestions = refinedAnalysis.suggestions;
+          textSuggestions = enforceDesignRules(refinedAnalysis.suggestions);
+          analysis.suggestions = textSuggestions;
         }
         if (refinedAnalysis.components) {
           componentSuggestions = refinedAnalysis.components;
