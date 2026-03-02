@@ -782,6 +782,36 @@ export const createCampaign = async (req: Request, res: Response) => {
       return results;
     };
 
+    /**
+     * Enforce 5% safe zone on component positions (normalized 0-1000).
+     * Moves components inward if they're cropped at any edge.
+     * Does NOT resize — just translates to stay within bounds.
+     */
+    const clampToSafeZone = (pos: any): any => {
+      if (!pos) return pos;
+      const PAD = 50; // 5% of 1000
+      const top = Math.max(PAD, pos.top ?? 0);
+      const left = Math.max(PAD, pos.left ?? 0);
+      // If width/height would push past edge, translate left/up
+      const w = pos.width ?? 200;
+      const h = pos.height ?? 200;
+      const clampedLeft = Math.min(left, 1000 - PAD - w);
+      const clampedTop = Math.min(top, 1000 - PAD - h);
+      const changed = clampedLeft !== pos.left || clampedTop !== pos.top;
+      if (changed) {
+        console.log(
+          `[SafeZone] Component clamped: top ${pos.top}→${clampedTop}, left ${pos.left}→${clampedLeft}`,
+        );
+      }
+      return {
+        ...pos,
+        top: clampedTop,
+        left: clampedLeft,
+        width: w,
+        height: h,
+      };
+    };
+
     // ════════════════════════════════════════════════════════════════
 
     // Step 1.5 + 2: INPAINT BG + DIE-CUT COMPONENTS (parallel, BEFORE refinement)
@@ -1241,9 +1271,15 @@ export const createCampaign = async (req: Request, res: Response) => {
         if (htmlAnalysis.no_go_zones?.length) {
           analysis.no_go_zones = htmlAnalysis.no_go_zones;
         }
-        // components from HTML analysis may also update positions
+        // components from HTML analysis may also update positions — clamp to safe zone
         if (htmlAnalysis.components?.length) {
-          componentSuggestions = htmlAnalysis.components;
+          componentSuggestions = htmlAnalysis.components.map((c: any) => ({
+            ...c,
+            position: clampToSafeZone(c.position),
+            suggested_position: c.suggested_position
+              ? clampToSafeZone(c.suggested_position)
+              : undefined,
+          }));
           analysis.components = componentSuggestions;
         }
       } catch (pass2Err) {
@@ -1728,13 +1764,13 @@ export const createCampaign = async (req: Request, res: Response) => {
           if (refinedResult.components?.length) {
             componentSuggestions = refinedResult.components;
             analysis.components = refinedResult.components;
-            // Sync positions back into visualComponents (images stay, positions update)
+            // Sync + clamp positions back into visualComponents (images stay, positions update)
             for (const vc of visualComponents) {
               const updated = componentSuggestions.find(
                 (c: any) => c.label === vc.label,
               );
               if (updated?.position) {
-                vc.position = updated.position;
+                vc.position = clampToSafeZone(updated.position);
                 vc.z_index = updated.z_index || vc.z_index;
               }
             }

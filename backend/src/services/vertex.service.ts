@@ -1198,11 +1198,44 @@ ${
       ✗ TEXT CUT OFF AT EDGES:
         - Any text going past the image boundary → FAIL
       
-      ✗ TEXT TOO CLOSE TO EDGE (SAFE ZONE):
-        - ALL text (except FinePrint) must have at least 3% margin from ANY edge of the image
-        - In normalized coordinates (0-1000): text must not start before 30 or extend past 970
-        - Text crammed against the edge looks cheap and unprofessional → FAIL
+      ✗ TEXT OR COMPONENT TOO CLOSE TO EDGE (10% SAFE ZONE — NON-NEGOTIABLE):
+        - ALL text (except FinePrint) must have at least 10% margin from ANY edge of the image
+        - ALL components (mascots, die-cuts, decorative images) must have at least 10% margin from ANY edge
+        - In normalized coordinates (0-1000): elements must NOT start before 100 or extend past 900
+        - Text/components crammed against the edge look cheap, get cut off in print → HARD FAIL
         - FinePrint is allowed to be closer to the bottom edge (min 1.5% / 15 in normalized coords)
+      
+      ✗ COMPONENT CUT OFF OR CROPPED AT EDGE:
+        - If any mascot, character, die-cut, or decorative image extends beyond the canvas boundary → FAIL
+        - Components should feel intentionally placed, not accidentally cropped
+      
+      ✗ COMPONENT OVERLAPS KEY TEXT or FACE IN A BAD WAY:
+        - If a component image covers the promotional number (offer) or headline text → FAIL
+        - Components may overlap secondary text for layering depth → ACCEPTABLE
+        - Components covering a person's face in the base photo → FAIL
+    `;
+
+    const componentChecks = `
+      ═══════════════════════════════════════
+      COMPONENT POSITION CHECKS (Mascots, Die-cuts, Decorative elements):
+      ═══════════════════════════════════════
+      Look at IMAGE 2 for any overlaid component images (PNGs/die-cuts).
+      
+      ✓ IDEAL component placement:
+        - Component anchored to one SIDE of canvas (left or right), leaving clear text zone on opposite side
+        - Component vertically centered or placed lower third for visual balance
+        - Component does NOT touch or cross any canvas edge
+      
+      ✗ COMPONENT PROBLEMS TO FLAG:
+        - Component is cut off at any edge (top, bottom, left, right) → FAIL + recommend moving inward 5%
+        - Component covers promotional number / headline text → FAIL + recommend moving to opposite side
+        - Component in CENTER of canvas blocking all text space → FAIL + recommend left/right placement
+        - Two components stacked on top of each other → FAIL
+      
+      In actionable_steps, add component moves EXPLICITLY:
+        - "Move mascot component from left:800 to left:700 to prevent right-edge crop"
+        - "Move character from top:0 to top:50 to give 5% top margin"
+        - "Move product image to left side (left:30) to free right side for text"
     `;
 
     const styleChecks = `
@@ -1258,6 +1291,7 @@ ${
         - An ad with no text is not an ad. Automatic FAIL.
       
       ${positionChecks}
+      ${componentChecks}
       ${styleChecks}
       
       NOTE ON FINE PRINT: Legal disclaimers, terms, and conditions (hierarchy="FinePrint") are ALLOWED to be very small (font_size 8-16). Do NOT fail them for being small. That is intentional.
@@ -1480,18 +1514,48 @@ Multi-layer text-shadow creates a thick colored outline effect:
 Also use: -webkit-text-stroke: "2px rgba(0,0,0,0.5)" for bold outlines on big text.
 
 ═══════════════════════════════════════
-LAYOUT RULES
+LAYOUT RULES — TEXT
 ═══════════════════════════════════════
 1. Group related text in ONE flex-column div (number + label stacked = 1 group, NOT scattered)
 2. Promotional number MUST be its own <span> with 12-18cqw — DOMINANT above all other text
-3. Fine print: position:absolute; bottom:1.5%; left:2%; font-size:1.0-1.2cqw; opacity:0.85
+3. Fine print: position:absolute; bottom:2%; left:5%; font-size:1.0-1.2cqw; opacity:0.85
 4. Use gap between grouped elements (gap: 0.3cqw) rather than separate absolute positions
 5. font-family: ALWAYS 'Kanit', sans-serif — no exceptions
-6. Safe zone: keep text within left:3% to right:97% (use max-width:45% on text groups if needed)
-7. z-index: 5 for text groups (components render at z:15 above text)
-8. All positioning: % units for top/left (NOT px or vw)
-9. Color: check image — use white (#fff) on dark areas, golden (#FFD700) for promo numbers
-10. Line-height: 1.0 for promo numbers, 1.2-1.3 for headlines, 1.4 for body
+6. All positioning: % units for top/left (NOT px or vw)
+7. Color: check image — use white (#fff) on dark areas, golden (#FFD700) for promo numbers
+8. Line-height: 1.0 for promo numbers, 1.2-1.3 for headlines, 1.4 for body
+9. z-index: 5 for text groups
+10. max-width:45% on text groups to avoid overflow
+
+═══════════════════════════════════════
+SAFE ZONE — NON-NEGOTIABLE (APPLIES TO BOTH TEXT AND COMPONENTS)
+═══════════════════════════════════════
+Canvas has a STRICT 5% padding on ALL four edges. Nothing may cross this boundary.
+  - top: minimum 5% from top edge
+  - bottom: maximum 93% (text), 95% (fine print only)
+  - left: minimum 5% from left edge
+  - right: text must end before 95% (use max-width to enforce)
+Violating this makes the ad look cut-off and amateurish → REJECTED.
+
+═══════════════════════════════════════
+COMPONENT PLACEMENT RULES
+═══════════════════════════════════════
+Components (mascots, die-cuts, product images) are placed as JSON, NOT in html_overlay.
+Your job: set suggested_position for each component to achieve ideal composition.
+
+RULES:
+1. ANCHOR to one side: component should sit left OR right, freeing the other half for text
+2. 5% SAFE ZONE: component top/left/bottom/right must all stay within 5% of canvas edges
+   - In normalized 0-1000: top≥50, left≥50, (left+width)≤950, (top+height)≤950
+3. Do NOT center components — centered blocks text space
+4. Scale component to fill 40-60% of canvas height for visual impact
+5. Use z_index: 15 for components (renders in front of text)
+6. interaction_zone: set overlap area where text is allowed to peek in front of component for depth
+
+COMPONENT SIDE-ANCHOR PATTERN (preferred):
+  - Mascot on RIGHT → text group on LEFT (left:5% to left:50%)
+  - Product on LEFT → text group on RIGHT (left:50% to left:90%)
+
 
 ═══════════════════════════════════════
 WHAT TO RETURN
@@ -1633,24 +1697,55 @@ Status: ${critique.status}
 Feedback: ${critique.feedback}
 Actionable steps: ${JSON.stringify(critique.actionable_steps, null, 2)}
 
-CURRENT COMPONENT POSITIONS:
+CURRENT COMPONENT POSITIONS (normalized 0-1000):
 ${JSON.stringify(previousComponents || [], null, 2)}
 
-YOUR TASK:
+═══════════════════════════════════════
+YOUR TASK — TEXT FIXES
+═══════════════════════════════════════
 1. Address ALL actionable steps from the critique feedback
-2. Return an IMPROVED version of the HTML overlay
-3. Keep same text content — only change: top/left positions, font-size (cqw), color, text-shadow, font-weight, letter-spacing, gap
-4. NEVER add background-color on text elements (no dark boxes, no pills, no shields)
-5. Use multi-layer text-shadow for contrast on photo backgrounds
-6. If text covers a face — change its top/left to move it away
-7. If text too small — increase cqw value
-8. If text scattered — wrap related text in flex-column div with gap
-9. Keep visual_container as "none" always — this is HTML mode, containers are banned
+2. Return an IMPROVED HTML overlay — keep same text content, freely change:
+   top/left %, font-size (cqw), color, text-shadow, font-weight, letter-spacing, gap, max-width
+3. NEVER add background-color on text elements (no dark boxes, no pills, no shields)
+4. Use multi-layer text-shadow for contrast on photo backgrounds
+5. If text covers a face → move top/left away from face area
+6. If text too small → increase cqw value
+7. If text scattered → wrap related text in flex-column div with gap
 
+═══════════════════════════════════════
+YOUR TASK — COMPONENT FIXES (EQUALLY IMPORTANT)
+═══════════════════════════════════════
+You MUST also reposition components if the critique mentions edge crop, overlap, or bad placement.
+Return corrected positions in the "components" array.
+
+SAFE ZONE (NON-NEGOTIABLE): normalized 0-1000 coordinates
+  - top ≥ 50 (5% from top)
+  - left ≥ 50 (5% from left)
+  - (left + width) ≤ 950 (5% from right)
+  - (top + height) ≤ 950 (5% from bottom)
+
+COMPONENT FIX RULES:
+- If component is cut off at right edge → decrease left by (left+width-950), keep width same
+- If component is cut off at top → set top = 50
+- If component blocks all text space → move to left:50 OR right (left = 950-width), free opposite side
+- If component covers promo number/headline → shift left or right by 20% to clear text
+- Aim for: component anchored to ONE side (left OR right), text on other side
+
+IMPORTANT: Even if the critique says PASS, check component positions yourself and enforce the 5% safe zone.
+
+═══════════════════════════════════════
 Return ONLY valid JSON (no markdown):
 {
   "html_overlay": "YOUR_IMPROVED_HTML_STRING_WITH_SINGLE_QUOTE_ATTRIBUTES",
-  "components": [same structure as before with any position adjustments]
+  "components": [
+    {
+      "label": "component name",
+      "position": { "top": <corrected>, "left": <corrected>, "width": <same or adjusted>, "height": <same or adjusted>, "rotation": 0 },
+      "suggested_position": { "top": <ideal>, "left": <ideal>, "width": <ideal>, "height": <ideal>, "rotation": 0, "rationale": "why this position" },
+      "z_index": 15,
+      "interaction_zone": { "enabled": true, "overlap_top": <n>, "overlap_left": <n>, "overlap_width": <n>, "overlap_height": <n> }
+    }
+  ]
 }`;
 
     const parts: any[] = [
