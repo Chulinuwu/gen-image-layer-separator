@@ -15,10 +15,10 @@
 
 ### Tech Debt
 
-- **[HIGH]** `critiqueLayout` preview PNG has no text boxes in HTML mode — need `parseHTMLOverlayToApproxSuggestions()` helper to restore critique quality.
-- **[MED]** `refineLayout()` (legacy JSON method) in vertex.service.ts should be tagged `@deprecated` or removed.
-- **[LOW]** `htmlMode` ref in LayerEditor.vue is redundant — template uses `sanitizedEditorHtmlOverlay` directly.
-- **[LOW]** Test `-webkit-text-stroke` survival through DOMPurify in production browser.
+- ✅ ~~`htmlMode` redundant ref in LayerEditor~~ — removed
+- ✅ ~~Critique preview had no text boxes in HTML mode~~ — fixed via `parseHTMLOverlayToApproxSuggestions()` helper (`e4d4fbf`)
+- ⏳ `refineLayout()` (legacy JSON method) in vertex.service.ts — tag `@deprecated` in future cleanup
+- ⏳ Test `-webkit-text-stroke` survival through DOMPurify in production browser
 
 ---
 
