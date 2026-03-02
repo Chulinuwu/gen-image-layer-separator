@@ -62,8 +62,15 @@
             <span>INITIALIZING AI CREATIVE SUITE...</span>
           </div>
 
-          <!-- Live text overlay: drop-shadow outline when debug ON follows glyph shape -->
-          <template v-if="currentPreviewUrl">
+          <!-- HTML overlay mode (Task B) — AI-generated CSS positioned text -->
+          <div
+            v-if="sanitizedHtmlOverlay"
+            v-html="sanitizedHtmlOverlay"
+            class="html-overlay-layer"
+          />
+
+          <!-- Fallback: JSON text overlay mode -->
+          <template v-if="currentPreviewUrl && !sanitizedHtmlOverlay">
             <div
               v-for="(t, idx) in liveTextLayers"
               :key="'lt' + idx"
@@ -72,8 +79,10 @@
             >
               {{ t.part }}
             </div>
+          </template>
 
-            <!-- Live component overlay: drop-shadow outline when debug ON follows PNG shape -->
+          <!-- Component overlays always rendered (regardless of mode) -->
+          <template v-if="currentPreviewUrl">
             <img
               v-for="(c, idx) in liveComponents"
               :key="'lc' + idx"
@@ -197,6 +206,8 @@
 
 <script setup lang="ts">
 import { ref, computed, nextTick } from "vue";
+import createDOMPurify from "dompurify";
+const DOMPurify = createDOMPurify(window);
 
 const props = defineProps<{
   show: boolean;
@@ -239,6 +250,17 @@ const pipelineSteps = ref<
   Array<{ label: string; src: string; elapsed?: string }>
 >([]);
 const showDebugBoxes = ref(true);
+
+// HTML overlay mode (Task B) — AI returns HTML/CSS string instead of JSON text layers
+const liveHtmlOverlay = ref<string>("");
+const sanitizedHtmlOverlay = computed(() => {
+  if (!liveHtmlOverlay.value) return "";
+  // Allow only safe HTML tags + inline styles (no scripts, no iframes)
+  return DOMPurify.sanitize(liveHtmlOverlay.value, {
+    ALLOWED_TAGS: ["div", "span", "p", "br"],
+    ALLOWED_ATTR: ["style", "class"],
+  });
+});
 
 // Thai Ad Typography tokens for Kanit — weight/spacing/line-height per hierarchy
 const KANIT_TOKENS: Record<
@@ -486,8 +508,14 @@ const handleSSEEvent = (event: string, data: any) => {
       statusText.value = "Design Approved";
       isComplete.value = true;
       addMessage("Layout finalized successfully", "success");
-      // Populate live preview from final data
-      if (data.data?.textLayers) {
+      if (data.data?.html_overlay && data.data.html_overlay.length > 50) {
+        // HTML mode
+        liveHtmlOverlay.value = data.data.html_overlay;
+        liveTextLayers.value = [];
+        liveComponents.value =
+          data.data.visualComponents || data.data.components || [];
+      } else if (data.data?.textLayers?.length) {
+        // Fallback JSON mode
         const components =
           data.data.visualComponents || data.data.components || [];
         const rawTextLayers = (data.data.textLayers || []).map((t: any) => ({
@@ -506,8 +534,16 @@ const handleSSEEvent = (event: string, data: any) => {
       }, 1000);
       break;
     case "iteration_end": {
-      // Store latest text + component data from iterations
-      if (data.textLayers) {
+      // HTML overlay mode: use html_overlay if present
+      if (
+        data.html_overlay &&
+        typeof data.html_overlay === "string" &&
+        data.html_overlay.length > 50
+      ) {
+        liveHtmlOverlay.value = data.html_overlay;
+        liveTextLayers.value = [];
+      } else if (data.textLayers) {
+        // Fallback: old JSON layer mode
         const components = data.visualComponents || data.components || [];
         const rawTextLayers = (data.textLayers || []).map((t: any) => ({
           ...t,
@@ -515,8 +551,10 @@ const handleSSEEvent = (event: string, data: any) => {
         }));
         applyInteractionZoneDepth(rawTextLayers, components);
         liveTextLayers.value = rawTextLayers;
-        liveComponents.value = components;
-      } else if (data.visualComponents?.length) {
+        liveHtmlOverlay.value = "";
+      }
+      // Components always JSON
+      if (data.visualComponents?.length) {
         liveComponents.value = data.visualComponents;
       } else if (data.components) {
         liveComponents.value = data.components;
@@ -631,6 +669,16 @@ defineExpose({ connectSSE });
   pointer-events: none;
   transition: all 0.3s ease;
   text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+/* HTML/CSS overlay layer — Task B: AI-generated HTML string rendered here */
+.html-overlay-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 10;
+  /* Kanit font is already imported via @import in canvas-content parent scope */
 }
 
 .live-component-overlay {

@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { ref, reactive, watch } from "vue";
+import { ref, reactive, watch, computed } from "vue";
+import createDOMPurify from "dompurify";
+const DOMPurify = createDOMPurify(window);
 
 const props = defineProps({
   initialBackground: String,
@@ -18,6 +20,17 @@ const canvasContainer = ref<HTMLElement | null>(null);
 const renderedImage = ref<string | null>(null);
 const hintText = ref("");
 const renderMode = ref("ai"); // 'ai' or 'simple'
+
+// HTML overlay mode (Task B) — set when campaignData has html_overlay
+const htmlMode = ref(false);
+const htmlOverlay = ref<string>("");
+const sanitizedEditorHtmlOverlay = computed(() => {
+  if (!htmlOverlay.value) return "";
+  return DOMPurify.sanitize(htmlOverlay.value, {
+    ALLOWED_TAGS: ["div", "span", "p", "br"],
+    ALLOWED_ATTR: ["style", "class"],
+  });
+});
 
 // Watch for background prop
 watch(
@@ -154,7 +167,19 @@ watch(
       });
     }
 
-    layers.value = [...imageLayers, ...textLayers];
+    // HTML overlay mode: text is in html_overlay, only load component image layers
+    if (data.html_overlay && data.html_overlay.length > 50) {
+      htmlMode.value = true;
+      htmlOverlay.value = data.html_overlay;
+      layers.value = [...imageLayers]; // components only — text in HTML
+      console.log(
+        `[Editor] HTML mode: overlay ${data.html_overlay.length} chars, ${imageLayers.length} component layers`,
+      );
+    } else {
+      htmlMode.value = false;
+      htmlOverlay.value = "";
+      layers.value = [...imageLayers, ...textLayers];
+    }
 
     // Initial sync of text content to DOM refs
     setTimeout(() => {
@@ -890,6 +915,14 @@ const downloadAsSvg = async () => {
           style="user-select: none; pointer-events: none"
         />
 
+        <!-- HTML overlay mode (Task B) — AI-generated HTML text, read-only -->
+        <div
+          v-if="sanitizedEditorHtmlOverlay"
+          v-html="sanitizedEditorHtmlOverlay"
+          class="editor-html-overlay-layer"
+          title="Text generated as HTML/CSS — use AI refinement to edit"
+        />
+
         <div
           v-for="(layer, idx) in layers"
           :key="layer.id"
@@ -1166,6 +1199,15 @@ select {
 .text-layer.active {
   outline: 2px solid var(--primary);
   outline-offset: 4px;
+}
+
+/* HTML/CSS overlay in editor — Task B: read-only AI text overlay */
+.editor-html-overlay-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 10;
 }
 
 .component-img {
