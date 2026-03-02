@@ -455,7 +455,11 @@ COMPOSITION RULES FOR TEXT:
            * Subject faces/looks LEFT → place on RIGHT side (left = 1000 - width)
            * Subject faces camera directly → default to RIGHT side
          - BLEED to edge: if left-anchored → left ≤ 50. If right-anchored → (left + width) ≥ 950
-         - Width: typically 350-500 for full-body characters
+         - NON-BLEED side MUST have breathing room ≥ 30 units:
+           * Left-anchored character (left ≤ 50): keep (left + width) ≤ 550 so text zone has 450+ units of open space.
+           * Right-anchored character: keep left ≥ 420 so text zone has 390+ units of open space.
+         - TOP breathing room: suggested_position.top MUST be ≥ 30 (character head must not touch canvas top).
+         - Width: 350-500 for full-body characters (preserve width for the text zone)
 
          MASCOTS / SECONDARY ELEMENTS: bottom-corner placement, height = 300-450
          LOGOS / BADGES / RIBBONS: keep near detected position, scale width/height up by 20%
