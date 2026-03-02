@@ -579,6 +579,7 @@ COMPOSITION RULES FOR TEXT:
               "shadow": "none | subtle | strong | outline"
             },
             "design_notes": "CRITICAL: Maintain a 'Safety Margin' of at least 5-8% from ALL edges (0-1000 scale, so avoid left < 50, right > 950, top < 50, bottom > 950). Do NOT touch the very edge.",
+            "visual_container": "none | ribbon | pill | solid_block | gradient_overlay | glassmorphism",
             "hierarchy": "Headline | Body | FinePrint"
           }
         ],
@@ -613,10 +614,26 @@ COMPOSITION RULES FOR TEXT:
           * "fineprint" → font_weight: "400"  (light, unobtrusive)
           * If the element is a large promotional number (e.g., "50%", "2 ต่อ") → font_weight: "900"
       
-      ✓ DESIGN TRICKS (COMMERCIAL GRADE):
-      - **STROKE/OUTLINE**: For main HEADLINES on busy backgrounds, ADD A STROKE (e.g., white stroke on orange text). 
-        Set "stroke_hex": "#FFFFFF", "stroke_width": 3.
-      - **GRADIENTS**: For "Promotional Numbers" (e.g., "50%", "2 ต่อ"), use gradients to make them pop.
+      ✓ DESIGN TRICKS (COMMERCIAL GRADE — MANDATORY, NOT OPTIONAL):
+      - **CONTRAST SHIELD (CRITICAL)**:
+        * If text is placed on a background with buildings, people, water, patterns, or ANY high-detail area:
+          → You MUST set "visual_container" to "ribbon", "pill", "solid_block", or "gradient_overlay"
+          → NEVER place bare white text on a high-frequency/textured background. This is "Grade 2 student" work.
+        * Only use "none" when text is on a plain solid-color area with strong contrast.
+        * SCB standard: Every important text block has a "shield" (solid color plate or ribbon behind it).
+
+      - **SHIELD TYPE GUIDE**:
+        * "ribbon": Banner/stripe across width behind text. Use for headlines on photo backgrounds.
+        * "pill": Rounded rectangle tightly around the text. Use for badges, CTAs, price tags.
+        * "solid_block": Rectangle behind a group of text. Use for text zones on photo backgrounds.
+        * "gradient_overlay": Semi-transparent gradient fade. Use when preserving BG visibility matters.
+        * "glassmorphism": Frosted glass. Use for premium/luxury vibes.
+
+      - **STROKE/OUTLINE**: For text NOT using a shield, ALWAYS add stroke.
+        Set "stroke_hex": "#FFFFFF", "stroke_width": 4-6.
+
+      - **GRADIENTS**: For "Promotional Numbers" (e.g., "50%", "2 ต่อ"), use text_gradient to make them pop.
+        Example: "text_gradient": ["#FFD700", "#FF8C00"] for gold/orange.
       
       ✓ FINEPRINT (Legal disclaimers, terms & conditions, policy text, footer):
         - font_size_normalized: 8-16 (VERY SMALL)
@@ -633,7 +650,7 @@ COMPOSITION RULES FOR TEXT:
 
       DESIGNER MINDSET (ANTI-BORING RULES):
       - FILL THE SPACE: If there's a large solid background (like a purple block), DO NOT leave it empty. Scale the text (Headline) up to 120-180 to OWN the space.
-      - USE GRAPHIC CONTAINERS: Suggest visual elements like 'yellow_tag', 'red_ribbon', 'glassmorphism_card', or 'neon_banner' in 'visual_container' property to anchor the text.
+      - CONTRAST SHIELD IS NON-NEGOTIABLE: Before finalizing any text suggestion, ask: "Is this text readable if the background has patterns, faces, or buildings?" If the answer is "maybe not" → set visual_container to a shield type. When in doubt, add the shield.
       - COMPOSITION DENSITY: An ad should look 'Full' and 'High-End'. If it looks 'empty', add more decorative components or increase font sizes significantly.
       - TEXT STYLING: Use professional combinations. E.g., a huge number '2' with a smaller 'ต่อ' next to it, not just a flat line.
     `;
