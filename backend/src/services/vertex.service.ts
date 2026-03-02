@@ -1467,11 +1467,12 @@ COMPOSITION RULES FOR TEXT:
             "label": "Short label (e.g. 'Thai boy mascot')",
             "description": "Detailed visual description for recreation (e.g. 'A cute 3D cartoon Thai boy character wearing traditional gold and red Thai costume, waving hand, chibi style')",
             "position": { "top": 0, "left": 0, "width": 0, "height": 0, "rotation": 0 },
-            "z_index": 1
+            "z_index": 15,
+            "interaction_zone": { "enabled": true, "overlap_top": 200, "overlap_left": 350, "overlap_width": 300, "overlap_height": 400 }
           }
         ]
       }
-      
+
       Position uses normalized coordinates 0-1000. Rotation is in degrees.
       Be accurate with width and height scale.
     `;

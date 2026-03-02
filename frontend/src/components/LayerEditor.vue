@@ -295,7 +295,8 @@ const processImage = async (mode: string = "full") => {
             y: comp.position.top / 10,
             w: comp.position.width / 10,
             h: comp.position.height / 10,
-            z_index: comp.z_index || 1,
+            z_index: comp.z_index || 15,
+            interaction_zone: comp.interaction_zone || null,
           });
         }
       }
