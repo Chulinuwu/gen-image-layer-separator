@@ -1002,15 +1002,21 @@ COMPOSITION RULES FOR TEXT:
         - If two different text elements overlap or are placed on top of each other → FAIL
         - Each text block must have its own clear, separate space
       
+      DEPTH LAYERING CONTEXT:
+      Some text intentionally overlaps the character for a 3D "poster" effect (character renders in front of text).
+      This is GOOD DESIGN — do NOT flag it as an error if the text appears behind the character.
+      Only flag text-on-person as BAD if the text is clearly ON TOP of the character's face or body, obscuring them.
+
       ✗ TEXT OVERLAPS A PERSON'S BODY:
         - Look at IMAGE 2. Every text block has a SEMI-TRANSPARENT RED tint behind it.
-        - If that RED tint touches or covers ANY part of a human (legs, arms, hair, clothes, face) → FAIL
-        - This is non-negotiable. RED on PERSON = REJECT.
+        - If that RED tint touches or covers ANY part of a human's FACE or key identifying features → FAIL
+        - Text that overlaps the lower body (legs, waist) but remains visually BEHIND the character is ACCEPTABLE depth layering.
         - PAY SPECIAL ATTENTION to the center and lower portions of the image where people typically stand.
-        - In this ad, there is likely a woman standing. If you see RED covering any part of her denim shirt, jeans, or skin → FAIL.
-      
-      ✗ TEXT OVERLAPS A MASCOT OR CHARACTER:
-        - If text covers any cartoon/mascot figure → FAIL
+        - In this ad, there is likely a woman standing. If you see RED covering her FACE or EYES → FAIL.
+
+      ✗ TEXT OVERLAPS A MASCOT OR CHARACTER'S FACE:
+        - If text covers the FACE of any cartoon/mascot figure → FAIL
+        - Text overlapping a character's lower body for depth-layer effect → ACCEPTABLE
       
       ✗ TEXT CUT OFF AT EDGES:
         - Any text going past the image boundary → FAIL
@@ -1224,14 +1230,15 @@ COMPOSITION RULES FOR TEXT:
       - Actionable Steps: ${JSON.stringify(critique.actionable_steps)}
       
       CRITICAL RULES FOR REFINEMENT:
-      1. Fix ALL issues mentioned in the critique's actionable_steps
-      2. NO text may overlap with any person, mascot, or character in the image
-         - Look at IMAGE 2: if text is on top of a person's body, MOVE IT AWAY
-         - Even if there's a colored banner behind the person, the person is IN FRONT
-      3. Keep the same text content — only change positions, sizes, colors, and styles
-      4. Maintain at least 3% margin from image edges (30 in 0-1000 coords)
-      5. Coordinates must be 0-1000 normalized
-      6. For COMPONENTS: You may adjust their positions to create a more harmonious composition.
+      1. Address ALL feedback from the critique's actionable_steps
+      2. DEPTH LAYERING: Text may intentionally overlap the character — the character renders IN FRONT (higher z-index). This is the SCB "character standing on the offer" effect. Do NOT move text just because it overlaps a character's lower body. DO move text if it covers the character's face.
+      3. Keep the same text content — you may freely change: positions, font_size_normalized, colors, stroke styles, visual_container, and composition grouping
+      4. IMPROVE visual hierarchy aggressively: if the offer number (e.g. "2 ต่อ") is not clearly the dominant element, INCREASE its font_size_normalized to 180-200
+      5. IMPROVE contrast shields: if text is on a photo background and lacks a visual_container, ADD one (ribbon, pill, or solid_block)
+      6. GROUPING: if related text elements are scattered, pull them together (within 30 units of each other)
+      7. Maintain at least 3% margin from image edges (30 in 0-1000 coords)
+      8. Coordinates must be 0-1000 normalized
+      9. For COMPONENTS: You may adjust their positions to create a more harmonious composition.
          - Characters/mascots should complement the text layout
          - Keep components within the image bounds
       

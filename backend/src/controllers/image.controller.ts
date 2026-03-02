@@ -1308,9 +1308,7 @@ export const createCampaign = async (req: Request, res: Response) => {
       while (
         currentIteration < MAX_ITERATIONS &&
         !shouldSkipIteration &&
-        (currentIteration === 0
-          ? preCheckOverlapFound
-          : lastCritique.status !== "PASS")
+        (currentIteration === 0 || lastCritique?.status !== "PASS")
       ) {
         currentIteration++;
         console.log(
@@ -1445,28 +1443,15 @@ export const createCampaign = async (req: Request, res: Response) => {
           }
         }
 
-        let critique;
-
-        if (overlapFound) {
-          // AUTO-FAIL: Code detected overlap, skip AI critique entirely
-          console.log(
-            `[OVERLAP CHECK] Found ${overlapDetails.length} overlaps. Auto-FAIL.`,
-          );
-          critique = {
-            status: "FAIL",
-            feedback: `CODE-DETECTED OVERLAP: ${overlapDetails.length} text block(s) overlap with people/characters. This was detected by geometric intersection, not AI vision.`,
-            actionable_steps: overlapDetails,
-          };
-        } else {
-          // No code-detected overlap — safe zones handle positions, only check style
-          critique = await vertexService.critiqueLayout(
-            imageBuffer,
-            previewBuffer,
-            mimeType,
-            targetText,
-            true, // styleOnly: positions guaranteed by safe zones
-          );
-        }
+        // Always use AI art director critique — no code auto-fail
+        // (intentional overlap with character is valid in depth-layered composition)
+        const critique = await vertexService.critiqueLayout(
+          imageBuffer,
+          previewBuffer,
+          mimeType,
+          targetText,
+          false, // full critique — positions + style + composition quality
+        );
 
         lastCritique = critique;
 
