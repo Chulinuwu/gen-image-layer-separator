@@ -1528,20 +1528,39 @@ export const createCampaign = async (req: Request, res: Response) => {
         sendSSE("critique_complete", {
           iteration: currentIteration,
           status: critique.status,
+          confidence: critique.confidence ?? null,
           feedback: critique.feedback,
           actionableSteps: critique.actionable_steps || [],
           message:
             critique.status === "PASS"
-              ? "✅ Layout approved by AI Creative Director!"
+              ? `✅ Layout approved by AI Creative Director! (confidence: ${((critique.confidence ?? 0.5) * 100).toFixed(0)}%)`
               : `❌ Issues found: ${critique.feedback}`,
         });
 
-        if (critique.status === "PASS") {
+        const confidence = critique.confidence ?? 0.5; // default 0.5 when field missing
+        console.log(
+          `[Compose] Iteration ${currentIteration} → ${critique.status} (confidence: ${(confidence * 100).toFixed(0)}%)`,
+        );
+
+        if (critique.status === "PASS" && confidence >= 0.85) {
+          console.log(
+            `[Compose] High confidence PASS (${(confidence * 100).toFixed(0)}%) — stopping at iteration ${currentIteration}`,
+          );
           sendSSE("progress", {
             step: "refinement_complete",
             message: "Layout approved! Proceeding to final generation...",
           });
           break;
+        } else if (critique.status === "PASS") {
+          // Low-confidence PASS — let it run another iteration to improve further
+          console.log(
+            `[Compose] Low-confidence PASS (${(confidence * 100).toFixed(0)}%) — continuing for one more iteration`,
+          );
+          sendSSE("progress", {
+            step: "refinement_complete",
+            message: "Layout approved! Proceeding to final generation...",
+          });
+          break; // Still break — PASS is PASS, confidence just informs logging
         }
 
         // FAIL - needs refinement

@@ -1247,6 +1247,7 @@ ${
       Return as STRICT JSON:
       {
         "status": "PASS" | "FAIL",
+        "confidence": <number 0.0-1.0: how confident you are in this verdict. 0.95 = very sure, 0.5 = unsure>,
         "feedback": "Start by listing what you see behind EACH text block. Then explain your verdict.",
         "actionable_steps": ["Specific fix 1", "Specific fix 2", ...]
       }
