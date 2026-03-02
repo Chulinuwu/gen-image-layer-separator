@@ -1068,18 +1068,8 @@ export const createCampaign = async (req: Request, res: Response) => {
         message: "AI is fitting text around the composed layout...",
       });
 
-      // Build no-go zones for text: prefer accurate die-cut stroke bboxes, fallback to RMBG bboxes
-      // noGoInstruction builder reads z.top/left/width/height directly (not z.area.*),
-      // so use flat format consistent with parsedNoGoZones
-      const textNoGoZones = strokeBboxes.length > 0
-        ? strokeBboxes.map(b => ({
-            label: b.label,
-            top: b.top,
-            left: b.left,
-            width: b.width,
-            height: b.height,
-          }))
-        : parsedNoGoZones;
+      // textNoGoZones removed — Pass 2 no longer uses forbidden zones.
+      // Character depth (interaction_zone z-index) handles visual separation instead.
 
       // Tell the AI where components are (use their final suggested_position or position)
       const fixedPositions = visualComponents.map(c => ({
