@@ -1165,7 +1165,7 @@ export const createCampaign = async (req: Request, res: Response) => {
     // ════════════════════════════════════════════════════════════════
     // Step 3: REFINEMENT LOOP — adjusts BOTH text AND component positions
     // ════════════════════════════════════════════════════════════════
-    const MAX_ITERATIONS = 1; // Safe zone placement makes first round reliable; 1 style pass max
+    const MAX_ITERATIONS = 3;
     let currentIteration = 0;
     let lastCritique: any = { status: "FAIL" };
 
