@@ -337,6 +337,30 @@ const getComponentStyle = (c: any, debugMode = false) => {
   };
 };
 
+function applyInteractionZoneDepth(rawTextLayers: any[], components: any[]): void {
+  const charLayers = components.filter((c: any) => c.interaction_zone?.enabled);
+  rawTextLayers.forEach((tl: any) => {
+    const tLeft   = (tl.position?.left   || 0) / 10;
+    const tTop    = (tl.position?.top    || 0) / 10;
+    const tRight  = tLeft + (tl.position?.width  || 0) / 10;
+    const tBottom = tTop  + (tl.position?.height || 0) / 10;
+    for (const cl of charLayers) {
+      const iz = cl.interaction_zone;
+      // Guard: skip if overlap coordinates are missing
+      if (iz.overlap_left == null || iz.overlap_top == null ||
+          iz.overlap_width == null || iz.overlap_height == null) continue;
+      const izLeft   = iz.overlap_left / 10;
+      const izTop    = iz.overlap_top  / 10;
+      const izRight  = (iz.overlap_left + iz.overlap_width)  / 10;
+      const izBottom = (iz.overlap_top  + iz.overlap_height) / 10;
+      const overlaps = !(tRight <= izLeft || tLeft >= izRight || tBottom <= izTop || tTop >= izBottom);
+      if (overlaps) {
+        tl.z_index = Math.min(tl.z_index, (cl.z_index || 15) - 5);
+      }
+    }
+  });
+}
+
 const progressPercent = computed(() => {
   return (currentIteration.value / maxIterations.value) * 100;
 });
@@ -473,29 +497,11 @@ const handleSSEEvent = (event: string, data: any) => {
       if (data.data?.textLayers) {
         const components = data.data.visualComponents || data.data.components || [];
         const rawTextLayers = (data.data.textLayers || []).map((t: any) => ({ ...t, z_index: t.z_index ?? 20 }));
-
-        // Apply interaction_zone depth: text overlapping character's interaction_zone goes behind character
-        const charLayers = components.filter((c: any) => c.interaction_zone?.enabled);
-        rawTextLayers.forEach((tl: any) => {
-          const tLeft = (tl.position?.left || 0) / 10;
-          const tTop = (tl.position?.top || 0) / 10;
-          const tRight = tLeft + (tl.position?.width || 0) / 10;
-          const tBottom = tTop + (tl.position?.height || 0) / 10;
-          for (const cl of charLayers) {
-            const iz = cl.interaction_zone;
-            const izLeft = iz.overlap_left / 10;
-            const izTop = iz.overlap_top / 10;
-            const izRight = (iz.overlap_left + iz.overlap_width) / 10;
-            const izBottom = (iz.overlap_top + iz.overlap_height) / 10;
-            const overlaps = !(tRight <= izLeft || tLeft >= izRight || tBottom <= izTop || tTop >= izBottom);
-            if (overlaps) {
-              tl.z_index = Math.min(tl.z_index, (cl.z_index || 15) - 5);
-            }
-          }
-        });
-
+        applyInteractionZoneDepth(rawTextLayers, components);
         liveTextLayers.value = rawTextLayers;
         liveComponents.value = components;
+      } else if (data.data?.visualComponents || data.data?.components) {
+        liveComponents.value = data.data.visualComponents || data.data.components;
       }
       setTimeout(() => {
         emit("complete", data.data);
@@ -506,27 +512,7 @@ const handleSSEEvent = (event: string, data: any) => {
       if (data.textLayers) {
         const components = data.visualComponents || data.components || [];
         const rawTextLayers = (data.textLayers || []).map((t: any) => ({ ...t, z_index: t.z_index ?? 20 }));
-
-        // Apply interaction_zone depth: text overlapping character's interaction_zone goes behind character
-        const charLayers = components.filter((c: any) => c.interaction_zone?.enabled);
-        rawTextLayers.forEach((tl: any) => {
-          const tLeft = (tl.position?.left || 0) / 10;
-          const tTop = (tl.position?.top || 0) / 10;
-          const tRight = tLeft + (tl.position?.width || 0) / 10;
-          const tBottom = tTop + (tl.position?.height || 0) / 10;
-          for (const cl of charLayers) {
-            const iz = cl.interaction_zone;
-            const izLeft = iz.overlap_left / 10;
-            const izTop = iz.overlap_top / 10;
-            const izRight = (iz.overlap_left + iz.overlap_width) / 10;
-            const izBottom = (iz.overlap_top + iz.overlap_height) / 10;
-            const overlaps = !(tRight <= izLeft || tLeft >= izRight || tBottom <= izTop || tTop >= izBottom);
-            if (overlaps) {
-              tl.z_index = Math.min(tl.z_index, (cl.z_index || 15) - 5);
-            }
-          }
-        });
-
+        applyInteractionZoneDepth(rawTextLayers, components);
         liveTextLayers.value = rawTextLayers;
         liveComponents.value = components;
       } else if (data.visualComponents?.length) {
