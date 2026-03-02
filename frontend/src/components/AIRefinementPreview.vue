@@ -309,7 +309,7 @@ const getTextStyle = (t: any, debugMode = false) => {
     textShadow,
     whiteSpace: "nowrap" as const,
     pointerEvents: "none" as const,
-    zIndex: 20,
+    zIndex: t.z_index ?? 20,
     letterSpacing: tokens.letterSpacing,
     lineHeight: tokens.lineHeight,
     transform: pos.rotation ? `rotate(${pos.rotation}deg)` : undefined,
@@ -471,24 +471,71 @@ const handleSSEEvent = (event: string, data: any) => {
       addMessage("Layout finalized successfully", "success");
       // Populate live preview from final data
       if (data.data?.textLayers) {
-        liveTextLayers.value = data.data.textLayers;
-      }
-      if (data.data?.visualComponents) {
-        liveComponents.value = data.data.visualComponents;
+        const components = data.data.visualComponents || data.data.components || [];
+        const rawTextLayers = (data.data.textLayers || []).map((t: any) => ({ ...t, z_index: t.z_index ?? 20 }));
+
+        // Apply interaction_zone depth: text overlapping character's interaction_zone goes behind character
+        const charLayers = components.filter((c: any) => c.interaction_zone?.enabled);
+        rawTextLayers.forEach((tl: any) => {
+          const tLeft = (tl.position?.left || 0) / 10;
+          const tTop = (tl.position?.top || 0) / 10;
+          const tRight = tLeft + (tl.position?.width || 0) / 10;
+          const tBottom = tTop + (tl.position?.height || 0) / 10;
+          for (const cl of charLayers) {
+            const iz = cl.interaction_zone;
+            const izLeft = iz.overlap_left / 10;
+            const izTop = iz.overlap_top / 10;
+            const izRight = (iz.overlap_left + iz.overlap_width) / 10;
+            const izBottom = (iz.overlap_top + iz.overlap_height) / 10;
+            const overlaps = !(tRight <= izLeft || tLeft >= izRight || tBottom <= izTop || tTop >= izBottom);
+            if (overlaps) {
+              tl.z_index = Math.min(tl.z_index, (cl.z_index || 15) - 5);
+            }
+          }
+        });
+
+        liveTextLayers.value = rawTextLayers;
+        liveComponents.value = components;
       }
       setTimeout(() => {
         emit("complete", data.data);
       }, 1000);
       break;
-    case "iteration_end":
+    case "iteration_end": {
       // Store latest text + component data from iterations
-      if (data.textLayers) liveTextLayers.value = data.textLayers;
-      if (data.visualComponents?.length) {
+      if (data.textLayers) {
+        const components = data.visualComponents || data.components || [];
+        const rawTextLayers = (data.textLayers || []).map((t: any) => ({ ...t, z_index: t.z_index ?? 20 }));
+
+        // Apply interaction_zone depth: text overlapping character's interaction_zone goes behind character
+        const charLayers = components.filter((c: any) => c.interaction_zone?.enabled);
+        rawTextLayers.forEach((tl: any) => {
+          const tLeft = (tl.position?.left || 0) / 10;
+          const tTop = (tl.position?.top || 0) / 10;
+          const tRight = tLeft + (tl.position?.width || 0) / 10;
+          const tBottom = tTop + (tl.position?.height || 0) / 10;
+          for (const cl of charLayers) {
+            const iz = cl.interaction_zone;
+            const izLeft = iz.overlap_left / 10;
+            const izTop = iz.overlap_top / 10;
+            const izRight = (iz.overlap_left + iz.overlap_width) / 10;
+            const izBottom = (iz.overlap_top + iz.overlap_height) / 10;
+            const overlaps = !(tRight <= izLeft || tLeft >= izRight || tBottom <= izTop || tTop >= izBottom);
+            if (overlaps) {
+              tl.z_index = Math.min(tl.z_index, (cl.z_index || 15) - 5);
+            }
+          }
+        });
+
+        liveTextLayers.value = rawTextLayers;
+        liveComponents.value = components;
+      } else if (data.visualComponents?.length) {
         liveComponents.value = data.visualComponents;
       } else if (data.components) {
         liveComponents.value = data.components;
       }
       break;
+    }
     case "inpaint_mask":
       // Mask preview — add to pipeline filmstrip (don't show on main canvas)
       pipelineSteps.value.push({
