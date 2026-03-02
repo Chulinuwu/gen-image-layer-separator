@@ -288,6 +288,118 @@ export class AIService {
   }
 
   /**
+   * Step 0: Layout Strategy Planner (DesignAsCode-inspired Plan phase)
+   * Thinks about composition BEFORE committing to pixel coordinates.
+   * Separates "what should the layout look like?" from "give me coordinates".
+   */
+  async planLayoutStrategy(
+    imageBuffer: Buffer,
+    mimeType: string,
+    targetText: string,
+    componentLabels: string[],
+  ): Promise<{
+    layout_concept: string;
+    dominant_element: string;
+    text_hierarchy: string[];
+    composition_notes: string;
+    recommended_text_zone: "left" | "right" | "bottom" | "full";
+  }> {
+    let processingBuffer = imageBuffer;
+    let processingMime = mimeType;
+    try {
+      processingBuffer = await sharp(imageBuffer)
+        .resize(800)
+        .jpeg({ quality: 80 })
+        .toBuffer();
+      processingMime = "image/jpeg";
+    } catch (_) {}
+
+    const model =
+      process.env.GEMINI_MODEL_ENDPOINT_2 ||
+      process.env.GEMINI_MODEL_ENDPOINT ||
+      "gemini-2.0-flash-exp";
+
+    const componentsAvailable =
+      componentLabels.length > 0
+        ? componentLabels.join(", ")
+        : "none detected yet";
+
+    const prompt = `You are a senior Thai advertising Art Director at a top Bangkok agency (SCB, Grab, PTT style).
+
+Look at this campaign image and text brief. Output a LAYOUT STRATEGY in JSON only.
+Do NOT write pixel coordinates. Think like a designer doing a quick thumbnail sketch.
+
+TEXT BRIEF:
+"""
+${targetText}
+"""
+
+VISUAL COMPONENTS AVAILABLE: ${componentsAvailable}
+
+Respond with ONLY this JSON (no markdown fences, no explanation):
+{
+  "layout_concept": "one short phrase for the composition approach, e.g. 'hero-right text-left stacked'",
+  "dominant_element": "the SINGLE most visually important piece of text or number that must dominate, e.g. '2 ต่อ'",
+  "text_hierarchy": ["ordered text parts from most to least visually important"],
+  "composition_notes": "1-2 sentence design decision, e.g. 'promotional number bleeds into character lower body; headline above it; CTA small below'",
+  "recommended_text_zone": "left | right | bottom | full"
+}
+
+SCB ad style rules I follow:
+- Promotional numbers (e.g. 2, 50%, 1.5×) → ALWAYS the dominant element, huge font
+- Character/person → right or center; text → opposite side
+- Text lock-up: related items (number + unit) = one visual block, not scattered
+- Fine print → tiny, bottom edge`;
+
+    try {
+      console.log("[Plan] Requesting layout strategy from AI...");
+      const response = await this.withRetry(() =>
+        this.client.models.generateContent({
+          model,
+          contents: [
+            {
+              role: "user",
+              parts: [
+                {
+                  inlineData: {
+                    data: processingBuffer.toString("base64"),
+                    mimeType: processingMime,
+                  },
+                },
+                { text: prompt },
+              ],
+            },
+          ],
+          config: { maxOutputTokens: 1024, temperature: 0.7 },
+        }),
+      );
+
+      const raw = (response.text || "")
+        .trim()
+        .replace(/```json|```/g, "")
+        .trim();
+      const strategy = JSON.parse(raw || "{}");
+      console.log(
+        `[Plan] Strategy: "${strategy.layout_concept}" | dominant: "${strategy.dominant_element}"`,
+      );
+      return strategy;
+    } catch (err) {
+      // Non-fatal: fallback to no strategy hint (current behavior preserved)
+      console.warn(
+        "[Plan] Strategy planning failed — proceeding without hint:",
+        err,
+      );
+      return {
+        layout_concept: "default",
+        dominant_element: "",
+        text_hierarchy: [],
+        composition_notes: "",
+        recommended_text_zone: "left",
+      };
+    }
+  }
+
+  /**
    * Suggests BOTH text placement AND visual components for a campaign
    * Returns text suggestions + component descriptions for die-cut generation
    */
@@ -305,8 +417,20 @@ export class AIService {
       area: number;
       label: string;
     }> = [],
-    fixedComponentPositions?: Array<{ label: string; top: number; left: number; width: number; height: number }>,
+    fixedComponentPositions?: Array<{
+      label: string;
+      top: number;
+      left: number;
+      width: number;
+      height: number;
+    }>,
     textZone?: { top: number; left: number; width: number; height: number },
+    layoutHint?: {
+      layout_concept: string;
+      dominant_element: string;
+      text_hierarchy: string[];
+      composition_notes: string;
+    },
   ) {
     // 1. Resize for faster analysis & stay within model limits
     let processingBuffer = imageBuffer;
@@ -395,7 +519,10 @@ ${zoneList}
     let fixedComponentNote = "";
     if (fixedComponentPositions && fixedComponentPositions.length > 0) {
       const compList = fixedComponentPositions
-        .map(c => `  - "${c.label}": occupies left=${c.left} to ${c.left + c.width}, top=${c.top} to ${c.top + c.height}`)
+        .map(
+          (c) =>
+            `  - "${c.label}": occupies left=${c.left} to ${c.left + c.width}, top=${c.top} to ${c.top + c.height}`,
+        )
         .join("\n");
       const zoneDesc = textZone
         ? `top=${textZone.top}, left=${textZone.left}, width=${textZone.width}, height=${textZone.height} (x-range: ${textZone.left} to ${textZone.left + textZone.width}, y-range: ${textZone.top} to ${textZone.top + textZone.height})`
@@ -430,6 +557,22 @@ COMPOSITION RULES FOR TEXT:
 
       ${fixedComponentNote}
       ${safeZoneInstruction || noGoInstruction}
+
+${
+  layoutHint && layoutHint.layout_concept !== "default"
+    ? `
+      ╔══════════════════════════════════════════╗
+      ║  ART DIRECTOR STRATEGY (FOLLOW EXACTLY)  ║
+      ╚══════════════════════════════════════════╝
+      Concept: ${layoutHint.layout_concept}
+      Dominant element (MUST be largest on screen): "${layoutHint.dominant_element}"
+      Text priority order: ${layoutHint.text_hierarchy.join(" › ")}
+      Design notes: ${layoutHint.composition_notes}
+      ────────────────────────────────────────────
+      Follow this strategy. Do NOT deviate from the dominant element or priority order.
+`
+    : ""
+}
 
       ═══════════════════════════════════════
       TASK 0: PRECISION OBJECT DETECTION

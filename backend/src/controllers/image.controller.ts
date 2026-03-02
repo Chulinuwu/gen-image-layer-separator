@@ -1070,11 +1070,38 @@ export const createCampaign = async (req: Request, res: Response) => {
     if (mode !== "only_bg_comp") {
       sendSSE("progress", {
         step: "text_layout",
-        message: "AI is fitting text around the composed layout...",
+        message: "AI is planning layout strategy...",
       });
 
       // textNoGoZones removed — Pass 2 no longer uses forbidden zones.
       // Character depth (interaction_zone z-index) handles visual separation instead.
+
+      // Step 0 (DesignAsCode Plan phase): let AI brainstorm layout concept before committing to coordinates
+      let layoutHint:
+        | Awaited<ReturnType<typeof vertexService.planLayoutStrategy>>
+        | undefined;
+      try {
+        layoutHint = await vertexService.planLayoutStrategy(
+          imageBuffer,
+          mimeType,
+          targetText,
+          visualComponents.map((c) => c.label),
+        );
+        sendSSE("progress", {
+          step: "layout_strategy",
+          message: `🎨 Layout strategy: "${layoutHint.layout_concept}"`,
+        });
+      } catch (planErr) {
+        console.warn(
+          "[Pass2] Plan phase failed — proceeding without hint:",
+          planErr,
+        );
+      }
+
+      sendSSE("progress", {
+        step: "text_layout",
+        message: "AI is fitting text around the composed layout...",
+      });
 
       // Tell the AI where components are (use their final suggested_position or position)
       const fixedPositions = visualComponents.map((c) => ({
@@ -1095,6 +1122,7 @@ export const createCampaign = async (req: Request, res: Response) => {
           [], // 6: safeZones (empty — not pre-computed for text pass)
           fixedPositions, // 7: fixedComponentPositions
           artDirectorTextZone || undefined, // 8: textZone
+          layoutHint, // 9: art director strategy hint
         );
         textSuggestions = textAnalysis.suggestions || [];
         // Sync Pass 2 results into analysis so refineLayout has full context
