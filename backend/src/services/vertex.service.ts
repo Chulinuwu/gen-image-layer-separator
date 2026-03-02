@@ -405,14 +405,16 @@ ${zoneList}
 COMPONENT POSITIONS ARE FIXED (pre-placed by art director — do NOT suggest moving them):
 ${compList}
 
-TEXT ZONE (ALL text MUST stay within this area):
+COMPOSITION GUIDANCE (text zone — where most text should be):
   ${zoneDesc}
 
 COMPOSITION RULES FOR TEXT:
-  - Place ALL text elements within the TEXT ZONE boundaries
-  - Pull text toward the component's nearest edge — text should relate to the character's action/gaze
-  - If character is on RIGHT → text should right-align or center toward the character
-  - If character is on LEFT → text should left-align from the left of the text zone
+  - Place MOST text within the TEXT ZONE (the open space beside the character)
+  - INTENTIONAL OVERLAP IS ALLOWED: Text elements can partially overlap the character area for a dynamic, layered 3D effect — the character will render IN FRONT of the text (higher z-index)
+  - Pull text TOWARD the character — text should reach toward the character's body/gaze, not float away from it
+  - If character is on RIGHT → text leans right, hugging the character's left edge
+  - If character is on LEFT → text leans left, hugging the character's right edge
+  - PROMOTIONAL NUMBERS (e.g. "2 ต่อ", "50%") may overlap the character's lower body (legs/waist) — this creates the "character standing on the offer" SCB effect
 ══════════════════════════════════════
 `;
     }

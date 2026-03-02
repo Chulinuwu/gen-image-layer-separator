@@ -1096,7 +1096,7 @@ export const createCampaign = async (req: Request, res: Response) => {
           mimeType,
           targetText,
           "text",
-          textNoGoZones,                    // 5: externalNoGoZones
+          [],                               // 5: no forbidden zones — character depth handles layering
           [],                               // 6: safeZones (empty — not pre-computed for text pass)
           fixedPositions,                   // 7: fixedComponentPositions
           artDirectorTextZone || undefined, // 8: textZone
