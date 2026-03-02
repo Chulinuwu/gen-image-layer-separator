@@ -639,6 +639,8 @@ export const createCampaign = async (req: Request, res: Response) => {
 
     // textSuggestions will be populated in Pass 2 (after die-cut)
     let textSuggestions: any[] = [];
+    // HTML/CSS overlay string — populated by suggestLayoutHTML in Pass 2
+    let htmlOverlay: string = "";
 
     // Mutable analysis object used throughout for no_go_zones, metadata, and inpainting context
     const analysis: any = {
@@ -1129,7 +1131,7 @@ export const createCampaign = async (req: Request, res: Response) => {
 
       sendSSE("progress", {
         step: "text_layout",
-        message: "AI is fitting text around the composed layout...",
+        message: "AI is generating HTML/CSS layout...",
       });
 
       // Tell the AI where components are (use their final suggested_position or position)
@@ -1142,34 +1144,39 @@ export const createCampaign = async (req: Request, res: Response) => {
       }));
 
       try {
-        const textAnalysis = await vertexService.suggestCampaignLayout(
+        const htmlAnalysis = await vertexService.suggestLayoutHTML(
           imageBuffer,
           mimeType,
           targetText,
-          "text",
-          [], // 5: no forbidden zones — character depth handles layering
-          [], // 6: safeZones (empty — not pre-computed for text pass)
-          fixedPositions, // 7: fixedComponentPositions
-          artDirectorTextZone || undefined, // 8: textZone
-          layoutHint, // 9: art director strategy hint
+          layoutHint,
+          fixedPositions,
+          artDirectorTextZone || undefined,
         );
-        textSuggestions = textAnalysis.suggestions || [];
-        // Sync Pass 2 results into analysis so refineLayout has full context
-        analysis.suggestions = textSuggestions;
-        if (textAnalysis.no_go_zones) {
-          analysis.no_go_zones = textAnalysis.no_go_zones;
+        htmlOverlay = htmlAnalysis.html_overlay;
+        analysis.html_overlay = htmlOverlay;
+        analysis.background_description =
+          htmlAnalysis.background_description ||
+          analysis.background_description;
+        analysis.campaign_vibe =
+          htmlAnalysis.campaign_vibe || analysis.campaign_vibe;
+        if (htmlAnalysis.no_go_zones?.length) {
+          analysis.no_go_zones = htmlAnalysis.no_go_zones;
+        }
+        // components from HTML analysis may also update positions
+        if (htmlAnalysis.components?.length) {
+          componentSuggestions = htmlAnalysis.components;
+          analysis.components = componentSuggestions;
         }
       } catch (pass2Err) {
         console.warn(
-          "[Pass2] Text layout failed, proceeding with empty text suggestions:",
+          "[Pass2] HTML layout failed, proceeding with empty overlay:",
           pass2Err,
         );
       }
 
       sendSSE("progress", {
         step: "initial_analysis_complete",
-        message: `Found ${textSuggestions.length} text + ${visualComponents.length} components`,
-        textCount: textSuggestions.length,
+        message: `HTML layout ready. Components: ${visualComponents.length}`,
         componentCount: visualComponents.length,
       });
     }
@@ -1207,13 +1214,12 @@ export const createCampaign = async (req: Request, res: Response) => {
       textSuggestions = enforceDesignRules(textSuggestions);
     }
 
-    // Send initial layout to canvas (fires after Pass 2 + post-processing — has full text + components)
+    // Send initial layout to canvas (fires after Pass 2 + post-processing — has html_overlay + components)
     sendSSE("iteration_end", {
       iteration: 0,
       message: "Initial layout mapped to canvas.",
-      textCount: textSuggestions.length,
+      html_overlay: htmlOverlay,
       componentCount: visualComponents.length,
-      textLayers: textSuggestions,
       components: componentSuggestions,
       visualComponents,
     });
@@ -1590,65 +1596,67 @@ export const createCampaign = async (req: Request, res: Response) => {
 
         sendSSE("refining", {
           iteration: currentIteration,
-          message: "Refining layout based on feedback...",
+          message: "Refining HTML layout based on feedback...",
         });
 
-        // Refine the layout based on critique — pass previewBuffer so AI can SEE the problems
-        const refinedAnalysis = await vertexService.refineLayout(
-          imageBuffer,
-          mimeType,
-          targetText,
-          analysis,
-          critique,
-          previewBuffer,
-        );
-
-        // Update local variables with refined data — but VALIDATE first!
-        const prevCount = textSuggestions.length;
-        const newCount = refinedAnalysis.suggestions?.length || 0;
-
-        if (newCount === 0) {
-          // AI deleted all text — reject completely
-          console.warn(
-            `[WARNING] Refine returned 0 suggestions (had ${prevCount}). Keeping previous layout.`,
+        // Refine the HTML overlay — pass previewBuffer so AI can SEE the problems
+        let refinedResult: { html_overlay: string; components?: any[] } | null =
+          null;
+        try {
+          refinedResult = await vertexService.refineLayoutHTML(
+            imageBuffer,
+            mimeType,
+            targetText,
+            htmlOverlay,
+            critique,
+            previewBuffer,
+            componentSuggestions,
           );
-          sendSSE("refine_rejected", {
-            iteration: currentIteration,
-            message: `⚠️ Refinement rejected: AI returned 0 text elements (had ${prevCount}). Keeping previous layout.`,
-          });
-        } else if (newCount < Math.ceil(prevCount * 0.5)) {
-          // AI deleted too many texts — reject
+        } catch (refineErr) {
           console.warn(
-            `[WARNING] Refine dropped from ${prevCount} to ${newCount} suggestions. Keeping previous layout.`,
+            "[Refine] refineLayoutHTML failed, keeping current overlay:",
+            refineErr,
           );
-          sendSSE("refine_rejected", {
-            iteration: currentIteration,
-            message: `⚠️ Refinement rejected: Too many text elements removed (${prevCount} → ${newCount}).`,
-          });
-        } else {
-          textSuggestions = enforceDesignRules(refinedAnalysis.suggestions);
-          analysis.suggestions = textSuggestions;
         }
-        if (refinedAnalysis.components) {
-          componentSuggestions = refinedAnalysis.components;
-          analysis.components = refinedAnalysis.components;
-          // Sync positions back into visualComponents (images stay, positions update)
-          for (const vc of visualComponents) {
-            const updated = componentSuggestions.find(
-              (c: any) => c.label === vc.label,
+
+        if (refinedResult) {
+          if (
+            refinedResult.html_overlay &&
+            refinedResult.html_overlay.length > 50
+          ) {
+            htmlOverlay = refinedResult.html_overlay;
+            analysis.html_overlay = htmlOverlay;
+          } else {
+            console.warn(
+              "[Refine] Refined html_overlay too short — keeping previous",
             );
-            if (updated?.position) {
-              vc.position = updated.position;
-              vc.z_index = updated.z_index || vc.z_index;
+            sendSSE("refine_rejected", {
+              iteration: currentIteration,
+              message:
+                "⚠️ Refinement returned empty overlay — keeping previous layout.",
+            });
+          }
+          if (refinedResult.components?.length) {
+            componentSuggestions = refinedResult.components;
+            analysis.components = refinedResult.components;
+            // Sync positions back into visualComponents (images stay, positions update)
+            for (const vc of visualComponents) {
+              const updated = componentSuggestions.find(
+                (c: any) => c.label === vc.label,
+              );
+              if (updated?.position) {
+                vc.position = updated.position;
+                vc.z_index = updated.z_index || vc.z_index;
+              }
             }
           }
         }
+
         sendSSE("iteration_end", {
           iteration: currentIteration,
-          message: `Layout refined (iteration ${currentIteration}).`,
-          textCount: textSuggestions.length,
+          message: `HTML layout refined (iteration ${currentIteration}).`,
+          html_overlay: htmlOverlay,
           componentCount: componentSuggestions.length,
-          textLayers: textSuggestions,
           components: componentSuggestions,
           visualComponents,
         });
@@ -1674,7 +1682,8 @@ export const createCampaign = async (req: Request, res: Response) => {
         backgroundDescription: analysis.background_description || "",
         generatedBackgroundImageUrl,
         campaignVibe: analysis.campaign_vibe || "",
-        textLayers: textSuggestions,
+        html_overlay: htmlOverlay, // HTML/CSS overlay — main output
+        textLayers: [], // backward compat: empty in HTML mode
         visualComponents,
         stackImageUrls: stackImageUrls || [],
         critiqueIterations: analysis.critique_iterations,

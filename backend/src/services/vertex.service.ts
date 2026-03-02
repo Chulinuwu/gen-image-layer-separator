@@ -1324,7 +1324,333 @@ ${
   }
 
   /**
-   * Step 1.3: Refine layout based on critique
+   * Task B: HTML/CSS layout generation — AI outputs html_overlay string
+   * instead of JSON coordinates. Uses cqw units for font sizes and
+   * text-shadow/text-stroke for contrast (no dark boxes).
+   */
+  async suggestLayoutHTML(
+    imageBuffer: Buffer,
+    mimeType: string,
+    targetText: string,
+    layoutHint?: {
+      layout_concept: string;
+      dominant_element: string;
+      text_hierarchy: string[];
+      composition_notes: string;
+    },
+    fixedComponentPositions?: Array<{
+      label: string;
+      top: number;
+      left: number;
+      width: number;
+      height: number;
+    }>,
+    artDirectorTextZone?: {
+      top: number;
+      left: number;
+      width: number;
+      height: number;
+    },
+  ): Promise<{
+    html_overlay: string;
+    background_description: string;
+    campaign_vibe: string;
+    no_go_zones: any[];
+    components: any[];
+  }> {
+    let processingBuffer = imageBuffer;
+    let processingMime = mimeType;
+    try {
+      processingBuffer = await sharp(imageBuffer)
+        .resize(
+          Math.min(1500, (await sharp(imageBuffer).metadata()).width || 1500),
+        )
+        .jpeg({ quality: 90 })
+        .toBuffer();
+      processingMime = "image/jpeg";
+    } catch (_e) {
+      /* use original */
+    }
+
+    const model =
+      process.env.GEMINI_MODEL_ENDPOINT_2 ||
+      process.env.GEMINI_MODEL_ENDPOINT ||
+      "gemini-2.0-flash-exp";
+
+    const strategyBlock =
+      layoutHint && layoutHint.layout_concept !== "default"
+        ? `
+ART DIRECTOR STRATEGY (FOLLOW EXACTLY):
+- Concept: ${layoutHint.layout_concept}
+- Dominant element (MUST be largest): "${layoutHint.dominant_element}"
+- Text priority order: ${layoutHint.text_hierarchy.join(" › ")}
+- Notes: ${layoutHint.composition_notes}
+`
+        : "";
+
+    const componentsBlock = fixedComponentPositions?.length
+      ? `
+COMPONENT POSITIONS (placed — design text around them naturally):
+${fixedComponentPositions
+  .map(
+    (c) =>
+      `- "${c.label}": left=${(c.left / 10).toFixed(0)}% to ${((c.left + c.width) / 10).toFixed(0)}%, top=${(c.top / 10).toFixed(0)}% to ${((c.top + c.height) / 10).toFixed(0)}%`,
+  )
+  .join("\n")}
+`
+      : "";
+
+    const textZoneBlock = artDirectorTextZone
+      ? `
+TEXT ZONE (place most text here):
+  x-range: ${(artDirectorTextZone.left / 10).toFixed(0)}% to ${((artDirectorTextZone.left + artDirectorTextZone.width) / 10).toFixed(0)}%
+  y-range: ${(artDirectorTextZone.top / 10).toFixed(0)}% to ${((artDirectorTextZone.top + artDirectorTextZone.height) / 10).toFixed(0)}%
+`
+      : "";
+
+    const prompt = `You are a senior Thai advertising art director generating HTML/CSS for a campaign ad canvas.
+
+AD BRIEF:
+"""
+${targetText}
+"""
+${strategyBlock}${componentsBlock}${textZoneBlock}
+═══════════════════════════════════════
+CANVAS COORDINATE SYSTEM
+═══════════════════════════════════════
+- Container: position:relative, container-type:inline-size, aspect ratio ~1:1
+- Position text groups: position:absolute, top/left in %
+- Font sizes: cqw units (container query width):
+    * Promotional numbers (offer, %, ×, price): 12-18cqw  ← HUGE and dominant
+    * Headline/sub-headline: 3.5-5.5cqw
+    * Body text: 2.5-3.5cqw
+    * Fine print / legal: 1.0-1.5cqw (intentionally tiny)
+
+═══════════════════════════════════════
+CONTRAST — MANDATORY (NO dark boxes allowed)
+═══════════════════════════════════════
+Use text-shadow ONLY for contrast. NO background-color on text elements.
+Multi-layer text-shadow creates a thick colored outline effect:
+- On photo backgrounds: "2px 2px 0 #000,-2px -2px 0 #000,2px -2px 0 #000,-2px 2px 0 #000,0 4px 12px rgba(0,0,0,0.8)"
+- On solid-color areas: "1px 1px 3px rgba(0,0,0,0.7)"
+- For light-colored text on dark: "0 2px 6px rgba(0,0,0,0.6)"
+Also use: -webkit-text-stroke: "2px rgba(0,0,0,0.5)" for bold outlines on big text.
+
+═══════════════════════════════════════
+LAYOUT RULES
+═══════════════════════════════════════
+1. Group related text in ONE flex-column div (number + label stacked = 1 group, NOT scattered)
+2. Promotional number MUST be its own <span> with 12-18cqw — DOMINANT above all other text
+3. Fine print: position:absolute; bottom:1.5%; left:2%; font-size:1.0-1.2cqw; opacity:0.85
+4. Use gap between grouped elements (gap: 0.3cqw) rather than separate absolute positions
+5. font-family: ALWAYS 'Kanit', sans-serif — no exceptions
+6. Safe zone: keep text within left:3% to right:97% (use max-width:45% on text groups if needed)
+7. z-index: 5 for text groups (components render at z:15 above text)
+8. All positioning: % units for top/left (NOT px or vw)
+9. Color: check image — use white (#fff) on dark areas, golden (#FFD700) for promo numbers
+10. Line-height: 1.0 for promo numbers, 1.2-1.3 for headlines, 1.4 for body
+
+═══════════════════════════════════════
+WHAT TO RETURN
+═══════════════════════════════════════
+Return ONLY valid JSON (no markdown fences). Use single-quote attributes inside html_overlay string.
+
+{
+  "background_description": "Scene without overlaid elements",
+  "campaign_vibe": "Energetic | Bold | Luxury | Playful",
+  "no_go_zones": [
+    { "label": "Woman face", "priority": "HIGH", "area": { "top": 50, "left": 400, "width": 200, "height": 200 }, "reason": "face" }
+  ],
+  "html_overlay": "<div style='position:absolute;inset:0;pointer-events:none;overflow:hidden'>CONTENT_HERE</div>",
+  "components": [
+    {
+      "label": "Thai mascot",
+      "description": "Visual description",
+      "position": { "top": 600, "left": 600, "width": 350, "height": 400, "rotation": 0 },
+      "suggested_position": { "top": 100, "left": 500, "width": 450, "height": 850, "rotation": 0, "rationale": "..." },
+      "z_index": 15,
+      "interaction_zone": { "enabled": true, "overlap_top": 200, "overlap_left": 500, "overlap_width": 200, "overlap_height": 500 }
+    }
+  ]
+}
+
+Example html_overlay for "2 ต่อ รับฟรี บัตรขึ้นชิงช้าสวรรค์":
+"<div style='position:absolute;inset:0;pointer-events:none;overflow:hidden'><div style='position:absolute;top:52%;left:4%;z-index:5;display:flex;flex-direction:column;gap:0.5cqw;max-width:45%'><span style='font-family:Kanit,sans-serif;font-size:16cqw;font-weight:900;color:#FFD700;line-height:1.0;letter-spacing:-0.03em;text-shadow:2px 2px 0 #000,-2px -2px 0 #000,2px -2px 0 #000,-2px 2px 0 #000,0 4px 12px rgba(0,0,0,0.8);-webkit-text-stroke:2px rgba(0,0,0,0.4)'>2 ต่อ</span><span style='font-family:Kanit,sans-serif;font-size:3.5cqw;font-weight:700;color:#fff;line-height:1.25;text-shadow:1px 1px 0 #000,-1px -1px 0 #000,0 3px 8px rgba(0,0,0,0.7)'>รับฟรี บัตรขึ้นชิงช้าสวรรค์</span></div><div style='position:absolute;bottom:1.5%;left:2%;z-index:5'><span style='font-family:Kanit,sans-serif;font-size:1.1cqw;font-weight:400;color:rgba(255,255,255,0.8)'>เงื่อนไขเป็นไปตามที่ธนาคารกำหนด</span></div></div>"`;
+
+    const htmlConfig: any = {
+      maxOutputTokens: 8192,
+      temperature: 0.9,
+      topP: 0.95,
+      safetySettings: [
+        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "OFF" },
+        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "OFF" },
+        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "OFF" },
+        { category: "HARM_CATEGORY_HARASSMENT", threshold: "OFF" },
+      ],
+    };
+
+    const response = await this.withRetry(() =>
+      this.client.models.generateContent({
+        model,
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                inlineData: {
+                  data: processingBuffer.toString("base64"),
+                  mimeType: processingMime,
+                },
+              },
+              { text: prompt },
+            ],
+          },
+        ],
+        config: htmlConfig,
+      }),
+    );
+
+    const raw = (response.text || "")
+      .trim()
+      .replace(/```json|```/g, "")
+      .trim();
+    let parsed: any;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      const cleaned = raw
+        .replace(/\\'/g, "'")
+        .replace(/\\([^"\\\/bfnrtu])/g, "$1")
+        .replace(/[\x00-\x1F\x7F]/g, " ");
+      parsed = JSON.parse(cleaned);
+    }
+
+    if (
+      !parsed.html_overlay ||
+      typeof parsed.html_overlay !== "string" ||
+      parsed.html_overlay.length < 50
+    ) {
+      throw new Error(
+        "[suggestLayoutHTML] AI returned empty or invalid html_overlay",
+      );
+    }
+    // Basic XSS guard
+    if (/<script|<iframe|javascript:/i.test(parsed.html_overlay)) {
+      throw new Error(
+        "[suggestLayoutHTML] html_overlay contains disallowed content",
+      );
+    }
+
+    console.log(
+      `[HTML] Overlay generated (${parsed.html_overlay.length} chars). Vibe: "${parsed.campaign_vibe}". Components: ${parsed.components?.length || 0}`,
+    );
+    return parsed;
+  }
+
+  /**
+   * Task B: Refine HTML/CSS overlay based on critique feedback
+   */
+  async refineLayoutHTML(
+    imageBuffer: Buffer,
+    mimeType: string,
+    targetText: string,
+    currentHtmlOverlay: string,
+    critique: { status: string; feedback: string; actionable_steps: string[] },
+    previewBuffer?: Buffer,
+    previousComponents?: any[],
+  ): Promise<{ html_overlay: string; components?: any[] }> {
+    const model =
+      process.env.GEMINI_MODEL_ENDPOINT_2 ||
+      process.env.GEMINI_MODEL_ENDPOINT ||
+      "gemini-2.0-flash-exp";
+
+    const prompt = `You are fixing an HTML/CSS ad layout based on an art director's critique.
+
+You can see TWO images:
+- IMAGE 1: The original reference background
+- IMAGE 2: The current preview (current text + components — what needs fixing)
+
+ORIGINAL BRIEF: "${targetText}"
+
+CURRENT HTML OVERLAY (what you must improve):
+${currentHtmlOverlay}
+
+ART DIRECTOR CRITIQUE:
+Status: ${critique.status}
+Feedback: ${critique.feedback}
+Actionable steps: ${JSON.stringify(critique.actionable_steps, null, 2)}
+
+CURRENT COMPONENT POSITIONS:
+${JSON.stringify(previousComponents || [], null, 2)}
+
+YOUR TASK:
+1. Address ALL actionable steps from the critique feedback
+2. Return an IMPROVED version of the HTML overlay
+3. Keep same text content — only change: top/left positions, font-size (cqw), color, text-shadow, font-weight, letter-spacing, gap
+4. NEVER add background-color on text elements (no dark boxes, no pills, no shields)
+5. Use multi-layer text-shadow for contrast on photo backgrounds
+6. If text covers a face — change its top/left to move it away
+7. If text too small — increase cqw value
+8. If text scattered — wrap related text in flex-column div with gap
+9. Keep visual_container as "none" always — this is HTML mode, containers are banned
+
+Return ONLY valid JSON (no markdown):
+{
+  "html_overlay": "YOUR_IMPROVED_HTML_STRING_WITH_SINGLE_QUOTE_ATTRIBUTES",
+  "components": [same structure as before with any position adjustments]
+}`;
+
+    const parts: any[] = [
+      { inlineData: { data: imageBuffer.toString("base64"), mimeType } },
+    ];
+    if (previewBuffer) {
+      parts.push({
+        inlineData: {
+          data: previewBuffer.toString("base64"),
+          mimeType: "image/png",
+        },
+      });
+    }
+    parts.push({ text: prompt });
+
+    const result = await this.withRetry(() =>
+      this.client.models.generateContent({
+        model,
+        contents: [{ role: "user", parts }],
+        config: { maxOutputTokens: 8192, temperature: 0.8 },
+      }),
+    );
+
+    const raw = (result.text || "")
+      .trim()
+      .replace(/```json|```/g, "")
+      .trim();
+    let parsed: any;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      const cleaned = raw
+        .replace(/\\'/g, "'")
+        .replace(/\\([^"\\\/bfnrtu])/g, "$1")
+        .replace(/[\x00-\x1F\x7F]/g, " ");
+      parsed = JSON.parse(cleaned);
+    }
+
+    if (!parsed.html_overlay || parsed.html_overlay.length < 50) {
+      throw new Error("[refineLayoutHTML] AI returned empty html_overlay");
+    }
+    if (/<script|<iframe|javascript:/i.test(parsed.html_overlay)) {
+      throw new Error(
+        "[refineLayoutHTML] html_overlay contains disallowed content",
+      );
+    }
+
+    console.log(`[HTML] Refined overlay (${parsed.html_overlay.length} chars)`);
+    return parsed;
+  }
+
+  /**
+   * Step 1.3: Refine layout based on critique (legacy JSON mode — kept for fallback)
    */
   async refineLayout(
     imageBuffer: Buffer,
