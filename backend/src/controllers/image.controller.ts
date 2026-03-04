@@ -1850,3 +1850,47 @@ export const createCampaign = async (req: Request, res: Response) => {
     res.end();
   }
 };
+
+/**
+ * POST /api/image/export-svg
+ * Post-process SVG overlay for download.
+ * Body (JSON): { svgString: string, mode: 'embed-fonts' | 'paths', includeBackground?: boolean }
+ * File (optional multipart): background image
+ */
+export const exportSvg = async (req: Request, res: Response) => {
+  try {
+    const { svgString, mode = "embed-fonts", includeBackground } = req.body;
+
+    if (!svgString || typeof svgString !== "string") {
+      res.status(400).json({ error: "svgString is required" });
+      return;
+    }
+    if (mode !== "embed-fonts" && mode !== "paths") {
+      res.status(400).json({ error: "mode must be 'embed-fonts' or 'paths'" });
+      return;
+    }
+
+    // Optional background image for full-composition mode
+    let backgroundBuffer: Buffer | null = null;
+    const bgFile = (req as any).file;
+    if ((includeBackground === "true" || includeBackground === true) && bgFile) {
+      backgroundBuffer = fs.readFileSync(bgFile.path);
+    }
+
+    const processedSvg = await vertexService.exportSVG(
+      svgString,
+      backgroundBuffer,
+      mode as "embed-fonts" | "paths",
+    );
+
+    res.setHeader("Content-Type", "image/svg+xml");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="ad-layout-${mode}.svg"`,
+    );
+    res.send(processedSvg);
+  } catch (err: any) {
+    console.error("[exportSvg] Error:", err);
+    res.status(500).json({ error: err.message || "SVG export failed" });
+  }
+};

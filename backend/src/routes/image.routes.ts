@@ -7,6 +7,7 @@ import {
   suggestCampaign,
   renderCampaign,
   createCampaign,
+  exportSvg,
 } from "../controllers/image.controller";
 
 const router = Router();
@@ -59,5 +60,8 @@ router.post(
   ]),
   createCampaign,
 );
+
+// SVG export
+router.post("/export-svg", upload.single("background"), exportSvg);
 
 export default router;
