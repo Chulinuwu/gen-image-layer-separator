@@ -705,43 +705,60 @@ export const createCampaign = async (req: Request, res: Response) => {
 
     /**
      * Parse svg_overlay string → approximate JSON text suggestions for preview rendering.
-     * Extracts translate(x,y) + font-size from <g transform> + <text> elements.
+     * Extracts translate(x,y) + font-size from any <text> element, resolving nearest ancestor translate().
      */
     const parseSVGOverlayToApproxSuggestions = (svg: string): any[] => {
       const results: any[] = [];
-      const groupRegex =
-        /<g[^>]*transform="translate\(\s*([\d.]+)[,\s]+([\d.]+)\s*\)"[^>]*>([\s\S]*?)<\/g>/g;
-      let gm;
-      while ((gm = groupRegex.exec(svg)) !== null) {
-        const [, txStr, tyStr, groupContent] = gm;
-        const tx = parseFloat(txStr);
-        const ty = parseFloat(tyStr);
-        const textMatch = groupContent.match(
-          /<text[^>]*font-size="([\d.]+)"[^>]*>([\s\S]*?)<\/text>/,
-        );
-        if (!textMatch) continue;
-        const fontSize = parseFloat(textMatch[1]);
-        const textContent = (
-          textMatch[2].match(/<tspan[^>]*>([^<]*)<\/tspan>/g) || []
-        )
-          .map((t: string) => t.replace(/<[^>]+>/g, ""))
-          .join(" ")
-          .trim();
+      const vbMatch = svg.match(/viewBox="0 0 (\d+) (\d+)"/);
+      const cw = vbMatch ? parseInt(vbMatch[1], 10) : 1080;
+      const ch = vbMatch ? parseInt(vbMatch[2], 10) : 1080;
+
+      // Match every <text>...</text> block regardless of parent structure
+      const textRegex = /<text([^>]*)>([\s\S]*?)<\/text>/g;
+      let tm: RegExpExecArray | null;
+      while ((tm = textRegex.exec(svg)) !== null) {
+        const textAttrs = tm[1];
+        const textBody = tm[2];
+        const matchStart = tm.index;
+
+        const fsMatch = textAttrs.match(/font-size=["\'](\d+(?:\.\d+)?)["\']/);
+        if (!fsMatch) continue;
+        const fontSize = parseFloat(fsMatch[1]);
+
+        // Find the last translate() before this <text> to resolve absolute position
+        const precedingSvg = svg.slice(0, matchStart);
+        const translateRe = /transform=["\'\s]*translate\(\s*(-?[\d.]+)[,\s]+(-?[\d.]+)\s*\)/g;
+        let txFinal = 0, tyFinal = 0;
+        let trm: RegExpExecArray | null;
+        while ((trm = translateRe.exec(precedingSvg)) !== null) {
+          txFinal = parseFloat(trm[1]);
+          tyFinal = parseFloat(trm[2]);
+        }
+        const xAttr = textAttrs.match(/\bx=["\'](\d+(?:\.\d+)?)["\']/);
+        const yAttr = textAttrs.match(/\by=["\'](\d+(?:\.\d+)?)["\']/);
+        if (xAttr) txFinal += parseFloat(xAttr[1]);
+        if (yAttr) tyFinal += parseFloat(yAttr[1]) - fontSize; // y is baseline
+
+        // Gather text from all tspans
+        const tspanTexts = [...textBody.matchAll(/<tspan[^>]*>([^<]*)<\/tspan>/g)]
+          .map((m) => m[1].trim())
+          .filter(Boolean);
+        const textContent = tspanTexts.join(' ');
         if (!textContent) continue;
-        const estimatedWidth = Math.min(textContent.length * fontSize * 0.6, 500);
-        const estimatedHeight = fontSize * 1.5;
-        const vbMatch = svg.match(/viewBox="0 0 (\d+) (\d+)"/);
-        const cw = vbMatch ? parseInt(vbMatch[1], 10) : 1080;
-        const ch = vbMatch ? parseInt(vbMatch[2], 10) : 1080;
+
+        const lineCount = Math.max(1, tspanTexts.length);
+        const estimatedWidth = Math.min(textContent.length * fontSize * 0.55, cw * 0.6);
+        const estimatedHeight = fontSize * lineCount * 1.25;
+
         results.push({
           content: textContent,
           position: {
-            top: Math.round((ty / ch) * 1000),
-            left: Math.round((tx / cw) * 1000),
+            top: Math.max(0, Math.round((tyFinal / ch) * 1000)),
+            left: Math.max(0, Math.round((txFinal / cw) * 1000)),
             width: Math.round((estimatedWidth / cw) * 1000),
             height: Math.round((estimatedHeight / ch) * 1000),
           },
-          style: { font_size_normalized: fontSize, color_hex: "#FFFFFF" },
+          style: { font_size_normalized: fontSize, color_hex: '#FFFFFF' },
         });
       }
       console.log(
@@ -749,6 +766,7 @@ export const createCampaign = async (req: Request, res: Response) => {
       );
       return results;
     };
+
 
     /**
      * Enforce 5% safe zone on component positions (normalized 0-1000).

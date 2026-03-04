@@ -1483,45 +1483,94 @@ ${
     let meta = {};
     let svgContent = "";
 
-    const metaMatch = raw.match(/<META>([\s\S]*?)<\/META>/i);
-    const svgMatch = raw.match(/<SVG_OVERLAY>([\s\S]*?)<\/SVG_OVERLAY>/i);
+    console.log(`[parseSVGResponse] Raw response length: ${raw.length} chars`);
 
-    if (metaMatch || svgMatch) {
-      if (metaMatch) {
-        const metaStr = metaMatch[1].trim();
-        try {
-          meta = JSON.parse(metaStr);
-        } catch {
-          console.warn("[parseSVGResponse] META JSON parse failed, attempting repair");
-          const repaired =
-            metaStr.replace(/,\s*$/, "") +
-            "}".repeat(
-              Math.max(
-                0,
-                (metaStr.match(/{/g) || []).length -
-                  (metaStr.match(/}/g) || []).length,
-              ),
-            );
-          const cleaned = repaired
-            .replace(/\\'/g, "'")
-            .replace(/\\([^"\\\/bfnrtu])/g, "$1")
-            .replace(/[\x00-\x1F\x7F]/g, " ");
-          try {
-            meta = JSON.parse(cleaned);
-          } catch (e) {
-            console.error("[parseSVGResponse] META JSON repair failed", e);
-          }
-        }
+    // 1. Extract SVG Content (Preferred Tags: <SVG_OVERLAY>, Fallback: [SVG_OVERLAY])
+    const svgMatchClosed = raw.match(/<(?:SVG_OVERLAY|SVG)>([\s\S]*?)<\/(?:SVG_OVERLAY|SVG)>/i) ||
+                           raw.match(/\[(?:SVG_OVERLAY|SVG)\]([\s\S]*?)\[\/(?:SVG_OVERLAY|SVG)\]/i);
+    
+    const svgMatchOpen = raw.match(/<(?:SVG_OVERLAY|SVG)>([\s\S]*)/i) ||
+                         raw.match(/\[(?:SVG_OVERLAY|SVG)\]([\s\S]*)/i);
+
+    if (svgMatchClosed) {
+      svgContent = svgMatchClosed[1].trim();
+    } else if (svgMatchOpen) {
+      console.warn("[parseSVGResponse] SVG tag was truncated — no closing tag found, using greedy match");
+      svgContent = svgMatchOpen[1].trim();
+      // If we grabbed everything and META is after SVG, strip it out
+      if (svgContent.includes("<META>")) {
+        svgContent = svgContent.split(/<META>/i)[0].trim();
+      } else if (svgContent.includes("[META]")) {
+        svgContent = svgContent.split(/\[META\]/i)[0].trim();
       }
-      if (svgMatch) {
-        svgContent = svgMatch[1].trim();
-      }
-      return { ...meta, svg_overlay: svgContent };
     }
 
-    // No delimiters found
-    console.warn("[parseSVGResponse] <SVG_OVERLAY> tag missing in response");
-    return { svg_overlay: "" };
+    // 2. Extract META Content
+    const metaMatch = raw.match(/<META>([\s\S]*?)<\/META>/i) || 
+                      raw.match(/\[META\]([\s\S]*?)\[\/META\]/i);
+    const metaMatchOpen = raw.match(/<META>([\s\S]*)/i) ||
+                          raw.match(/\[META\]([\s\S]*)/i);
+
+    let metaStr = "";
+    if (metaMatch) {
+      metaStr = metaMatch[1].trim();
+    } else if (metaMatchOpen) {
+      // If we matched SVG first and it stripped META, this might be null. 
+      // But we check metaMatchOpen on the original raw.
+      metaStr = metaMatchOpen[1].trim();
+    }
+
+    if (metaStr) {
+      try {
+        meta = JSON.parse(metaStr);
+      } catch {
+        // Attempt Repair
+        const repaired = metaStr.replace(/,\s*$/, "") + "}".repeat(Math.max(0, (metaStr.match(/{/g) || []).length - (metaStr.match(/}/g) || []).length));
+        const cleaned = repaired.replace(/\\'/g, "'").replace(/\\([^"\\\/bfnrtu])/g, "$1").replace(/[\x00-\x1F\x7F]/g, " ");
+        try {
+          meta = JSON.parse(cleaned);
+        } catch (e) {
+          console.error("[parseSVGResponse] META JSON repair failed", e);
+        }
+      }
+    }
+
+    // 3. Last Resort Fallbacks for SVG
+    if (!svgContent || svgContent.length < 50) {
+      // Fallback: Markdown code fence
+      const fenceMatch = raw.match(/```(?:svg|xml|SVG)?\s*([\s\S]*?)<\/svg>/i) || raw.match(/```(?:svg|xml|SVG)?\s*([\s\S]*?)```/i);
+      if (fenceMatch) {
+        const extracted = fenceMatch[1].includes("<svg") ? fenceMatch[1].slice(fenceMatch[1].indexOf("<svg")) : fenceMatch[1];
+        if (extracted.length > 50) {
+          svgContent = extracted.trim();
+          if (!svgContent.endsWith("</svg>")) svgContent += "</svg>";
+          console.log(`[parseSVGResponse] Fallback: Extracted SVG from code fence (${svgContent.length} chars)`);
+        }
+      }
+      
+      // Fallback: Bare <svg> tag
+      if (!svgContent || svgContent.length < 50) {
+        const bareSvgMatch = raw.match(/<svg[\s\S]*?<\/svg>/i) || raw.match(/<svg[\s\S]*/i);
+        if (bareSvgMatch) {
+          svgContent = bareSvgMatch[0].trim();
+          if (!svgContent.endsWith("</svg>")) svgContent += "</svg>";
+          console.log(`[parseSVGResponse] Fallback: Extracted bare <svg> block (${svgContent.length} chars)`);
+        }
+      }
+    }
+
+    if (svgContent) {
+      // Final sanitization: ensure it has proper closing tags if truncated
+      if (!svgContent.includes("</svg>")) {
+        const openGs = (svgContent.match(/<g[^/]*/g) || []).length - (svgContent.match(/<\/g>/g) || []).length;
+        svgContent += "</g>".repeat(Math.max(0, openGs)) + "</svg>";
+      }
+      console.log(`[parseSVGResponse] ✅ Extracted svg_overlay: ${svgContent.length} chars`);
+    } else {
+      console.warn("[parseSVGResponse] All extraction methods failed. Raw snippet:\n" + raw.slice(0, 800));
+    }
+
+    return { ...meta, svg_overlay: svgContent };
   }
 
   /**
@@ -1935,49 +1984,52 @@ COMPONENT PLACEMENT RULES (JSON in META, NOT in SVG)
 5. z_index: 15 for components
 
 ═══════════════════════════════════════
-RETURN FORMAT
+RETURN FORMAT — OUTPUT <SVG_OVERLAY> FIRST, THEN <META>
 ═══════════════════════════════════════
-Return TWO parts using XML delimiters <META> and <SVG_OVERLAY>. Do NOT nest SVG inside JSON.
+No markdown fences. No JSON wrapping of SVG. SVG first, META second.
 
-<META>
-{
-  "background_description": "Scene description",
-  "campaign_vibe": "Energetic | Bold | Luxury | Playful",
-  "no_go_zones": [
-    { "label": "face", "priority": "HIGH", "area": { "top": 50, "left": 400, "width": 200, "height": 200 }, "reason": "face" }
-  ],
-  "components": [
-    {
-      "label": "mascot",
-      "description": "description",
-      "position": { "top": 100, "left": 500, "width": 450, "height": 850, "rotation": 0 },
-      "suggested_position": { "top": 100, "left": 500, "width": 450, "height": 850, "rotation": 0, "rationale": "..." },
-      "z_index": 15,
-      "interaction_zone": { "enabled": true, "overlap_top": 200, "overlap_left": 500, "overlap_width": 200, "overlap_height": 500 }
-    }
-  ]
-}
-</META>
 <SVG_OVERLAY>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${canvasWidth} ${canvasHeight}" width="${canvasWidth}" height="${canvasHeight}">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${canvasWidth} ${canvasHeight}" width="${canvasWidth}" height="${canvasHeight}" overflow="hidden">
   <defs>
     <filter id="f0" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="2" dy="3" stdDeviation="5" flood-color="#000000" flood-opacity="0.8"/>
+      <feDropShadow dx="2" dy="4" stdDeviation="6" flood-color="#000" flood-opacity="0.85"/>
     </filter>
   </defs>
   <g id="text-overlay">
-    <g id="block-0" transform="translate(X, Y)">
-      <text x="0" y="BASELINE" font-family="Kanit, sans-serif" font-size="FS" font-weight="700" fill="#FFFFFF" stroke="rgba(0,0,0,0.5)" stroke-width="8" paint-order="stroke fill" filter="url(#f0)">
-        <tspan x="0" dy="0">text line 1</tspan>
-        <tspan x="0" dy="1.25em" font-size="FS2" font-weight="400">text line 2</tspan>
+    <g id="block-promo" transform="translate(X_PX, Y_PX)">
+      <text x="0" y="FONT_PX" font-family="Kanit, sans-serif" font-size="FONT_PX" font-weight="900" fill="#FFD700" stroke="rgba(0,0,0,0.45)" stroke-width="10" paint-order="stroke fill" filter="url(#f0)">
+        <tspan x="0" dy="0">PROMO_TEXT</tspan>
+        <tspan x="0" dy="1.1em" font-size="HEADLINE_PX" font-weight="700" fill="#fff">HEADLINE</tspan>
+        <tspan x="0" dy="1.3em" font-size="BODY_PX" font-weight="400" fill="#fff">SUBTEXT</tspan>
       </text>
+    </g>
+    <g id="block-fine" transform="translate(${safeX}, ${maxY - 10})">
+      <text x="0" y="0" font-family="Kanit, sans-serif" font-size="${Math.round(canvasWidth * 0.012)}" fill="rgba(255,255,255,0.8)">FINE_PRINT</text>
     </g>
   </g>
 </svg>
-</SVG_OVERLAY>`;
+</SVG_OVERLAY>
+<META>
+{
+  "background_description": "...",
+  "campaign_vibe": "...",
+  "no_go_zones": [{ "label": "face", "priority": "HIGH", "area": { "top": 0, "left": 0, "width": 0, "height": 0 }, "reason": "face" }],
+  "components": [{ "label": "name", "position": { "top": 0, "left": 0, "width": 0, "height": 0, "rotation": 0 }, "suggested_position": { "top": 0, "left": 0, "width": 0, "height": 0, "rotation": 0, "rationale": "..." }, "z_index": 15, "interaction_zone": { "enabled": true, "overlap_top": 0, "overlap_left": 0, "overlap_width": 0, "overlap_height": 0 } }]
+}
+</META>
 
+Replace ALL placeholders with real campaign copy and computed pixel values.
+
+CRITICAL Y-POSITION RULE (MUST FOLLOW):
+- For a text group with translate(X, Y_PX): the BOTTOM of the last text line must stay within maxY=${maxY}px
+- Formula: Y_PX + (first_font_size * 1.05) + (headline_font_size * 1.1) + (body_font_size * 1.3) < ${maxY}
+- Example for promo text: if font-size=160px + 2 extra lines, set translate Y <= ${Math.round(canvasHeight * 0.45)} so all lines fit
+- If only 1 promo number: translate Y can be up to ${Math.round(canvasHeight * 0.75)}
+- Fine print line: ALWAYS translate(${safeX}, ${maxY - 15}) — do NOT put it lower than maxY`;
+
+    console.log("[SVG] Prompt length:", prompt.length, "chars");
     const svgConfig: any = {
-      maxOutputTokens: 8192,
+      
       temperature: 0.9,
       topP: 0.95,
       safetySettings: [
@@ -2099,24 +2151,18 @@ Return corrected positions in the "components" array (normalized 0-1000):
 - top≥50, left≥50, (left+width)≤950, (top+height)≤950
 
 ═══════════════════════════════════════
-RETURN FORMAT
+RETURN FORMAT — OUTPUT <SVG_OVERLAY> FIRST, THEN <META>
 ═══════════════════════════════════════
+<SVG_OVERLAY>
+YOUR_IMPROVED_SVG_HERE
+</SVG_OVERLAY>
 <META>
 {
   "components": [
-    {
-      "label": "name",
-      "position": { "top": 100, "left": 500, "width": 450, "height": 850, "rotation": 0 },
-      "suggested_position": { "top": 100, "left": 500, "width": 450, "height": 850, "rotation": 0, "rationale": "why" },
-      "z_index": 15,
-      "interaction_zone": { "enabled": true, "overlap_top": 200, "overlap_left": 500, "overlap_width": 200, "overlap_height": 500 }
-    }
+    { "label": "name", "position": { "top": 100, "left": 500, "width": 450, "height": 850, "rotation": 0 }, "suggested_position": { "top": 100, "left": 500, "width": 450, "height": 850, "rotation": 0, "rationale": "why" }, "z_index": 15, "interaction_zone": { "enabled": true, "overlap_top": 200, "overlap_left": 500, "overlap_width": 200, "overlap_height": 500 } }
   ]
 }
-</META>
-<SVG_OVERLAY>
-YOUR_IMPROVED_SVG_HERE
-</SVG_OVERLAY>`;
+</META>`;
 
     const parts: any[] = [
       { inlineData: { data: imageBuffer.toString("base64"), mimeType } },
@@ -2135,7 +2181,7 @@ YOUR_IMPROVED_SVG_HERE
       this.client.models.generateContent({
         model,
         contents: [{ role: "user", parts }],
-        config: { maxOutputTokens: 8192, temperature: 0.8 },
+        config: {  temperature: 0.8 },
       }),
     );
 
@@ -2232,7 +2278,10 @@ YOUR_IMPROVED_SVG_HERE
         if (fontCache[weight]) return fontCache[weight];
         const assetsDir = path.join(__dirname, "../../assets/fonts");
         const candidates = [
-          path.join(assetsDir, `Kanit-${weight === "400" ? "Regular" : weight === "700" ? "Bold" : "Black"}.ttf`),
+          path.join(
+            assetsDir,
+            `Kanit-${weight === "400" ? "Regular" : weight === "700" ? "Bold" : "Black"}.ttf`,
+          ),
           path.join(assetsDir, `kanit-${weight}.ttf`),
           path.join(fontDir, `kanit-thai-${weight}-normal.ttf`),
           path.join(fontDir, `kanit-latin-${weight}-normal.ttf`),
@@ -2255,8 +2304,8 @@ YOUR_IMPROVED_SVG_HERE
       if (!testFont) {
         throw new Error(
           "[exportSVG] paths mode requires TTF font files. " +
-          "Place Kanit TTF files in backend/assets/fonts/ (e.g. Kanit-Bold.ttf). " +
-          "Download from https://fonts.google.com/specimen/Kanit",
+            "Place Kanit TTF files in backend/assets/fonts/ (e.g. Kanit-Bold.ttf). " +
+            "Download from https://fonts.google.com/specimen/Kanit",
         );
       }
 

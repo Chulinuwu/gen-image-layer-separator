@@ -28,15 +28,44 @@ const sanitizedEditorSvgOverlay = computed(() => {
   return DOMPurify.sanitize(svgOverlay.value, {
     USE_PROFILES: { svg: true, svgFilters: true },
     ADD_TAGS: [
-      "svg", "g", "text", "tspan", "rect", "defs", "filter",
-      "feDropShadow", "image", "style",
+      "svg",
+      "g",
+      "text",
+      "tspan",
+      "rect",
+      "defs",
+      "filter",
+      "feDropShadow",
+      "image",
+      "style",
     ],
     ADD_ATTR: [
-      "viewBox", "xmlns", "transform", "font-family", "font-size",
-      "font-weight", "fill", "stroke", "stroke-width", "paint-order",
-      "filter", "dy", "dx", "x", "y", "rx", "ry", "width", "height",
-      "flood-color", "flood-opacity", "stdDeviation", "in",
-      "preserveAspectRatio", "id", "letter-spacing",
+      "viewBox",
+      "xmlns",
+      "transform",
+      "font-family",
+      "font-size",
+      "font-weight",
+      "fill",
+      "stroke",
+      "stroke-width",
+      "paint-order",
+      "filter",
+      "dy",
+      "dx",
+      "x",
+      "y",
+      "rx",
+      "ry",
+      "width",
+      "height",
+      "flood-color",
+      "flood-opacity",
+      "stdDeviation",
+      "in",
+      "preserveAspectRatio",
+      "id",
+      "letter-spacing",
     ],
   });
 });
@@ -1215,6 +1244,13 @@ select {
   pointer-events: none;
   overflow: hidden;
   z-index: 10;
+}
+.editor-svg-overlay-layer > svg {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+  overflow: hidden;
 }
 
 .component-img {

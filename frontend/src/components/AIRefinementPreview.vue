@@ -202,7 +202,9 @@
             <label>Export mode:</label>
             <select v-model="exportMode">
               <option value="embed-fonts">Embed Fonts (editable text)</option>
-              <option value="paths">Convert to Paths (max fidelity, requires TTF)</option>
+              <option value="paths">
+                Convert to Paths (max fidelity, requires TTF)
+              </option>
             </select>
           </div>
           <button
@@ -275,15 +277,44 @@ const sanitizedSvgOverlay = computed(() => {
   return DOMPurify.sanitize(liveSvgOverlay.value, {
     USE_PROFILES: { svg: true, svgFilters: true },
     ADD_TAGS: [
-      "svg", "g", "text", "tspan", "rect", "defs", "filter",
-      "feDropShadow", "image", "style",
+      "svg",
+      "g",
+      "text",
+      "tspan",
+      "rect",
+      "defs",
+      "filter",
+      "feDropShadow",
+      "image",
+      "style",
     ],
     ADD_ATTR: [
-      "viewBox", "xmlns", "transform", "font-family", "font-size",
-      "font-weight", "fill", "stroke", "stroke-width", "paint-order",
-      "filter", "dy", "dx", "x", "y", "rx", "ry", "width", "height",
-      "flood-color", "flood-opacity", "stdDeviation", "in",
-      "preserveAspectRatio", "id", "letter-spacing",
+      "viewBox",
+      "xmlns",
+      "transform",
+      "font-family",
+      "font-size",
+      "font-weight",
+      "fill",
+      "stroke",
+      "stroke-width",
+      "paint-order",
+      "filter",
+      "dy",
+      "dx",
+      "x",
+      "y",
+      "rx",
+      "ry",
+      "width",
+      "height",
+      "flood-color",
+      "flood-opacity",
+      "stdDeviation",
+      "in",
+      "preserveAspectRatio",
+      "id",
+      "letter-spacing",
     ],
   });
 });
@@ -737,6 +768,15 @@ defineExpose({ connectSSE });
   position: absolute;
   inset: 0;
   pointer-events: none;
+  overflow: hidden;
+}
+/* Force the inner <svg> to fill the container and clip overflow on both components */
+.svg-overlay-layer > svg,
+.editor-svg-overlay-layer > svg {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
   overflow: hidden;
 }
 
