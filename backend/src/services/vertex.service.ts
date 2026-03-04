@@ -2230,7 +2230,10 @@ YOUR_IMPROVED_SVG_HERE
       const fontCache: Record<string, any> = {};
       const loadFont = async (weight: string): Promise<any> => {
         if (fontCache[weight]) return fontCache[weight];
+        const assetsDir = path.join(__dirname, "../../assets/fonts");
         const candidates = [
+          path.join(assetsDir, `Kanit-${weight === "400" ? "Regular" : weight === "700" ? "Bold" : "Black"}.ttf`),
+          path.join(assetsDir, `kanit-${weight}.ttf`),
           path.join(fontDir, `kanit-thai-${weight}-normal.ttf`),
           path.join(fontDir, `kanit-latin-${weight}-normal.ttf`),
           "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf",
@@ -2246,6 +2249,16 @@ YOUR_IMPROVED_SVG_HERE
         );
         return null;
       };
+
+      // Verify at least one font weight can be loaded before attempting conversion
+      const testFont = await loadFont("700");
+      if (!testFont) {
+        throw new Error(
+          "[exportSVG] paths mode requires TTF font files. " +
+          "Place Kanit TTF files in backend/assets/fonts/ (e.g. Kanit-Bold.ttf). " +
+          "Download from https://fonts.google.com/specimen/Kanit",
+        );
+      }
 
       const converted = await this._convertSVGTextToPaths(svgOverlay, loadFont);
       return converted.replace(/(<svg[^>]*>)/, `$1${bgLayer}`);
