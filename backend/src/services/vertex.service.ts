@@ -1476,6 +1476,55 @@ ${
   }
 
   /**
+   * Extractor helper: parses AI response containing <META> and <SVG_OVERLAY> tags.
+   * SVG equivalent of parseHTMLResponse — looks for <SVG_OVERLAY> instead of <HTML_OVERLAY>.
+   */
+  private parseSVGResponse(raw: string): any {
+    let meta = {};
+    let svgContent = "";
+
+    const metaMatch = raw.match(/<META>([\s\S]*?)<\/META>/i);
+    const svgMatch = raw.match(/<SVG_OVERLAY>([\s\S]*?)<\/SVG_OVERLAY>/i);
+
+    if (metaMatch || svgMatch) {
+      if (metaMatch) {
+        const metaStr = metaMatch[1].trim();
+        try {
+          meta = JSON.parse(metaStr);
+        } catch {
+          console.warn("[parseSVGResponse] META JSON parse failed, attempting repair");
+          const repaired =
+            metaStr.replace(/,\s*$/, "") +
+            "}".repeat(
+              Math.max(
+                0,
+                (metaStr.match(/{/g) || []).length -
+                  (metaStr.match(/}/g) || []).length,
+              ),
+            );
+          const cleaned = repaired
+            .replace(/\\'/g, "'")
+            .replace(/\\([^"\\\/bfnrtu])/g, "$1")
+            .replace(/[\x00-\x1F\x7F]/g, " ");
+          try {
+            meta = JSON.parse(cleaned);
+          } catch (e) {
+            console.error("[parseSVGResponse] META JSON repair failed", e);
+          }
+        }
+      }
+      if (svgMatch) {
+        svgContent = svgMatch[1].trim();
+      }
+      return { ...meta, svg_overlay: svgContent };
+    }
+
+    // No delimiters found
+    console.warn("[parseSVGResponse] <SVG_OVERLAY> tag missing in response");
+    return { svg_overlay: "" };
+  }
+
+  /**
    * Task B: HTML/CSS layout generation — AI outputs html_overlay string
    * instead of JSON coordinates. Uses cqw units for font sizes and
    * text-shadow/text-stroke for contrast (no dark boxes).
