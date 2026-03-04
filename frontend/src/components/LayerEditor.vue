@@ -21,13 +21,23 @@ const renderedImage = ref<string | null>(null);
 const hintText = ref("");
 const renderMode = ref("ai"); // 'ai' or 'simple'
 
-// HTML overlay mode (Task B) — set when campaignData has html_overlay
-const htmlOverlay = ref<string>("");
-const sanitizedEditorHtmlOverlay = computed(() => {
-  if (!htmlOverlay.value) return "";
-  return DOMPurify.sanitize(htmlOverlay.value, {
-    ALLOWED_TAGS: ["div", "span", "p", "br"],
-    ALLOWED_ATTR: ["style", "class"],
+// SVG overlay mode — set when campaignData has svg_overlay
+const svgOverlay = ref<string>("");
+const sanitizedEditorSvgOverlay = computed(() => {
+  if (!svgOverlay.value) return "";
+  return DOMPurify.sanitize(svgOverlay.value, {
+    USE_PROFILES: { svg: true, svgFilters: true },
+    ADD_TAGS: [
+      "svg", "g", "text", "tspan", "rect", "defs", "filter",
+      "feDropShadow", "image", "style",
+    ],
+    ADD_ATTR: [
+      "viewBox", "xmlns", "transform", "font-family", "font-size",
+      "font-weight", "fill", "stroke", "stroke-width", "paint-order",
+      "filter", "dy", "dx", "x", "y", "rx", "ry", "width", "height",
+      "flood-color", "flood-opacity", "stdDeviation", "in",
+      "preserveAspectRatio", "id", "letter-spacing",
+    ],
   });
 });
 
@@ -166,15 +176,15 @@ watch(
       });
     }
 
-    // HTML overlay mode: text is in html_overlay, only load component image layers
-    if (data.html_overlay && data.html_overlay.length > 50) {
-      htmlOverlay.value = data.html_overlay;
-      layers.value = [...imageLayers]; // components only — text in HTML
+    // SVG overlay mode: text is in svg_overlay, only load component image layers
+    if (data.svg_overlay && data.svg_overlay.length > 50) {
+      svgOverlay.value = data.svg_overlay;
+      layers.value = [...imageLayers]; // components only — text in SVG overlay
       console.log(
-        `[Editor] HTML mode: overlay ${data.html_overlay.length} chars, ${imageLayers.length} component layers`,
+        `[Editor] SVG mode: overlay ${data.svg_overlay.length} chars, ${imageLayers.length} component layers`,
       );
     } else {
-      htmlOverlay.value = "";
+      svgOverlay.value = "";
       layers.value = [...imageLayers, ...textLayers];
     }
 
@@ -912,12 +922,12 @@ const downloadAsSvg = async () => {
           style="user-select: none; pointer-events: none"
         />
 
-        <!-- HTML overlay mode (Task B) — AI-generated HTML text, read-only -->
+        <!-- SVG overlay — AI-generated SVG text, read-only -->
         <div
-          v-if="sanitizedEditorHtmlOverlay"
-          v-html="sanitizedEditorHtmlOverlay"
-          class="editor-html-overlay-layer"
-          title="Text generated as HTML/CSS — use AI refinement to edit"
+          v-if="sanitizedEditorSvgOverlay"
+          v-html="sanitizedEditorSvgOverlay"
+          class="editor-svg-overlay-layer"
+          title="Text generated as SVG — use AI refinement to edit"
         />
 
         <div
@@ -1198,8 +1208,8 @@ select {
   outline-offset: 4px;
 }
 
-/* HTML/CSS overlay in editor — Task B: read-only AI text overlay */
-.editor-html-overlay-layer {
+/* SVG overlay in editor — read-only AI text overlay */
+.editor-svg-overlay-layer {
   position: absolute;
   inset: 0;
   pointer-events: none;
