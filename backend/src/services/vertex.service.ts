@@ -2165,6 +2165,201 @@ YOUR_IMPROVED_SVG_HERE
   }
 
   /**
+   * Post-process SVG overlay for export.
+   * mode='embed-fonts': inject @font-face base64 woff2 into <defs>
+   * mode='paths': convert <text> elements to <path> via opentype.js
+   */
+  async exportSVG(
+    svgOverlay: string,
+    backgroundBuffer: Buffer | null,
+    mode: "embed-fonts" | "paths",
+  ): Promise<string> {
+    const vbMatch = svgOverlay.match(/viewBox="0 0 (\d+) (\d+)"/);
+    const w = vbMatch ? parseInt(vbMatch[1]) : 1080;
+    const h = vbMatch ? parseInt(vbMatch[2]) : 1080;
+
+    let bgLayer = "";
+    if (backgroundBuffer) {
+      const bgBase64 = backgroundBuffer.toString("base64");
+      bgLayer = `<image id="background" href="data:image/jpeg;base64,${bgBase64}" x="0" y="0" width="${w}" height="${h}" preserveAspectRatio="xMidYMid slice"/>`;
+    }
+
+    if (mode === "embed-fonts") {
+      const fontDir = path.join(
+        __dirname,
+        "../../node_modules/@fontsource/kanit/files",
+      );
+      let fontDefs = "";
+      const variants = [
+        { weight: "400", file: "kanit-thai-400-normal.woff2" },
+        { weight: "700", file: "kanit-thai-700-normal.woff2" },
+        { weight: "900", file: "kanit-thai-900-normal.woff2" },
+      ];
+      for (const v of variants) {
+        const fontPath = path.join(fontDir, v.file);
+        if (fs.existsSync(fontPath)) {
+          const fontBase64 = fs.readFileSync(fontPath).toString("base64");
+          fontDefs += `@font-face{font-family:'Kanit';font-weight:${v.weight};font-style:normal;src:url('data:font/woff2;base64,${fontBase64}') format('woff2');}`;
+        }
+      }
+
+      let withFonts: string;
+      if (svgOverlay.includes("<defs>")) {
+        withFonts = svgOverlay.replace(
+          "<defs>",
+          `<defs><style>${fontDefs}</style>`,
+        );
+      } else {
+        withFonts = svgOverlay.replace(
+          /(<svg[^>]*>)/,
+          `$1<defs><style>${fontDefs}</style></defs>`,
+        );
+      }
+
+      return withFonts.replace(/(<svg[^>]*>)/, `$1${bgLayer}`);
+    }
+
+    if (mode === "paths") {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const opentype = await import("opentype.js");
+      const fontDir = path.join(
+        __dirname,
+        "../../node_modules/@fontsource/kanit/files",
+      );
+
+      const fontCache: Record<string, any> = {};
+      const loadFont = async (weight: string): Promise<any> => {
+        if (fontCache[weight]) return fontCache[weight];
+        const candidates = [
+          path.join(fontDir, `kanit-thai-${weight}-normal.ttf`),
+          path.join(fontDir, `kanit-latin-${weight}-normal.ttf`),
+          "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf",
+        ];
+        for (const p of candidates) {
+          if (fs.existsSync(p)) {
+            fontCache[weight] = await (opentype as any).load(p);
+            return fontCache[weight];
+          }
+        }
+        console.warn(
+          `[exportSVG] No TTF found for weight ${weight}, text will remain as <text>`,
+        );
+        return null;
+      };
+
+      const converted = await this._convertSVGTextToPaths(svgOverlay, loadFont);
+      return converted.replace(/(<svg[^>]*>)/, `$1${bgLayer}`);
+    }
+
+    return svgOverlay;
+  }
+
+  /**
+   * Internal: convert SVG <text>/<tspan> elements to <path> elements using opentype.js.
+   */
+  private async _convertSVGTextToPaths(
+    svg: string,
+    loadFont: (weight: string) => Promise<any>,
+  ): Promise<string> {
+    let result = svg;
+
+    const groupRegex =
+      /<g([^>]*transform="translate\([^)]+\)"[^>]*)>([\s\S]*?)<\/g>/g;
+    const allMatches: Array<{ full: string; attrs: string; content: string }> =
+      [];
+    let m;
+    while ((m = groupRegex.exec(svg)) !== null) {
+      allMatches.push({ full: m[0], attrs: m[1], content: m[2] });
+    }
+
+    for (const group of allMatches) {
+      const txMatch = group.attrs.match(
+        /translate\(\s*([\d.]+)[,\s]+([\d.]+)\s*\)/,
+      );
+      if (!txMatch) continue;
+      const tx = parseFloat(txMatch[1]);
+      const ty = parseFloat(txMatch[2]);
+
+      const textRegex = /<text([^>]*)>([\s\S]*?)<\/text>/g;
+      let textMatch;
+      let newContent = group.content;
+
+      while ((textMatch = textRegex.exec(group.content)) !== null) {
+        const [fullText, textAttrs, textContent] = textMatch;
+
+        const getAttr = (attr: string, fallback: string) => {
+          const am = textAttrs.match(new RegExp(`${attr}="([^"]+)"`));
+          return am ? am[1] : fallback;
+        };
+
+        const baseX = parseFloat(getAttr("x", "0"));
+        const baseY = parseFloat(getAttr("y", "0"));
+        const baseFontSize = parseFloat(getAttr("font-size", "36"));
+        const baseFontWeight = getAttr("font-weight", "400");
+        const baseFill = getAttr("fill", "#000000");
+        const filterVal = getAttr("filter", "");
+        const filterAttr = filterVal ? ` filter="${filterVal}"` : "";
+
+        const font = await loadFont(baseFontWeight);
+        if (!font) continue;
+
+        const tspanRegex = /<tspan([^>]*)>([^<]*)<\/tspan>/g;
+        let tspanMatch;
+        let currentY = ty + baseY;
+        let pathElements = "";
+        let firstTspan = true;
+
+        while ((tspanMatch = tspanRegex.exec(textContent)) !== null) {
+          const [, tspanAttrs, text] = tspanMatch;
+          const tGet = (attr: string, fallback: string) => {
+            const am = tspanAttrs.match(new RegExp(`${attr}="([^"]+)"`));
+            return am ? am[1] : fallback;
+          };
+
+          const tFontSize = parseFloat(tGet("font-size", String(baseFontSize)));
+          const tFill = tGet("fill", baseFill);
+          const dy = tGet("dy", "0");
+          const tspanX = parseFloat(tGet("x", String(baseX)));
+
+          if (!firstTspan && dy !== "0") {
+            const dyEmMatch = dy.match(/([\d.]+)em/);
+            if (dyEmMatch) {
+              currentY += parseFloat(dyEmMatch[1]) * tFontSize;
+            } else {
+              currentY += parseFloat(dy);
+            }
+          }
+          firstTspan = false;
+
+          if (text.trim()) {
+            try {
+              const pathData = (font as any)
+                .getPath(text, tx + tspanX, currentY, tFontSize)
+                .toPathData(2);
+              pathElements += `<path d="${pathData}" fill="${tFill}"${filterAttr}/>`;
+            } catch (_e) {
+              pathElements += `<text x="${tx + tspanX}" y="${currentY}" font-size="${tFontSize}" fill="${tFill}">${text}</text>`;
+            }
+          }
+        }
+
+        if (pathElements) {
+          newContent = newContent.replace(fullText, `<g>${pathElements}</g>`);
+        }
+      }
+
+      if (newContent !== group.content) {
+        result = result.replace(
+          group.full,
+          group.full.replace(group.content, newContent),
+        );
+      }
+    }
+
+    return result;
+  }
+
+  /**
    * Task B: Refine HTML/CSS overlay based on critique feedback
    */
   async refineLayoutHTML(
