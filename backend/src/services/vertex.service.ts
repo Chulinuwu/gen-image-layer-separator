@@ -2040,6 +2040,131 @@ Return TWO parts using XML delimiters <META> and <SVG_OVERLAY>. Do NOT nest SVG 
   }
 
   /**
+   * SVG equivalent of refineLayoutHTML — refines SVG overlay based on critique.
+   */
+  async refineLayoutSVG(
+    imageBuffer: Buffer,
+    mimeType: string,
+    targetText: string,
+    currentSvgOverlay: string,
+    critique: { status: string; feedback: string; actionable_steps: string[] },
+    previewBuffer?: Buffer,
+    previousComponents?: any[],
+  ): Promise<{ svg_overlay: string; components?: any[] }> {
+    const model =
+      process.env.GEMINI_MODEL_ENDPOINT_2 ||
+      process.env.GEMINI_MODEL_ENDPOINT ||
+      "gemini-2.0-flash-exp";
+
+    // Extract canvas size from current SVG viewBox
+    const vbMatch = currentSvgOverlay.match(/viewBox="0 0 (\d+) (\d+)"/);
+    const canvasWidth = vbMatch ? parseInt(vbMatch[1]) : 1080;
+    const canvasHeight = vbMatch ? parseInt(vbMatch[2]) : 1080;
+
+    const prompt = `You are fixing an SVG ad layout based on an art director's critique.
+
+You can see TWO images:
+- IMAGE 1: The original reference background
+- IMAGE 2: The current preview (current text + components — what needs fixing)
+
+ORIGINAL BRIEF: "${targetText}"
+
+CURRENT SVG OVERLAY (what you must improve):
+${currentSvgOverlay}
+
+ART DIRECTOR CRITIQUE:
+Status: ${critique.status}
+Feedback: ${critique.feedback}
+Actionable steps: ${JSON.stringify(critique.actionable_steps, null, 2)}
+
+CURRENT COMPONENT POSITIONS (normalized 0-1000):
+${JSON.stringify(previousComponents || [], null, 2)}
+
+═══════════════════════════════════════
+YOUR TASK — SVG TEXT FIXES
+═══════════════════════════════════════
+1. Address ALL actionable steps from the critique
+2. Return an IMPROVED SVG overlay — keep same text content, freely change:
+   translate(X,Y), font-size, fill, stroke, stroke-width, filter, font-weight, dy spacing
+3. Canvas: ${canvasWidth}×${canvasHeight}px — use absolute px coordinates
+4. Safe zone: x≥${Math.round(canvasWidth * 0.05)}px, y≥${Math.round(canvasHeight * 0.05)}px, x≤${Math.round(canvasWidth * 0.95)}px, y≤${Math.round(canvasHeight * 0.95)}px
+5. font-family: ALWAYS "Kanit, sans-serif"
+6. If text covers a face → move translate(X,Y) away from face area
+7. If text scattered → merge into one <g> with <tspan dy> stacking
+
+═══════════════════════════════════════
+YOUR TASK — COMPONENT FIXES
+═══════════════════════════════════════
+Return corrected positions in the "components" array (normalized 0-1000):
+- top≥50, left≥50, (left+width)≤950, (top+height)≤950
+
+═══════════════════════════════════════
+RETURN FORMAT
+═══════════════════════════════════════
+<META>
+{
+  "components": [
+    {
+      "label": "name",
+      "position": { "top": 100, "left": 500, "width": 450, "height": 850, "rotation": 0 },
+      "suggested_position": { "top": 100, "left": 500, "width": 450, "height": 850, "rotation": 0, "rationale": "why" },
+      "z_index": 15,
+      "interaction_zone": { "enabled": true, "overlap_top": 200, "overlap_left": 500, "overlap_width": 200, "overlap_height": 500 }
+    }
+  ]
+}
+</META>
+<SVG_OVERLAY>
+YOUR_IMPROVED_SVG_HERE
+</SVG_OVERLAY>`;
+
+    const parts: any[] = [
+      { inlineData: { data: imageBuffer.toString("base64"), mimeType } },
+    ];
+    if (previewBuffer) {
+      parts.push({
+        inlineData: {
+          data: previewBuffer.toString("base64"),
+          mimeType: "image/png",
+        },
+      });
+    }
+    parts.push({ text: prompt });
+
+    const result = await this.withRetry(() =>
+      this.client.models.generateContent({
+        model,
+        contents: [{ role: "user", parts }],
+        config: { maxOutputTokens: 8192, temperature: 0.8 },
+      }),
+    );
+
+    const raw = result.text || "";
+    let parsed: any;
+    try {
+      parsed = this.parseSVGResponse(raw);
+    } catch (parseErr) {
+      console.error(
+        "[refineLayoutSVG] Completely failed to parse AI response:",
+        parseErr,
+      );
+      parsed = { svg_overlay: "" };
+    }
+
+    if (!parsed.svg_overlay || parsed.svg_overlay.length < 50) {
+      throw new Error("[refineLayoutSVG] AI returned empty svg_overlay");
+    }
+    if (/<script|<iframe|javascript:/i.test(parsed.svg_overlay)) {
+      throw new Error(
+        "[refineLayoutSVG] svg_overlay contains disallowed content",
+      );
+    }
+
+    console.log(`[SVG] Refined overlay (${parsed.svg_overlay.length} chars)`);
+    return parsed;
+  }
+
+  /**
    * Task B: Refine HTML/CSS overlay based on critique feedback
    */
   async refineLayoutHTML(
