@@ -1780,6 +1780,266 @@ Example html_overlay for "2 ต่อ รับฟรี บัตรขึ้�
   }
 
   /**
+   * SVG layout generation — AI outputs svg_overlay string.
+   * Uses absolute px coordinates based on actual canvas size.
+   * Box-model mental model: <g transform> = container, <rect> = background, <tspan dy> = line stack.
+   */
+  async suggestLayoutSVG(
+    imageBuffer: Buffer,
+    mimeType: string,
+    targetText: string,
+    layoutHint?: {
+      layout_concept: string;
+      dominant_element: string;
+      text_hierarchy: string[];
+      composition_notes: string;
+    },
+    fixedComponentPositions?: Array<{
+      label: string;
+      top: number;
+      left: number;
+      width: number;
+      height: number;
+    }>,
+    artDirectorTextZone?: {
+      top: number;
+      left: number;
+      width: number;
+      height: number;
+    },
+  ): Promise<{
+    svg_overlay: string;
+    background_description: string;
+    campaign_vibe: string;
+    no_go_zones: any[];
+    components: any[];
+  }> {
+    // Resize for AI processing and get canvas dimensions
+    let processingBuffer = imageBuffer;
+    let processingMime = mimeType;
+    let canvasWidth = 1080;
+    let canvasHeight = 1080;
+    try {
+      const meta = await sharp(imageBuffer).metadata();
+      canvasWidth = meta.width || 1080;
+      canvasHeight = meta.height || 1080;
+      processingBuffer = await sharp(imageBuffer)
+        .resize(Math.min(1500, canvasWidth))
+        .jpeg({ quality: 90 })
+        .toBuffer();
+      processingMime = "image/jpeg";
+    } catch (_e) {
+      /* use original */
+    }
+
+    const model =
+      process.env.GEMINI_MODEL_ENDPOINT_2 ||
+      process.env.GEMINI_MODEL_ENDPOINT ||
+      "gemini-2.0-flash-exp";
+
+    const safeX = Math.round(canvasWidth * 0.05);
+    const safeY = Math.round(canvasHeight * 0.05);
+    const maxX = Math.round(canvasWidth * 0.95);
+    const maxY = Math.round(canvasHeight * 0.95);
+    const maxTextWidth = Math.round(canvasWidth * 0.45);
+
+    const strategyBlock =
+      layoutHint && layoutHint.layout_concept !== "default"
+        ? `
+ART DIRECTOR STRATEGY (FOLLOW EXACTLY):
+- Concept: ${layoutHint.layout_concept}
+- Dominant element (MUST be largest): "${layoutHint.dominant_element}"
+- Text priority order: ${layoutHint.text_hierarchy.join(" › ")}
+- Notes: ${layoutHint.composition_notes}
+`
+        : "";
+
+    const componentsBlock = fixedComponentPositions?.length
+      ? `
+COMPONENT POSITIONS (placed — design text around them naturally):
+${fixedComponentPositions
+  .map(
+    (c) =>
+      `- "${c.label}": x=${Math.round((c.left / 1000) * canvasWidth)}px to ${Math.round(((c.left + c.width) / 1000) * canvasWidth)}px, y=${Math.round((c.top / 1000) * canvasHeight)}px to ${Math.round(((c.top + c.height) / 1000) * canvasHeight)}px`,
+  )
+  .join("\n")}
+`
+      : "";
+
+    const textZoneBlock = artDirectorTextZone
+      ? `
+TEXT ZONE (place most text here):
+  x-range: ${Math.round((artDirectorTextZone.left / 1000) * canvasWidth)}px to ${Math.round(((artDirectorTextZone.left + artDirectorTextZone.width) / 1000) * canvasWidth)}px
+  y-range: ${Math.round((artDirectorTextZone.top / 1000) * canvasHeight)}px to ${Math.round(((artDirectorTextZone.top + artDirectorTextZone.height) / 1000) * canvasHeight)}px
+`
+      : "";
+
+    const prompt = `You are a senior Thai advertising art director generating SVG for a campaign ad canvas.
+
+AD BRIEF:
+"""
+${targetText}
+"""
+${strategyBlock}${componentsBlock}${textZoneBlock}
+═══════════════════════════════════════
+CANVAS
+═══════════════════════════════════════
+Size: ${canvasWidth}×${canvasHeight}px — use ABSOLUTE px coordinates, NOT percentages.
+Safe zone: min x=${safeX}px, min y=${safeY}px, max x=${maxX}px, max y=${maxY}px
+
+═══════════════════════════════════════
+SVG BOX MODEL — THINK IN HTML, WRITE AS SVG
+═══════════════════════════════════════
+• "position:absolute; left:X; top:Y"  →  <g transform="translate(X, Y)">
+• "background: rgba(0,0,0,0.55); border-radius:8px"  →  <rect x="0" y="0" width="W" height="H" rx="8" fill="rgba(0,0,0,0.55)"/>
+• "padding: 16px"  →  x="16" on the <text> inside the <g>
+• "font-size: 120px; font-weight:900"  →  font-size="120" font-weight="900" on <text>
+• "line-height: 1.35 + next line"  →  <tspan x="PAD" dy="1.35em">next line</tspan>
+• "text-shadow"  →  filter="url(#fN)" referencing a <feDropShadow> in <defs>
+• "-webkit-text-stroke: 4px black"  →  stroke="rgba(0,0,0,0.5)" stroke-width="8" paint-order="stroke fill"
+
+═══════════════════════════════════════
+FONT SIZES (${canvasWidth}px canvas)
+═══════════════════════════════════════
+- Promotional numbers (offer, %, ×, price): ${Math.round(canvasWidth * 0.12)}-${Math.round(canvasWidth * 0.18)}px  ← HUGE and dominant
+- Headline / sub-headline: ${Math.round(canvasWidth * 0.035)}-${Math.round(canvasWidth * 0.055)}px
+- Body text: ${Math.round(canvasWidth * 0.025)}-${Math.round(canvasWidth * 0.035)}px
+- Fine print / legal: ${Math.round(canvasWidth * 0.01)}-${Math.round(canvasWidth * 0.015)}px
+
+═══════════════════════════════════════
+LAYOUT RULES
+═══════════════════════════════════════
+1. Group related text in ONE <g> block (number + label + subtitle = 1 group, NOT scattered)
+2. Promotional number MUST be dominant: first <tspan>, largest font size
+3. Fine print: translate(${safeX}, ${maxY - Math.round(canvasHeight * 0.02)}) — tiny, bottom edge
+4. font-family: ALWAYS "Kanit, sans-serif" — no exceptions
+5. Text group max width: ~${maxTextWidth}px — use this to avoid overflow
+6. Color: white (#fff) on dark areas, golden (#FFD700) for promo numbers
+7. line-height equivalent: dy="1.0em" for promo numbers, dy="1.25em" for headlines, dy="1.4em" for body
+
+═══════════════════════════════════════
+CONTRAST — MANDATORY
+═══════════════════════════════════════
+- On photo backgrounds: use feDropShadow filter + stroke on text
+- Big promo text: stroke-width="8", fill="#FFD700" or "#fff"
+- Use <rect> background ONLY for true contrast shields (where text is totally unreadable otherwise)
+- shadow filter x="-20%" y="-20%" width="140%" height="140%" to avoid clipping
+
+═══════════════════════════════════════
+COMPONENT PLACEMENT RULES (JSON in META, NOT in SVG)
+═══════════════════════════════════════
+1. ANCHOR to one side: component should sit left OR right, freeing the other half for text
+2. 5% SAFE ZONE: top≥50, left≥50, (left+width)≤950, (top+height)≤950 (normalized 0-1000)
+3. Do NOT center components — centered blocks text space
+4. Scale component to fill 40-60% of canvas height for visual impact
+5. z_index: 15 for components
+
+═══════════════════════════════════════
+RETURN FORMAT
+═══════════════════════════════════════
+Return TWO parts using XML delimiters <META> and <SVG_OVERLAY>. Do NOT nest SVG inside JSON.
+
+<META>
+{
+  "background_description": "Scene description",
+  "campaign_vibe": "Energetic | Bold | Luxury | Playful",
+  "no_go_zones": [
+    { "label": "face", "priority": "HIGH", "area": { "top": 50, "left": 400, "width": 200, "height": 200 }, "reason": "face" }
+  ],
+  "components": [
+    {
+      "label": "mascot",
+      "description": "description",
+      "position": { "top": 100, "left": 500, "width": 450, "height": 850, "rotation": 0 },
+      "suggested_position": { "top": 100, "left": 500, "width": 450, "height": 850, "rotation": 0, "rationale": "..." },
+      "z_index": 15,
+      "interaction_zone": { "enabled": true, "overlap_top": 200, "overlap_left": 500, "overlap_width": 200, "overlap_height": 500 }
+    }
+  ]
+}
+</META>
+<SVG_OVERLAY>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${canvasWidth} ${canvasHeight}" width="${canvasWidth}" height="${canvasHeight}">
+  <defs>
+    <filter id="f0" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="2" dy="3" stdDeviation="5" flood-color="#000000" flood-opacity="0.8"/>
+    </filter>
+  </defs>
+  <g id="text-overlay">
+    <g id="block-0" transform="translate(X, Y)">
+      <text x="0" y="BASELINE" font-family="Kanit, sans-serif" font-size="FS" font-weight="700" fill="#FFFFFF" stroke="rgba(0,0,0,0.5)" stroke-width="8" paint-order="stroke fill" filter="url(#f0)">
+        <tspan x="0" dy="0">text line 1</tspan>
+        <tspan x="0" dy="1.25em" font-size="FS2" font-weight="400">text line 2</tspan>
+      </text>
+    </g>
+  </g>
+</svg>
+</SVG_OVERLAY>`;
+
+    const svgConfig: any = {
+      maxOutputTokens: 8192,
+      temperature: 0.9,
+      topP: 0.95,
+      safetySettings: [
+        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "OFF" },
+        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "OFF" },
+        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "OFF" },
+        { category: "HARM_CATEGORY_HARASSMENT", threshold: "OFF" },
+      ],
+    };
+
+    const response = await this.withRetry(() =>
+      this.client.models.generateContent({
+        model,
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                inlineData: {
+                  data: processingBuffer.toString("base64"),
+                  mimeType: processingMime,
+                },
+              },
+              { text: prompt },
+            ],
+          },
+        ],
+        config: svgConfig,
+      }),
+    );
+
+    const raw = response.text || "";
+    let parsed: any;
+    try {
+      parsed = this.parseSVGResponse(raw);
+    } catch (err) {
+      console.error("[suggestLayoutSVG] Failed to parse response.", err);
+      parsed = { svg_overlay: "" };
+    }
+
+    if (
+      !parsed.svg_overlay ||
+      typeof parsed.svg_overlay !== "string" ||
+      parsed.svg_overlay.length < 50
+    ) {
+      throw new Error(
+        "[suggestLayoutSVG] AI returned empty or invalid svg_overlay",
+      );
+    }
+    if (/<script|<iframe|javascript:/i.test(parsed.svg_overlay)) {
+      throw new Error(
+        "[suggestLayoutSVG] svg_overlay contains disallowed content",
+      );
+    }
+
+    console.log(
+      `[SVG] Overlay generated (${parsed.svg_overlay.length} chars). Vibe: "${parsed.campaign_vibe}". Components: ${parsed.components?.length || 0}`,
+    );
+    return parsed;
+  }
+
+  /**
    * Task B: Refine HTML/CSS overlay based on critique feedback
    */
   async refineLayoutHTML(
