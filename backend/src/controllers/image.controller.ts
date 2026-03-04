@@ -639,8 +639,8 @@ export const createCampaign = async (req: Request, res: Response) => {
 
     // textSuggestions will be populated in Pass 2 (after die-cut)
     let textSuggestions: any[] = [];
-    // HTML/CSS overlay string — populated by suggestLayoutHTML in Pass 2
-    let htmlOverlay: string = "";
+    // SVG overlay string — populated by suggestLayoutSVG in Pass 2
+    let svgOverlay: string = "";
 
     // Mutable analysis object used throughout for no_go_zones, metadata, and inpainting context
     const analysis: any = {
@@ -704,80 +704,48 @@ export const createCampaign = async (req: Request, res: Response) => {
     };
 
     /**
-     * Parse html_overlay string → approximate JSON text suggestions for preview rendering.
-     * Called by generateLayoutPreview() in HTML mode so critiqueLayout can see text positions.
-     * Regex extracts: top%, left% from position:absolute divs/spans + font-size cqw + text content.
+     * Parse svg_overlay string → approximate JSON text suggestions for preview rendering.
+     * Extracts translate(x,y) + font-size from <g transform> + <text> elements.
      */
-    const parseHTMLOverlayToApproxSuggestions = (html: string): any[] => {
-      if (!html) return [];
+    const parseSVGOverlayToApproxSuggestions = (svg: string): any[] => {
       const results: any[] = [];
-
-      // Match each absolute-positioned group div: top:XX%;left:XX%
-      // Capture inline text content after stripping inner tags
-      const groupRe =
-        /style=['"][^'"]*position:\s*absolute[^'"]*top:\s*([\d.]+)%[^'"]*left:\s*([\d.]+)%[^'"]*['"]/g;
-      let match;
-      // Collect all group positions
-      const positions: Array<{ top: number; left: number; idx: number }> = [];
-      while ((match = groupRe.exec(html)) !== null) {
-        positions.push({
-          top: parseFloat(match[1]) * 10, // % → 0-1000
-          left: parseFloat(match[2]) * 10,
-          idx: match.index,
-        });
-      }
-
-      // For each group position, extract the next font-size:XXcqw and text content
-      for (const pos of positions) {
-        const slice = html.slice(pos.idx, pos.idx + 1500); // look ahead 1500 chars
-
-        // Get largest font in this group
-        const fontMatches = [...slice.matchAll(/font-size:\s*([\d.]+)cqw/g)];
-        const maxCqw = fontMatches.length
-          ? Math.max(...fontMatches.map((m) => parseFloat(m[1])))
-          : 4;
-        // cqw→font_size_normalized: 1cqw ≈ 10 normalized
-        const fontSizeNorm = Math.round(maxCqw * 10);
-
-        // Extract text content (strip tags)
-        const textContent = slice
-          .replace(/<[^>]+>/g, " ")
-          .replace(/\s+/g, " ")
-          .trim()
-          .substring(0, 60);
-
+      const groupRegex =
+        /<g[^>]*transform="translate\(\s*([\d.]+)[,\s]+([\d.]+)\s*\)"[^>]*>([\s\S]*?)<\/g>/g;
+      let gm;
+      while ((gm = groupRegex.exec(svg)) !== null) {
+        const [, txStr, tyStr, groupContent] = gm;
+        const tx = parseFloat(txStr);
+        const ty = parseFloat(tyStr);
+        const textMatch = groupContent.match(
+          /<text[^>]*font-size="([\d.]+)"[^>]*>([\s\S]*?)<\/text>/,
+        );
+        if (!textMatch) continue;
+        const fontSize = parseFloat(textMatch[1]);
+        const textContent = (
+          textMatch[2].match(/<tspan[^>]*>([^<]*)<\/tspan>/g) || []
+        )
+          .map((t: string) => t.replace(/<[^>]+>/g, ""))
+          .join(" ")
+          .trim();
         if (!textContent) continue;
-
-        // Estimate width from text length and font size
-        const estWidth = Math.min(400, textContent.length * maxCqw * 6);
-        const estHeight = maxCqw * 12;
-
+        const estimatedWidth = Math.min(textContent.length * fontSize * 0.6, 500);
+        const estimatedHeight = fontSize * 1.5;
+        const vbMatch = svg.match(/viewBox="0 0 (\d+) (\d+)"/);
+        const cw = vbMatch ? parseInt(vbMatch[1], 10) : 1080;
+        const ch = vbMatch ? parseInt(vbMatch[2], 10) : 1080;
         results.push({
-          part: textContent,
+          content: textContent,
           position: {
-            top: pos.top,
-            left: pos.left,
-            width: estWidth,
-            height: estHeight,
+            top: Math.round((ty / ch) * 1000),
+            left: Math.round((tx / cw) * 1000),
+            width: Math.round((estimatedWidth / cw) * 1000),
+            height: Math.round((estimatedHeight / ch) * 1000),
           },
-          style: {
-            font_size_normalized: fontSizeNorm,
-            color_hex: "#FFFFFF",
-            font_family: "Kanit",
-            shadow: "strong",
-          },
-          hierarchy:
-            fontSizeNorm > 80
-              ? "Headline"
-              : fontSizeNorm < 20
-                ? "FinePrint"
-                : "Body",
-          visual_container: "none",
+          style: { font_size_normalized: fontSize, color_hex: "#FFFFFF" },
         });
       }
-
       console.log(
-        `[HTML→Preview] Extracted ${results.length} approx text boxes from html_overlay (${html.length} chars)`,
+        `[SVG→Preview] Extracted ${results.length} approx text boxes from svg_overlay (${svg.length} chars)`,
       );
       return results;
     };
@@ -1257,7 +1225,7 @@ export const createCampaign = async (req: Request, res: Response) => {
 
       sendSSE("progress", {
         step: "text_layout",
-        message: "AI is generating HTML/CSS layout...",
+        message: "AI is generating SVG layout...",
       });
 
       // Tell the AI where components are (use their final suggested_position or position)
@@ -1270,7 +1238,7 @@ export const createCampaign = async (req: Request, res: Response) => {
       }));
 
       try {
-        const htmlAnalysis = await vertexService.suggestLayoutHTML(
+        const htmlAnalysis = await vertexService.suggestLayoutSVG(
           imageBuffer,
           mimeType,
           targetText,
@@ -1278,8 +1246,8 @@ export const createCampaign = async (req: Request, res: Response) => {
           fixedPositions,
           artDirectorTextZone || undefined,
         );
-        htmlOverlay = htmlAnalysis.html_overlay;
-        analysis.html_overlay = htmlOverlay;
+        svgOverlay = htmlAnalysis.svg_overlay;
+        analysis.svg_overlay = svgOverlay;
         analysis.background_description =
           htmlAnalysis.background_description ||
           analysis.background_description;
@@ -1301,14 +1269,14 @@ export const createCampaign = async (req: Request, res: Response) => {
         }
       } catch (pass2Err) {
         console.warn(
-          "[Pass2] HTML layout failed, proceeding with empty overlay:",
+          "[Pass2] SVG layout failed, proceeding with empty overlay:",
           pass2Err,
         );
       }
 
       sendSSE("progress", {
         step: "initial_analysis_complete",
-        message: `HTML layout ready. Components: ${visualComponents.length}`,
+        message: `SVG layout ready. Components: ${visualComponents.length}`,
         componentCount: visualComponents.length,
       });
     }
@@ -1346,11 +1314,11 @@ export const createCampaign = async (req: Request, res: Response) => {
       textSuggestions = enforceDesignRules(textSuggestions);
     }
 
-    // Send initial layout to canvas (fires after Pass 2 + post-processing — has html_overlay + components)
+    // Send initial layout to canvas (fires after Pass 2 + post-processing — has svg_overlay + components)
     sendSSE("iteration_end", {
       iteration: 0,
       message: "Initial layout mapped to canvas.",
-      html_overlay: htmlOverlay,
+      svg_overlay: svgOverlay,
       componentCount: visualComponents.length,
       components: componentSuggestions,
       visualComponents,
@@ -1402,11 +1370,11 @@ export const createCampaign = async (req: Request, res: Response) => {
       } else if (
         !shouldSkipIteration &&
         !safeZonePlacementDone &&
-        (textSuggestions.length > 0 || htmlOverlay.length > 0)
+        (textSuggestions.length > 0 || svgOverlay.length > 0)
       ) {
-        // In HTML mode: parse html_overlay into approx bbox for overlap pre-check
-        const preCheckSuggestions = htmlOverlay
-          ? parseHTMLOverlayToApproxSuggestions(htmlOverlay)
+        // In SVG mode: parse svg_overlay into approx bbox for overlap pre-check
+        const preCheckSuggestions = svgOverlay
+          ? parseSVGOverlayToApproxSuggestions(svgOverlay)
           : textSuggestions;
 
         const allNoGoZones = [
@@ -1547,9 +1515,9 @@ export const createCampaign = async (req: Request, res: Response) => {
           message: `Iteration ${currentIteration}/${MAX_ITERATIONS}: Generating preview...`,
         });
 
-        // In HTML mode, textSuggestions is empty — parse html_overlay to get approx boxes for preview
-        const previewTextSuggestions = htmlOverlay
-          ? parseHTMLOverlayToApproxSuggestions(htmlOverlay)
+        // In SVG mode, textSuggestions is empty — parse svg_overlay to get approx boxes for preview
+        const previewTextSuggestions = svgOverlay
+          ? parseSVGOverlayToApproxSuggestions(svgOverlay)
           : textSuggestions;
 
         // Generate visual preview using SVG overlay (matches editor output)
@@ -1738,39 +1706,39 @@ export const createCampaign = async (req: Request, res: Response) => {
 
         sendSSE("refining", {
           iteration: currentIteration,
-          message: "Refining HTML layout based on feedback...",
+          message: "Refining SVG layout based on feedback...",
         });
 
-        // Refine the HTML overlay — pass previewBuffer so AI can SEE the problems
-        let refinedResult: { html_overlay: string; components?: any[] } | null =
+        // Refine the SVG overlay — pass previewBuffer so AI can SEE the problems
+        let refinedResult: { svg_overlay: string; components?: any[] } | null =
           null;
         try {
-          refinedResult = await vertexService.refineLayoutHTML(
+          refinedResult = await vertexService.refineLayoutSVG(
             imageBuffer,
             mimeType,
             targetText,
-            htmlOverlay,
+            svgOverlay,
             critique,
             previewBuffer,
             componentSuggestions,
           );
         } catch (refineErr) {
           console.warn(
-            "[Refine] refineLayoutHTML failed, keeping current overlay:",
+            "[Refine] refineLayoutSVG failed, keeping current overlay:",
             refineErr,
           );
         }
 
         if (refinedResult) {
           if (
-            refinedResult.html_overlay &&
-            refinedResult.html_overlay.length > 50
+            refinedResult.svg_overlay &&
+            refinedResult.svg_overlay.length > 50
           ) {
-            htmlOverlay = refinedResult.html_overlay;
-            analysis.html_overlay = htmlOverlay;
+            svgOverlay = refinedResult.svg_overlay;
+            analysis.svg_overlay = svgOverlay;
           } else {
             console.warn(
-              "[Refine] Refined html_overlay too short — keeping previous",
+              "[Refine] Refined svg_overlay too short — keeping previous",
             );
             sendSSE("refine_rejected", {
               iteration: currentIteration,
@@ -1796,8 +1764,8 @@ export const createCampaign = async (req: Request, res: Response) => {
 
         sendSSE("iteration_end", {
           iteration: currentIteration,
-          message: `HTML layout refined (iteration ${currentIteration}).`,
-          html_overlay: htmlOverlay,
+          message: `SVG layout refined (iteration ${currentIteration}).`,
+          svg_overlay: svgOverlay,
           componentCount: componentSuggestions.length,
           components: componentSuggestions,
           visualComponents,
@@ -1824,8 +1792,8 @@ export const createCampaign = async (req: Request, res: Response) => {
         backgroundDescription: analysis.background_description || "",
         generatedBackgroundImageUrl,
         campaignVibe: analysis.campaign_vibe || "",
-        html_overlay: htmlOverlay, // HTML/CSS overlay — main output
-        textLayers: [], // backward compat: empty in HTML mode
+        svg_overlay: svgOverlay, // SVG overlay — main output
+        textLayers: [], // backward compat: empty in SVG mode
         visualComponents,
         stackImageUrls: stackImageUrls || [],
         critiqueIterations: analysis.critique_iterations,
