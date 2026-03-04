@@ -62,15 +62,15 @@
             <span>INITIALIZING AI CREATIVE SUITE...</span>
           </div>
 
-          <!-- HTML overlay mode (Task B) — AI-generated CSS positioned text -->
+          <!-- SVG overlay — AI-generated SVG positioned text -->
           <div
-            v-if="sanitizedHtmlOverlay"
-            v-html="sanitizedHtmlOverlay"
-            class="html-overlay-layer"
+            v-if="sanitizedSvgOverlay"
+            v-html="sanitizedSvgOverlay"
+            class="svg-overlay-layer"
           />
 
           <!-- Fallback: JSON text overlay mode -->
-          <template v-if="currentPreviewUrl && !sanitizedHtmlOverlay">
+          <template v-if="currentPreviewUrl && !sanitizedSvgOverlay">
             <div
               v-for="(t, idx) in liveTextLayers"
               :key="'lt' + idx"
@@ -196,6 +196,23 @@
       </div>
 
       <div class="sidebar-footer">
+        <!-- SVG Export Panel — shown when SVG overlay is ready -->
+        <div v-if="liveSvgOverlay && isComplete" class="export-svg-panel">
+          <div class="export-mode-row">
+            <label>Export mode:</label>
+            <select v-model="exportMode">
+              <option value="embed-fonts">Embed Fonts (editable text)</option>
+              <option value="paths">Convert to Paths (max fidelity, requires TTF)</option>
+            </select>
+          </div>
+          <button
+            class="btn btn-export"
+            :disabled="isExporting"
+            @click="exportSVGFile()"
+          >
+            {{ isExporting ? "Exporting…" : "Export SVG" }}
+          </button>
+        </div>
         <button v-if="isComplete" @click="$emit('close')" class="btn-finalize">
           FINALIZE DESIGN
         </button>
@@ -251,16 +268,59 @@ const pipelineSteps = ref<
 >([]);
 const showDebugBoxes = ref(true);
 
-// HTML overlay mode (Task B) — AI returns HTML/CSS string instead of JSON text layers
-const liveHtmlOverlay = ref<string>("");
-const sanitizedHtmlOverlay = computed(() => {
-  if (!liveHtmlOverlay.value) return "";
-  // Allow only safe HTML tags + inline styles (no scripts, no iframes)
-  return DOMPurify.sanitize(liveHtmlOverlay.value, {
-    ALLOWED_TAGS: ["div", "span", "p", "br"],
-    ALLOWED_ATTR: ["style", "class"],
+// SVG overlay mode — AI returns SVG string instead of HTML/CSS
+const liveSvgOverlay = ref<string>("");
+const sanitizedSvgOverlay = computed(() => {
+  if (!liveSvgOverlay.value) return "";
+  return DOMPurify.sanitize(liveSvgOverlay.value, {
+    USE_PROFILES: { svg: true, svgFilters: true },
+    ADD_TAGS: [
+      "svg", "g", "text", "tspan", "rect", "defs", "filter",
+      "feDropShadow", "image", "style",
+    ],
+    ADD_ATTR: [
+      "viewBox", "xmlns", "transform", "font-family", "font-size",
+      "font-weight", "fill", "stroke", "stroke-width", "paint-order",
+      "filter", "dy", "dx", "x", "y", "rx", "ry", "width", "height",
+      "flood-color", "flood-opacity", "stdDeviation", "in",
+      "preserveAspectRatio", "id", "letter-spacing",
+    ],
   });
 });
+
+// SVG export state
+const exportMode = ref<"embed-fonts" | "paths">("embed-fonts");
+const isExporting = ref(false);
+
+const exportSVGFile = async () => {
+  if (!liveSvgOverlay.value) return;
+  isExporting.value = true;
+  try {
+    const res = await fetch("http://localhost:5001/api/image/export-svg", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        svgString: liveSvgOverlay.value,
+        mode: exportMode.value,
+      }),
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(errText);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `ad-layout-${exportMode.value}.svg`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    console.error("[SVG Export]", err);
+  } finally {
+    isExporting.value = false;
+  }
+};
 
 // Thai Ad Typography tokens for Kanit — weight/spacing/line-height per hierarchy
 const KANIT_TOKENS: Record<
@@ -407,7 +467,7 @@ const connectSSE = async (formData: FormData) => {
     isComplete.value = false;
     liveTextLayers.value = [];
     liveComponents.value = [];
-    liveHtmlOverlay.value = ""; // clear previous HTML overlay
+    liveSvgOverlay.value = ""; // clear previous SVG overlay
     pipelineSteps.value = [];
     statusText.value = "Initializing design suite...";
 
@@ -509,9 +569,9 @@ const handleSSEEvent = (event: string, data: any) => {
       statusText.value = "Design Approved";
       isComplete.value = true;
       addMessage("Layout finalized successfully", "success");
-      if (data.data?.html_overlay && data.data.html_overlay.length > 50) {
-        // HTML mode
-        liveHtmlOverlay.value = data.data.html_overlay;
+      if (data.data?.svg_overlay && data.data.svg_overlay.length > 50) {
+        // SVG mode
+        liveSvgOverlay.value = data.data.svg_overlay;
         liveTextLayers.value = [];
         liveComponents.value =
           data.data.visualComponents || data.data.components || [];
@@ -535,13 +595,13 @@ const handleSSEEvent = (event: string, data: any) => {
       }, 1000);
       break;
     case "iteration_end": {
-      // HTML overlay mode: use html_overlay if present
+      // SVG overlay mode: use svg_overlay if present
       if (
-        data.html_overlay &&
-        typeof data.html_overlay === "string" &&
-        data.html_overlay.length > 50
+        data.svg_overlay &&
+        typeof data.svg_overlay === "string" &&
+        data.svg_overlay.length > 50
       ) {
-        liveHtmlOverlay.value = data.html_overlay;
+        liveSvgOverlay.value = data.svg_overlay;
         liveTextLayers.value = [];
       } else if (data.textLayers) {
         // Fallback: old JSON layer mode
@@ -552,7 +612,7 @@ const handleSSEEvent = (event: string, data: any) => {
         }));
         applyInteractionZoneDepth(rawTextLayers, components);
         liveTextLayers.value = rawTextLayers;
-        liveHtmlOverlay.value = "";
+        liveSvgOverlay.value = "";
       }
       // Components always JSON
       if (data.visualComponents?.length) {
@@ -672,14 +732,12 @@ defineExpose({ connectSSE });
   text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.5);
 }
 
-/* HTML/CSS overlay layer — Task B: AI-generated HTML string rendered here */
-.html-overlay-layer {
+/* SVG overlay layer — AI-generated SVG string rendered here */
+.svg-overlay-layer {
   position: absolute;
   inset: 0;
   pointer-events: none;
   overflow: hidden;
-  z-index: 10;
-  /* Kanit font is already imported via @import in canvas-content parent scope */
 }
 
 .live-component-overlay {
@@ -1160,5 +1218,45 @@ defineExpose({ connectSSE });
 ::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 2px;
+}
+
+.export-svg-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.export-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.export-mode-row select {
+  flex: 1;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: #1a1a2e;
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  font-size: 13px;
+}
+.btn-export {
+  background: #6c63ff;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+}
+.btn-export:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>
