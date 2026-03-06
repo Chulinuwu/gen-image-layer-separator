@@ -1903,23 +1903,60 @@ ART DIRECTOR STRATEGY (FOLLOW EXACTLY):
 `
         : "";
 
+    // Compute text-safe zone from component bounding boxes (used when no artDirectorTextZone)
+    const computedTextZone = (() => {
+      if (!fixedComponentPositions?.length) return null;
+      // Find left/right half coverage
+      const leftCov = fixedComponentPositions.reduce((acc, c) => {
+        const overlap = Math.max(0, Math.min(c.left + c.width, 500) - Math.max(c.left, 0));
+        return acc + overlap * c.height;
+      }, 0);
+      const rightCov = fixedComponentPositions.reduce((acc, c) => {
+        const overlap = Math.max(0, Math.min(c.left + c.width, 1000) - Math.max(c.left, 500));
+        return acc + overlap * c.height;
+      }, 0);
+      // Pick the freer side; give 5% inset from each edge
+      if (leftCov <= rightCov) {
+        // Left side freer — text goes left
+        const rightEdge = Math.min(
+          ...fixedComponentPositions.map((c) => c.left),
+          480, // cap at ~half canvas
+        );
+        return { top: 50, left: 50, width: Math.max(rightEdge - 70, 350), height: 900 };
+      } else {
+        // Right side freer — text goes right
+        const leftEdge = Math.max(
+          ...fixedComponentPositions.map((c) => c.left + c.width),
+          520,
+        );
+        return { top: 50, left: Math.min(leftEdge + 20, 600), width: 380, height: 900 };
+      }
+    })();
+
     const componentsBlock = fixedComponentPositions?.length
       ? `
-COMPONENT POSITIONS (placed — design text around them naturally):
+FORBIDDEN TEXT ZONES — component bounding boxes in px (absolute). Text groups MUST NOT enter these rectangles:
 ${fixedComponentPositions
-  .map(
-    (c) =>
-      `- "${c.label}": x=${Math.round((c.left / 1000) * canvasWidth)}px to ${Math.round(((c.left + c.width) / 1000) * canvasWidth)}px, y=${Math.round((c.top / 1000) * canvasHeight)}px to ${Math.round(((c.top + c.height) / 1000) * canvasHeight)}px`,
-  )
+  .map((c) => {
+    const x1 = Math.round((c.left / 1000) * canvasWidth);
+    const y1 = Math.round((c.top / 1000) * canvasHeight);
+    const x2 = Math.round(((c.left + c.width) / 1000) * canvasWidth);
+    const y2 = Math.round(((c.top + c.height) / 1000) * canvasHeight);
+    return `  ❌ "${c.label}": x ${x1}–${x2}px, y ${y1}–${y2}px  ← NO text translate(x,y) allowed inside this rect`;
+  })
   .join("\n")}
+
+VERIFICATION RULE: Before writing any <g transform="translate(TX,TY)">, check that the text block [TX..TX+estimatedWidth, TY..TY+estimatedHeight] does NOT intersect any forbidden rect above. If it does, move it.
 `
       : "";
 
-    const textZoneBlock = artDirectorTextZone
+    const effectiveTextZone = artDirectorTextZone || computedTextZone;
+    const textZoneBlock = effectiveTextZone
       ? `
-TEXT ZONE (place most text here):
-  x-range: ${Math.round((artDirectorTextZone.left / 1000) * canvasWidth)}px to ${Math.round(((artDirectorTextZone.left + artDirectorTextZone.width) / 1000) * canvasWidth)}px
-  y-range: ${Math.round((artDirectorTextZone.top / 1000) * canvasHeight)}px to ${Math.round(((artDirectorTextZone.top + artDirectorTextZone.height) / 1000) * canvasHeight)}px
+REQUIRED TEXT ZONE — ALL text groups MUST be placed inside this rectangle:
+  x-range: ${Math.round((effectiveTextZone.left / 1000) * canvasWidth)}px to ${Math.round(((effectiveTextZone.left + effectiveTextZone.width) / 1000) * canvasWidth)}px
+  y-range: ${Math.round((effectiveTextZone.top / 1000) * canvasHeight)}px to ${Math.round(((effectiveTextZone.top + effectiveTextZone.height) / 1000) * canvasHeight)}px
+  This zone is the CLEAR area after placing components. Do NOT put text outside it.
 `
       : "";
 
@@ -1965,6 +2002,7 @@ LAYOUT RULES
 5. Text group max width: ~${maxTextWidth}px — use this to avoid overflow
 6. Color: white (#fff) on dark areas, golden (#FFD700) for promo numbers
 7. line-height equivalent: dy="1.0em" for promo numbers, dy="1.25em" for headlines, dy="1.4em" for body
+8. ⚠️ CRITICAL — NO COMPONENT OVERLAP: Every text group translate(TX,TY) must be fully OUTSIDE all FORBIDDEN TEXT ZONES above. The text block rectangle [TX, TY, TX+groupWidth, TY+groupHeight] must NOT intersect any component rectangle. Move text to the REQUIRED TEXT ZONE if it would otherwise overlap.
 
 ═══════════════════════════════════════
 CONTRAST — MANDATORY
@@ -2132,6 +2170,22 @@ Actionable steps: ${JSON.stringify(critique.actionable_steps, null, 2)}
 CURRENT COMPONENT POSITIONS (normalized 0-1000):
 ${JSON.stringify(previousComponents || [], null, 2)}
 
+${
+  previousComponents?.length
+    ? `FORBIDDEN TEXT ZONES (component bounding boxes in px — text MUST stay OUTSIDE):
+${(previousComponents as any[])
+  .map((c: any) => {
+    const p = c.position || c.suggested_position || {};
+    const x1 = Math.round(((p.left || 0) / 1000) * canvasWidth);
+    const y1 = Math.round(((p.top || 0) / 1000) * canvasHeight);
+    const x2 = Math.round((((p.left || 0) + (p.width || 0)) / 1000) * canvasWidth);
+    const y2 = Math.round((((p.top || 0) + (p.height || 0)) / 1000) * canvasHeight);
+    return `  ❌ "${c.label}": x ${x1}–${x2}px, y ${y1}–${y2}px`;
+  })
+  .join("\n")}`
+    : ""
+}
+
 ═══════════════════════════════════════
 YOUR TASK — SVG TEXT FIXES
 ═══════════════════════════════════════
@@ -2143,6 +2197,7 @@ YOUR TASK — SVG TEXT FIXES
 5. font-family: ALWAYS "Kanit, sans-serif"
 6. If text covers a face → move translate(X,Y) away from face area
 7. If text scattered → merge into one <g> with <tspan dy> stacking
+8. ⚠️ CRITICAL: text groups must NOT enter the FORBIDDEN TEXT ZONES above — move to the free side
 
 ═══════════════════════════════════════
 YOUR TASK — COMPONENT FIXES
