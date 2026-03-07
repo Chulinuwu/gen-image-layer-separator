@@ -1926,7 +1926,16 @@ ART DIRECTOR STRATEGY (FOLLOW EXACTLY):
       }
     })();
 
-    const effectiveTextZone = artDirectorTextZone || computedTextZone;
+    // If computed zone is too narrow to be useful (< 250/1000 normalized width),
+    // fall back to full-canvas mode so the LLM can use the entire canvas.
+    // artDirectorTextZone is an explicit override and bypasses the narrow guard.
+    const effectiveTextZone = (() => {
+      if (artDirectorTextZone) return artDirectorTextZone;
+      if (!computedTextZone) return null;
+      // 250/1000 normalized = 25% of canvas — minimum for readable text
+      if (computedTextZone.width < 250) return null;
+      return computedTextZone;
+    })();
 
     // Compute text zone in absolute canvas px
     const textZonePx = effectiveTextZone
