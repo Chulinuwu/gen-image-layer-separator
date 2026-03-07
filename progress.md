@@ -1,5 +1,14 @@
 # Progress Tracking
 
+## 2026-03-08 (Gemini CLI Fix)
+
+### Tasks Completed
+
+- [x] Fix `gemini` CLI error `ERR_INVALID_PACKAGE_CONFIG` caused by corrupted `package.json` in global node folders.
+- [x] Implement comprehensive AI Trace Logging (`[AI-TRACE]`) with persistent Markdown file output to `backend/logs/ai-trace.md`.
+
+---
+
 ## 2026-03-03 (Session 2 — Kill Containers + HTML/CSS Migration)
 
 ### Tasks Completed

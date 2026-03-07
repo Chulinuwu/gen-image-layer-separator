@@ -4,6 +4,7 @@ import fs from "fs";
 import path from "path";
 import sharp from "sharp";
 import { computeSafeZones, assignTextToZones } from "../utils/safeZones";
+import { logEvent } from "../utils/ai-logger";
 
 export const processImage = async (req: Request, res: Response) => {
   try {
@@ -634,6 +635,11 @@ export const createCampaign = async (req: Request, res: Response) => {
       "only_bg_comp",
       parsedNoGoZones,
     );
+    logEvent(
+      "Component Placement",
+      "Initial art director placement",
+      componentAnalysis,
+    );
     let componentSuggestions = componentAnalysis.components || [];
     const artDirectorTextZone = componentAnalysis.composition_text_zone || null;
 
@@ -727,8 +733,10 @@ export const createCampaign = async (req: Request, res: Response) => {
 
         // Find the last translate() before this <text> to resolve absolute position
         const precedingSvg = svg.slice(0, matchStart);
-        const translateRe = /transform=["\'\s]*translate\(\s*(-?[\d.]+)[,\s]+(-?[\d.]+)\s*\)/g;
-        let txFinal = 0, tyFinal = 0;
+        const translateRe =
+          /transform=["\'\s]*translate\(\s*(-?[\d.]+)[,\s]+(-?[\d.]+)\s*\)/g;
+        let txFinal = 0,
+          tyFinal = 0;
         let trm: RegExpExecArray | null;
         while ((trm = translateRe.exec(precedingSvg)) !== null) {
           txFinal = parseFloat(trm[1]);
@@ -740,14 +748,19 @@ export const createCampaign = async (req: Request, res: Response) => {
         if (yAttr) tyFinal += parseFloat(yAttr[1]) - fontSize; // y is baseline
 
         // Gather text from all tspans
-        const tspanTexts = [...textBody.matchAll(/<tspan[^>]*>([^<]*)<\/tspan>/g)]
+        const tspanTexts = [
+          ...textBody.matchAll(/<tspan[^>]*>([^<]*)<\/tspan>/g),
+        ]
           .map((m) => m[1].trim())
           .filter(Boolean);
-        const textContent = tspanTexts.join(' ');
+        const textContent = tspanTexts.join(" ");
         if (!textContent) continue;
 
         const lineCount = Math.max(1, tspanTexts.length);
-        const estimatedWidth = Math.min(textContent.length * fontSize * 0.55, cw * 0.6);
+        const estimatedWidth = Math.min(
+          textContent.length * fontSize * 0.55,
+          cw * 0.6,
+        );
         const estimatedHeight = fontSize * lineCount * 1.25;
 
         results.push({
@@ -758,7 +771,7 @@ export const createCampaign = async (req: Request, res: Response) => {
             width: Math.round((estimatedWidth / cw) * 1000),
             height: Math.round((estimatedHeight / ch) * 1000),
           },
-          style: { font_size_normalized: fontSize, color_hex: '#FFFFFF' },
+          style: { font_size_normalized: fontSize, color_hex: "#FFFFFF" },
         });
       }
       console.log(
@@ -766,7 +779,6 @@ export const createCampaign = async (req: Request, res: Response) => {
       );
       return results;
     };
-
 
     /**
      * Enforce 5% safe zone on component positions (normalized 0-1000).
@@ -1230,6 +1242,10 @@ export const createCampaign = async (req: Request, res: Response) => {
           targetText,
           visualComponents.map((c) => c.label),
         );
+        console.log(
+          `[Pipeline] Plan Phase Strategy:`,
+          JSON.stringify(layoutHint, null, 2),
+        );
         sendSSE("progress", {
           step: "layout_strategy",
           message: `🎨 Layout strategy: "${layoutHint.layout_concept}"`,
@@ -1514,6 +1530,7 @@ export const createCampaign = async (req: Request, res: Response) => {
           console.log(
             `[OVERLAP CHECK] ⚠️ ${preCheckDetails.length} initial overlaps — refinement loop will run (max ${MAX_ITERATIONS} iterations)`,
           );
+          preCheckDetails.forEach((d) => console.log(`  - ${d}`));
         }
       }
 
@@ -1653,14 +1670,17 @@ export const createCampaign = async (req: Request, res: Response) => {
               overlapFound = true;
               const snippetA = (a.part || "").substring(0, 20);
               const snippetB = (b.part || "").substring(0, 20);
-              overlapDetails.push(
-                `TEXT-TEXT OVERLAP: "${snippetA}..." (top:${boxA.top}, left:${boxA.left}, w:${Math.round(boxA.width)}) overlaps "${snippetB}..." (top:${boxB.top}, left:${boxB.left}, w:${Math.round(boxB.width)}). Separate them.`,
-              );
-              console.log(
-                `[OVERLAP] ❌ TEXT-TEXT: "${snippetA}..." overlaps "${snippetB}..."`,
-              );
+              const detail = `TEXT-TEXT OVERLAP: "${snippetA}..." overlaps "${snippetB}..."`;
+              overlapDetails.push(detail);
+              console.log(`[OVERLAP] ❌ ${detail}`);
             }
           }
+        }
+
+        if (overlapFound) {
+          console.log(
+            `[Refinement] Deterministic check found ${overlapDetails.length} issues.`,
+          );
         }
 
         // Always use AI art director critique — no code auto-fail
@@ -1686,6 +1706,8 @@ export const createCampaign = async (req: Request, res: Response) => {
               ? `✅ Layout approved by AI Creative Director! (confidence: ${((critique.confidence ?? 0.5) * 100).toFixed(0)}%)`
               : `❌ Issues found: ${critique.feedback}`,
         });
+
+        logEvent("Critique Result", `Iteration ${currentIteration}`, critique);
 
         const confidence = critique.confidence ?? 0.5; // default 0.5 when field missing
         console.log(
@@ -1859,7 +1881,10 @@ export const exportSvg = async (req: Request, res: Response) => {
     // Optional background image for full-composition mode
     let backgroundBuffer: Buffer | null = null;
     const bgFile = (req as any).file;
-    if ((includeBackground === "true" || includeBackground === true) && bgFile) {
+    if (
+      (includeBackground === "true" || includeBackground === true) &&
+      bgFile
+    ) {
       backgroundBuffer = fs.readFileSync(bgFile.path);
     }
 

@@ -12,6 +12,7 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 import dotenv from "dotenv";
+import { traceAI } from "../utils/ai-logger";
 
 // RMBG-2.0 model singleton — loaded once, reused across all calls
 // Using @huggingface/transformers which runs ONNX models locally (no API call)
@@ -353,6 +354,7 @@ SCB ad style rules I follow:
 
     try {
       console.log("[Plan] Requesting layout strategy from AI...");
+      console.log(`[AI-TRACE] [Plan] Prompt:\n${prompt}`);
       const response = await this.withRetry(() =>
         this.client.models.generateContent({
           model,
@@ -374,10 +376,9 @@ SCB ad style rules I follow:
         }),
       );
 
-      const raw = (response.text || "")
-        .trim()
-        .replace(/```json|```/g, "")
-        .trim();
+      const raw = (response.text || "").trim();
+      traceAI("Plan Strategy", prompt, raw);
+      const rawCleaned = raw.replace(/```json|```/g, "").trim();
 
       // Attempt parse with truncation repair (AI sometimes cuts off mid-JSON)
       let strategy: any = null;
@@ -1328,6 +1329,7 @@ ${
     `;
 
     try {
+      console.log(`[AI-TRACE] [Critique] Prompt:\n${prompt}`);
       const response = await this.withRetry(() =>
         this.client.models.generateContent({
           model,
@@ -1355,7 +1357,7 @@ ${
       );
 
       const text = response.text || "";
-      console.log("[GenAI] Critique raw response:", text.substring(0, 500));
+      traceAI("Critique Layout", prompt, text);
 
       const jsonStr =
         text.match(/\{[\s\S]*\}/)?.[0] ||
@@ -1486,16 +1488,20 @@ ${
     console.log(`[parseSVGResponse] Raw response length: ${raw.length} chars`);
 
     // 1. Extract SVG Content (Preferred Tags: <SVG_OVERLAY>, Fallback: [SVG_OVERLAY])
-    const svgMatchClosed = raw.match(/<(?:SVG_OVERLAY|SVG)>([\s\S]*?)<\/(?:SVG_OVERLAY|SVG)>/i) ||
-                           raw.match(/\[(?:SVG_OVERLAY|SVG)\]([\s\S]*?)\[\/(?:SVG_OVERLAY|SVG)\]/i);
-    
-    const svgMatchOpen = raw.match(/<(?:SVG_OVERLAY|SVG)>([\s\S]*)/i) ||
-                         raw.match(/\[(?:SVG_OVERLAY|SVG)\]([\s\S]*)/i);
+    const svgMatchClosed =
+      raw.match(/<(?:SVG_OVERLAY|SVG)>([\s\S]*?)<\/(?:SVG_OVERLAY|SVG)>/i) ||
+      raw.match(/\[(?:SVG_OVERLAY|SVG)\]([\s\S]*?)\[\/(?:SVG_OVERLAY|SVG)\]/i);
+
+    const svgMatchOpen =
+      raw.match(/<(?:SVG_OVERLAY|SVG)>([\s\S]*)/i) ||
+      raw.match(/\[(?:SVG_OVERLAY|SVG)\]([\s\S]*)/i);
 
     if (svgMatchClosed) {
       svgContent = svgMatchClosed[1].trim();
     } else if (svgMatchOpen) {
-      console.warn("[parseSVGResponse] SVG tag was truncated — no closing tag found, using greedy match");
+      console.warn(
+        "[parseSVGResponse] SVG tag was truncated — no closing tag found, using greedy match",
+      );
       svgContent = svgMatchOpen[1].trim();
       // If we grabbed everything and META is after SVG, strip it out
       if (svgContent.includes("<META>")) {
@@ -1506,16 +1512,17 @@ ${
     }
 
     // 2. Extract META Content
-    const metaMatch = raw.match(/<META>([\s\S]*?)<\/META>/i) || 
-                      raw.match(/\[META\]([\s\S]*?)\[\/META\]/i);
-    const metaMatchOpen = raw.match(/<META>([\s\S]*)/i) ||
-                          raw.match(/\[META\]([\s\S]*)/i);
+    const metaMatch =
+      raw.match(/<META>([\s\S]*?)<\/META>/i) ||
+      raw.match(/\[META\]([\s\S]*?)\[\/META\]/i);
+    const metaMatchOpen =
+      raw.match(/<META>([\s\S]*)/i) || raw.match(/\[META\]([\s\S]*)/i);
 
     let metaStr = "";
     if (metaMatch) {
       metaStr = metaMatch[1].trim();
     } else if (metaMatchOpen) {
-      // If we matched SVG first and it stripped META, this might be null. 
+      // If we matched SVG first and it stripped META, this might be null.
       // But we check metaMatchOpen on the original raw.
       metaStr = metaMatchOpen[1].trim();
     }
@@ -1525,8 +1532,19 @@ ${
         meta = JSON.parse(metaStr);
       } catch {
         // Attempt Repair
-        const repaired = metaStr.replace(/,\s*$/, "") + "}".repeat(Math.max(0, (metaStr.match(/{/g) || []).length - (metaStr.match(/}/g) || []).length));
-        const cleaned = repaired.replace(/\\'/g, "'").replace(/\\([^"\\\/bfnrtu])/g, "$1").replace(/[\x00-\x1F\x7F]/g, " ");
+        const repaired =
+          metaStr.replace(/,\s*$/, "") +
+          "}".repeat(
+            Math.max(
+              0,
+              (metaStr.match(/{/g) || []).length -
+                (metaStr.match(/}/g) || []).length,
+            ),
+          );
+        const cleaned = repaired
+          .replace(/\\'/g, "'")
+          .replace(/\\([^"\\\/bfnrtu])/g, "$1")
+          .replace(/[\x00-\x1F\x7F]/g, " ");
         try {
           meta = JSON.parse(cleaned);
         } catch (e) {
@@ -1538,23 +1556,32 @@ ${
     // 3. Last Resort Fallbacks for SVG
     if (!svgContent || svgContent.length < 50) {
       // Fallback: Markdown code fence
-      const fenceMatch = raw.match(/```(?:svg|xml|SVG)?\s*([\s\S]*?)<\/svg>/i) || raw.match(/```(?:svg|xml|SVG)?\s*([\s\S]*?)```/i);
+      const fenceMatch =
+        raw.match(/```(?:svg|xml|SVG)?\s*([\s\S]*?)<\/svg>/i) ||
+        raw.match(/```(?:svg|xml|SVG)?\s*([\s\S]*?)```/i);
       if (fenceMatch) {
-        const extracted = fenceMatch[1].includes("<svg") ? fenceMatch[1].slice(fenceMatch[1].indexOf("<svg")) : fenceMatch[1];
+        const extracted = fenceMatch[1].includes("<svg")
+          ? fenceMatch[1].slice(fenceMatch[1].indexOf("<svg"))
+          : fenceMatch[1];
         if (extracted.length > 50) {
           svgContent = extracted.trim();
           if (!svgContent.endsWith("</svg>")) svgContent += "</svg>";
-          console.log(`[parseSVGResponse] Fallback: Extracted SVG from code fence (${svgContent.length} chars)`);
+          console.log(
+            `[parseSVGResponse] Fallback: Extracted SVG from code fence (${svgContent.length} chars)`,
+          );
         }
       }
-      
+
       // Fallback: Bare <svg> tag
       if (!svgContent || svgContent.length < 50) {
-        const bareSvgMatch = raw.match(/<svg[\s\S]*?<\/svg>/i) || raw.match(/<svg[\s\S]*/i);
+        const bareSvgMatch =
+          raw.match(/<svg[\s\S]*?<\/svg>/i) || raw.match(/<svg[\s\S]*/i);
         if (bareSvgMatch) {
           svgContent = bareSvgMatch[0].trim();
           if (!svgContent.endsWith("</svg>")) svgContent += "</svg>";
-          console.log(`[parseSVGResponse] Fallback: Extracted bare <svg> block (${svgContent.length} chars)`);
+          console.log(
+            `[parseSVGResponse] Fallback: Extracted bare <svg> block (${svgContent.length} chars)`,
+          );
         }
       }
     }
@@ -1562,12 +1589,19 @@ ${
     if (svgContent) {
       // Final sanitization: ensure it has proper closing tags if truncated
       if (!svgContent.includes("</svg>")) {
-        const openGs = (svgContent.match(/<g[^/]*/g) || []).length - (svgContent.match(/<\/g>/g) || []).length;
+        const openGs =
+          (svgContent.match(/<g[^/]*/g) || []).length -
+          (svgContent.match(/<\/g>/g) || []).length;
         svgContent += "</g>".repeat(Math.max(0, openGs)) + "</svg>";
       }
-      console.log(`[parseSVGResponse] ✅ Extracted svg_overlay: ${svgContent.length} chars`);
+      console.log(
+        `[parseSVGResponse] ✅ Extracted svg_overlay: ${svgContent.length} chars`,
+      );
     } else {
-      console.warn("[parseSVGResponse] All extraction methods failed. Raw snippet:\n" + raw.slice(0, 800));
+      console.warn(
+        "[parseSVGResponse] All extraction methods failed. Raw snippet:\n" +
+          raw.slice(0, 800),
+      );
     }
 
     return { ...meta, svg_overlay: svgContent };
@@ -1902,11 +1936,17 @@ ART DIRECTOR STRATEGY (FOLLOW EXACTLY):
       if (!fixedComponentPositions?.length) return null;
 
       const leftCov = fixedComponentPositions.reduce((acc, c) => {
-        const overlap = Math.max(0, Math.min(c.left + c.width, 500) - Math.max(c.left, 0));
+        const overlap = Math.max(
+          0,
+          Math.min(c.left + c.width, 500) - Math.max(c.left, 0),
+        );
         return acc + overlap * c.height;
       }, 0);
       const rightCov = fixedComponentPositions.reduce((acc, c) => {
-        const overlap = Math.max(0, Math.min(c.left + c.width, 1000) - Math.max(c.left, 500));
+        const overlap = Math.max(
+          0,
+          Math.min(c.left + c.width, 1000) - Math.max(c.left, 500),
+        );
         return acc + overlap * c.height;
       }, 0);
 
@@ -1914,12 +1954,18 @@ ART DIRECTOR STRATEGY (FOLLOW EXACTLY):
 
       if (leftCov <= rightCov) {
         // Left side freer — find the leftmost component edge as the right boundary
-        const rightEdge = Math.min(...fixedComponentPositions.map((c) => c.left), 950);
+        const rightEdge = Math.min(
+          ...fixedComponentPositions.map((c) => c.left),
+          950,
+        );
         const zoneWidth = Math.max(rightEdge - 50 - INSET, 250); // 50 = left inset
         return { top: 50, left: 50, width: zoneWidth, height: 900 };
       } else {
         // Right side freer — find the rightmost component edge as the left boundary
-        const leftEdge = Math.max(...fixedComponentPositions.map((c) => c.left + c.width), 50);
+        const leftEdge = Math.max(
+          ...fixedComponentPositions.map((c) => c.left + c.width),
+          50,
+        );
         const zoneLeft = Math.min(leftEdge + INSET, 950 - 200); // guarantee at least 200 wide
         const zoneWidth = 950 - zoneLeft; // to canvas right edge
         return { top: 50, left: zoneLeft, width: zoneWidth, height: 900 };
@@ -1949,11 +1995,21 @@ ART DIRECTOR STRATEGY (FOLLOW EXACTLY):
 
     // Always use actual canvas coordinates — LLM sees the full image so it naturally thinks in canvas px.
     // Zone enforcement happens via post-processing (_enforceZoneBounds), not virtual canvas coords.
-    const safeX = textZonePx ? textZonePx.x + Math.round(textZonePx.w * 0.04) : Math.round(canvasWidth * 0.05);
-    const safeY = textZonePx ? textZonePx.y + Math.round(textZonePx.h * 0.04) : Math.round(canvasHeight * 0.05);
-    const maxX = textZonePx ? textZonePx.x + textZonePx.w - 20 : Math.round(canvasWidth * 0.95);
-    const maxY = textZonePx ? textZonePx.y + textZonePx.h - 20 : Math.round(canvasHeight * 0.95);
-    const maxTextWidth = textZonePx ? Math.round(textZonePx.w * 0.9) : Math.round(canvasWidth * 0.45);
+    const safeX = textZonePx
+      ? textZonePx.x + Math.round(textZonePx.w * 0.04)
+      : Math.round(canvasWidth * 0.05);
+    const safeY = textZonePx
+      ? textZonePx.y + Math.round(textZonePx.h * 0.04)
+      : Math.round(canvasHeight * 0.05);
+    const maxX = textZonePx
+      ? textZonePx.x + textZonePx.w - 20
+      : Math.round(canvasWidth * 0.95);
+    const maxY = textZonePx
+      ? textZonePx.y + textZonePx.h - 20
+      : Math.round(canvasHeight * 0.95);
+    const maxTextWidth = textZonePx
+      ? Math.round(textZonePx.w * 0.9)
+      : Math.round(canvasWidth * 0.45);
 
     // In container mode, componentsBlock is omitted — the zone IS the safe area.
     // In full-canvas mode, show forbidden zones so LLM avoids components.
@@ -2018,7 +2074,7 @@ SVG BOX MODEL — THINK IN HTML, WRITE AS SVG
 ═══════════════════════════════════════
 FONT SIZES — scaled to text zone width (${maxTextWidth}px available)
 ═══════════════════════════════════════
-- Promotional numbers (offer, %, ×, price): ${Math.round(maxTextWidth * 0.30)}-${Math.round(maxTextWidth * 0.45)}px  ← HUGE and dominant
+- Promotional numbers (offer, %, ×, price): ${Math.round(maxTextWidth * 0.3)}-${Math.round(maxTextWidth * 0.45)}px  ← HUGE and dominant
 - Headline / sub-headline: ${Math.round(maxTextWidth * 0.08)}-${Math.round(maxTextWidth * 0.12)}px
 - Body text: ${Math.round(maxTextWidth * 0.06)}-${Math.round(maxTextWidth * 0.08)}px
 - Fine print / legal: ${Math.round(maxTextWidth * 0.025)}-${Math.round(maxTextWidth * 0.035)}px
@@ -2097,7 +2153,6 @@ CRITICAL Y-POSITION RULE (MUST FOLLOW):
 
     console.log("[SVG] Prompt length:", prompt.length, "chars");
     const svgConfig: any = {
-      
       temperature: 0.9,
       topP: 0.95,
       safetySettings: [
@@ -2108,6 +2163,7 @@ CRITICAL Y-POSITION RULE (MUST FOLLOW):
       ],
     };
 
+    console.log(`[AI-TRACE] [SuggestSVG] Prompt:\n${prompt}`);
     const response = await this.withRetry(() =>
       this.client.models.generateContent({
         model,
@@ -2130,6 +2186,11 @@ CRITICAL Y-POSITION RULE (MUST FOLLOW):
     );
 
     const raw = response.text || "";
+    traceAI("Suggest Layout SVG", prompt, raw, {
+      canvasWidth,
+      canvasHeight,
+      textZonePx,
+    });
     let parsed: any;
     try {
       parsed = this.parseSVGResponse(raw);
@@ -2153,12 +2214,57 @@ CRITICAL Y-POSITION RULE (MUST FOLLOW):
       );
     }
 
+    // ===== DEBUG: trace zone computation and enforcement =====
+    console.log(
+      `[SVG-DEBUG] canvasWidth=${canvasWidth}, canvasHeight=${canvasHeight}`,
+    );
+    console.log(
+      `[SVG-DEBUG] fixedComponentPositions:`,
+      JSON.stringify(fixedComponentPositions),
+    );
+    console.log(
+      `[SVG-DEBUG] computedTextZone (normalized 0-1000):`,
+      JSON.stringify(computedTextZone),
+    );
+    console.log(
+      `[SVG-DEBUG] effectiveTextZone (normalized 0-1000):`,
+      JSON.stringify(effectiveTextZone),
+    );
+    console.log(
+      `[SVG-DEBUG] textZonePx (canvas px):`,
+      JSON.stringify(textZonePx),
+    );
+    console.log(
+      `[SVG-DEBUG] safeX=${safeX}, safeY=${safeY}, maxX=${maxX}, maxY=${maxY}, maxTextWidth=${maxTextWidth}`,
+    );
+    console.log(
+      `[SVG-DEBUG] SVG BEFORE enforcement (first 500 chars):`,
+      parsed.svg_overlay?.substring(0, 500),
+    );
+
     // Post-process: clamp any out-of-zone translate(X,Y) values back into the text zone.
     // LLM uses absolute canvas coords, so this is a pure enforcement step — no coordinate conversion.
     if (textZonePx) {
-      parsed.svg_overlay = this._enforceZoneBounds(parsed.svg_overlay, textZonePx);
+      parsed.svg_overlay = this._enforceZoneBounds(
+        parsed.svg_overlay,
+        textZonePx,
+      );
+      console.log(
+        `[SVG-DEBUG] SVG AFTER _enforceZoneBounds (first 500 chars):`,
+        parsed.svg_overlay?.substring(0, 500),
+      );
       parsed.svg_overlay = this._injectZoneClip(parsed.svg_overlay, textZonePx);
+      console.log(
+        `[SVG-DEBUG] SVG AFTER _injectZoneClip (first 500 chars):`,
+        parsed.svg_overlay?.substring(0, 500),
+      );
+    } else {
+      console.log(
+        `[SVG-DEBUG] textZonePx is NULL — skipping enforcement and clipPath!`,
+      );
     }
+    console.log(`[SVG-DEBUG] FINAL SVG:`, parsed.svg_overlay);
+    // ===== END DEBUG =====
 
     console.log(
       `[SVG] Overlay generated (${parsed.svg_overlay.length} chars). Vibe: "${parsed.campaign_vibe}". Components: ${parsed.components?.length || 0}`,
@@ -2215,8 +2321,12 @@ ${(previousComponents as any[])
     const p = c.position || c.suggested_position || {};
     const x1 = Math.round(((p.left || 0) / 1000) * canvasWidth);
     const y1 = Math.round(((p.top || 0) / 1000) * canvasHeight);
-    const x2 = Math.round((((p.left || 0) + (p.width || 0)) / 1000) * canvasWidth);
-    const y2 = Math.round((((p.top || 0) + (p.height || 0)) / 1000) * canvasHeight);
+    const x2 = Math.round(
+      (((p.left || 0) + (p.width || 0)) / 1000) * canvasWidth,
+    );
+    const y2 = Math.round(
+      (((p.top || 0) + (p.height || 0)) / 1000) * canvasHeight,
+    );
     return `  ❌ "${c.label}": x ${x1}–${x2}px, y ${y1}–${y2}px`;
   })
   .join("\n")}`
@@ -2269,15 +2379,17 @@ YOUR_IMPROVED_SVG_HERE
     }
     parts.push({ text: prompt });
 
+    console.log(`[AI-TRACE] [RefineSVG] Prompt:\n${prompt}`);
     const result = await this.withRetry(() =>
       this.client.models.generateContent({
         model,
         contents: [{ role: "user", parts }],
-        config: {  temperature: 0.8 },
+        config: { temperature: 0.8 },
       }),
     );
 
     const raw = result.text || "";
+    traceAI("Refine Layout SVG", prompt, raw, { critique });
     let parsed: any;
     try {
       parsed = this.parseSVGResponse(raw);
@@ -2455,7 +2567,8 @@ YOUR_IMPROVED_SVG_HERE
             ? subFonts.reduce((a, b) => a + b, 0) / subFonts.length
             : maxFont * 0.4;
         const additionalLines = Math.max(0, tspanCount - 1);
-        const estimatedHeight = maxFont * 1.4 + additionalLines * avgSubFont * 1.4;
+        const estimatedHeight =
+          maxFont * 1.4 + additionalLines * avgSubFont * 1.4;
         const estimatedWidth = maxFont * 0.7 * Math.max(3, 8); // rough width estimate
 
         // Clamp X: must start within zone, must not push text past zone right edge
@@ -2477,7 +2590,9 @@ YOUR_IMPROVED_SVG_HERE
         newTy = Math.max(zone.y, Math.min(zoneBottom - 50, ty));
       }
 
-      parts.push(`transform="translate(${Math.round(newTx)}, ${Math.round(newTy)})"`);
+      parts.push(
+        `transform="translate(${Math.round(newTx)}, ${Math.round(newTy)})"`,
+      );
       lastIndex = m.index + m[0].length;
     }
 
@@ -2489,7 +2604,10 @@ YOUR_IMPROVED_SVG_HERE
    * Wraps all user-visible SVG content in a <clipPath> rect that matches
    * the text zone — hard visual boundary, nothing can paint outside it.
    */
-  private _injectZoneClip(svg: string, zone: { x: number; y: number; w: number; h: number }): string {
+  private _injectZoneClip(
+    svg: string,
+    zone: { x: number; y: number; w: number; h: number },
+  ): string {
     // Match opening <svg ...> tag — use [\s\S]*? to handle potential multi-line attributes
     const svgTagMatch = svg.match(/^(<svg[\s\S]*?>)/);
     if (!svgTagMatch) return svg;
