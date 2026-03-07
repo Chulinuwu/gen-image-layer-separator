@@ -2148,6 +2148,7 @@ CRITICAL Y-POSITION RULE (MUST FOLLOW):
     // LLM uses absolute canvas coords, so this is a pure enforcement step — no coordinate conversion.
     if (textZonePx) {
       parsed.svg_overlay = this._enforceZoneBounds(parsed.svg_overlay, textZonePx);
+      parsed.svg_overlay = this._injectZoneClip(parsed.svg_overlay, textZonePx);
     }
 
     console.log(
@@ -2473,6 +2474,25 @@ YOUR_IMPROVED_SVG_HERE
 
     parts.push(svg.slice(lastIndex));
     return parts.join("");
+  }
+
+  /**
+   * Wraps all user-visible SVG content in a <clipPath> rect that matches
+   * the text zone — hard visual boundary, nothing can paint outside it.
+   */
+  private _injectZoneClip(svg: string, zone: { x: number; y: number; w: number; h: number }): string {
+    // Parse the <svg ...> opening tag
+    const svgTagMatch = svg.match(/^(<svg[^>]*>)/);
+    if (!svgTagMatch) return svg;
+    const svgTag = svgTagMatch[1];
+
+    const clipId = "textZoneClip";
+    const defs = `<defs><clipPath id="${clipId}"><rect x="${zone.x}" y="${zone.y}" width="${zone.w}" height="${zone.h}" /></clipPath></defs>`;
+
+    // Everything after the opening <svg ...> tag becomes the inner content
+    const inner = svg.slice(svgTag.length, -"</svg>".length).trim();
+
+    return `${svgTag}${defs}<g clip-path="url(#${clipId})">${inner}</g></svg>`;
   }
 
   /**
