@@ -2074,7 +2074,7 @@ No markdown fences. No JSON wrapping of SVG. SVG first, META second.
       </text>
     </g>
     <g id="block-fine" transform="translate(${safeX}, ${maxY - 10})">
-      <text x="0" y="0" font-family="Kanit, sans-serif" font-size="${Math.round(canvasWidth * 0.012)}" fill="rgba(255,255,255,0.8)">FINE_PRINT</text>
+      <text x="0" y="0" font-family="Kanit, sans-serif" font-size="${Math.round(maxTextWidth * 0.035)}" fill="rgba(255,255,255,0.8)">FINE_PRINT</text>
     </g>
   </g>
 </svg>
