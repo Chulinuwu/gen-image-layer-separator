@@ -2007,12 +2007,13 @@ SVG BOX MODEL — THINK IN HTML, WRITE AS SVG
 • "-webkit-text-stroke: 4px black"  →  stroke="rgba(0,0,0,0.5)" stroke-width="8" paint-order="stroke fill"
 
 ═══════════════════════════════════════
-FONT SIZES (${canvasWidth}px canvas)
+FONT SIZES — scaled to text zone width (${maxTextWidth}px available)
 ═══════════════════════════════════════
-- Promotional numbers (offer, %, ×, price): ${Math.round(canvasWidth * 0.12)}-${Math.round(canvasWidth * 0.18)}px  ← HUGE and dominant
-- Headline / sub-headline: ${Math.round(canvasWidth * 0.035)}-${Math.round(canvasWidth * 0.055)}px
-- Body text: ${Math.round(canvasWidth * 0.025)}-${Math.round(canvasWidth * 0.035)}px
-- Fine print / legal: ${Math.round(canvasWidth * 0.01)}-${Math.round(canvasWidth * 0.015)}px
+- Promotional numbers (offer, %, ×, price): ${Math.round(maxTextWidth * 0.30)}-${Math.round(maxTextWidth * 0.45)}px  ← HUGE and dominant
+- Headline / sub-headline: ${Math.round(maxTextWidth * 0.08)}-${Math.round(maxTextWidth * 0.12)}px
+- Body text: ${Math.round(maxTextWidth * 0.06)}-${Math.round(maxTextWidth * 0.08)}px
+- Fine print / legal: ${Math.round(maxTextWidth * 0.025)}-${Math.round(maxTextWidth * 0.035)}px
+Max text block width: ${maxTextWidth}px — stay within this width, wrap text with <tspan> if needed.
 
 ═══════════════════════════════════════
 LAYOUT RULES
