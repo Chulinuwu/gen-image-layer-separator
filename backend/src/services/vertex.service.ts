@@ -1886,12 +1886,6 @@ Example html_overlay for "2 ต่อ รับฟรี บัตรขึ้�
       process.env.GEMINI_MODEL_ENDPOINT ||
       "gemini-2.0-flash-exp";
 
-    const safeX = Math.round(canvasWidth * 0.05);
-    const safeY = Math.round(canvasHeight * 0.05);
-    const maxX = Math.round(canvasWidth * 0.95);
-    const maxY = Math.round(canvasHeight * 0.95);
-    const maxTextWidth = Math.round(canvasWidth * 0.45);
-
     const strategyBlock =
       layoutHint && layoutHint.layout_concept !== "default"
         ? `
@@ -1903,10 +1897,10 @@ ART DIRECTOR STRATEGY (FOLLOW EXACTLY):
 `
         : "";
 
-    // Compute text-safe zone from component bounding boxes (used when no artDirectorTextZone)
+    // Step 1: Compute text-safe zone from component bounding boxes (used when no artDirectorTextZone)
     const computedTextZone = (() => {
       if (!fixedComponentPositions?.length) return null;
-      // Find left/right half coverage
+
       const leftCov = fixedComponentPositions.reduce((acc, c) => {
         const overlap = Math.max(0, Math.min(c.left + c.width, 500) - Math.max(c.left, 0));
         return acc + overlap * c.height;
@@ -1915,26 +1909,48 @@ ART DIRECTOR STRATEGY (FOLLOW EXACTLY):
         const overlap = Math.max(0, Math.min(c.left + c.width, 1000) - Math.max(c.left, 500));
         return acc + overlap * c.height;
       }, 0);
-      // Pick the freer side; give 5% inset from each edge
+
+      const INSET = 30; // normalized padding from component edge and canvas edge
+
       if (leftCov <= rightCov) {
-        // Left side freer — text goes left
-        const rightEdge = Math.min(
-          ...fixedComponentPositions.map((c) => c.left),
-          480, // cap at ~half canvas
-        );
-        return { top: 50, left: 50, width: Math.max(rightEdge - 70, 350), height: 900 };
+        // Left side freer — find the leftmost component edge as the right boundary
+        const rightEdge = Math.min(...fixedComponentPositions.map((c) => c.left), 950);
+        const zoneWidth = Math.max(rightEdge - 50 - INSET, 250); // 50 = left inset
+        return { top: 50, left: 50, width: zoneWidth, height: 900 };
       } else {
-        // Right side freer — text goes right
-        const leftEdge = Math.max(
-          ...fixedComponentPositions.map((c) => c.left + c.width),
-          520,
-        );
-        return { top: 50, left: Math.min(leftEdge + 20, 600), width: 380, height: 900 };
+        // Right side freer — find the rightmost component edge as the left boundary
+        const leftEdge = Math.max(...fixedComponentPositions.map((c) => c.left + c.width), 50);
+        const zoneLeft = Math.min(leftEdge + INSET, 950 - 200); // guarantee at least 200 wide
+        const zoneWidth = 950 - zoneLeft; // to canvas right edge
+        return { top: 50, left: zoneLeft, width: zoneWidth, height: 900 };
       }
     })();
 
-    const componentsBlock = fixedComponentPositions?.length
-      ? `
+    const effectiveTextZone = artDirectorTextZone || computedTextZone;
+
+    // Compute text zone in absolute canvas px
+    const textZonePx = effectiveTextZone
+      ? {
+          x: Math.round((effectiveTextZone.left / 1000) * canvasWidth),
+          y: Math.round((effectiveTextZone.top / 1000) * canvasHeight),
+          w: Math.round((effectiveTextZone.width / 1000) * canvasWidth),
+          h: Math.round((effectiveTextZone.height / 1000) * canvasHeight),
+        }
+      : null;
+
+    // Always use actual canvas coordinates — LLM sees the full image so it naturally thinks in canvas px.
+    // Zone enforcement happens via post-processing (_enforceZoneBounds), not virtual canvas coords.
+    const safeX = textZonePx ? textZonePx.x + Math.round(textZonePx.w * 0.04) : Math.round(canvasWidth * 0.05);
+    const safeY = textZonePx ? textZonePx.y + Math.round(textZonePx.h * 0.04) : Math.round(canvasHeight * 0.05);
+    const maxX = textZonePx ? textZonePx.x + textZonePx.w - 20 : Math.round(canvasWidth * 0.95);
+    const maxY = textZonePx ? textZonePx.y + textZonePx.h - 20 : Math.round(canvasHeight * 0.95);
+    const maxTextWidth = textZonePx ? Math.round(textZonePx.w * 0.9) : Math.round(canvasWidth * 0.45);
+
+    // In container mode, componentsBlock is omitted — the zone IS the safe area.
+    // In full-canvas mode, show forbidden zones so LLM avoids components.
+    const componentsBlock =
+      !textZonePx && fixedComponentPositions?.length
+        ? `
 FORBIDDEN TEXT ZONES — component bounding boxes in px (absolute). Text groups MUST NOT enter these rectangles:
 ${fixedComponentPositions
   .map((c) => {
@@ -1942,21 +1958,27 @@ ${fixedComponentPositions
     const y1 = Math.round((c.top / 1000) * canvasHeight);
     const x2 = Math.round(((c.left + c.width) / 1000) * canvasWidth);
     const y2 = Math.round(((c.top + c.height) / 1000) * canvasHeight);
-    return `  ❌ "${c.label}": x ${x1}–${x2}px, y ${y1}–${y2}px  ← NO text translate(x,y) allowed inside this rect`;
+    return `  ❌ "${c.label}": x ${x1}–${x2}px, y ${y1}–${y2}px`;
   })
   .join("\n")}
-
-VERIFICATION RULE: Before writing any <g transform="translate(TX,TY)">, check that the text block [TX..TX+estimatedWidth, TY..TY+estimatedHeight] does NOT intersect any forbidden rect above. If it does, move it.
 `
-      : "";
+        : "";
 
-    const effectiveTextZone = artDirectorTextZone || computedTextZone;
-    const textZoneBlock = effectiveTextZone
+    // Text zone expressed in ABSOLUTE canvas coords — LLM naturally anchors to the image visually.
+    // Post-processing (_enforceZoneBounds) deterministically clamps any out-of-zone placements.
+    const textZoneBlock = textZonePx
       ? `
-REQUIRED TEXT ZONE — ALL text groups MUST be placed inside this rectangle:
-  x-range: ${Math.round((effectiveTextZone.left / 1000) * canvasWidth)}px to ${Math.round(((effectiveTextZone.left + effectiveTextZone.width) / 1000) * canvasWidth)}px
-  y-range: ${Math.round((effectiveTextZone.top / 1000) * canvasHeight)}px to ${Math.round(((effectiveTextZone.top + effectiveTextZone.height) / 1000) * canvasHeight)}px
-  This zone is the CLEAR area after placing components. Do NOT put text outside it.
+═══════════════════════════════════════
+PRE-DEFINED TEXT ZONE — ABSOLUTE CANVAS COORDINATES
+═══════════════════════════════════════
+The backend computed this zone from component bounding boxes. ALL text must stay inside it.
+
+  Text zone x: ${textZonePx.x}px  to  ${textZonePx.x + textZonePx.w}px
+  Text zone y: ${textZonePx.y}px  to  ${textZonePx.y + textZonePx.h}px
+
+Every <g transform="translate(TX,TY)"> MUST satisfy:
+  TX >= ${textZonePx.x} AND TX <= ${textZonePx.x + textZonePx.w - 50}
+  TY >= ${textZonePx.y} AND TY <= ${textZonePx.y + textZonePx.h - 50}
 `
       : "";
 
@@ -1971,7 +1993,7 @@ ${strategyBlock}${componentsBlock}${textZoneBlock}
 CANVAS
 ═══════════════════════════════════════
 Size: ${canvasWidth}×${canvasHeight}px — use ABSOLUTE px coordinates, NOT percentages.
-Safe zone: min x=${safeX}px, min y=${safeY}px, max x=${maxX}px, max y=${maxY}px
+Allowed text area: min x=${safeX}px, min y=${safeY}px, max x=${maxX}px, max y=${maxY}px
 
 ═══════════════════════════════════════
 SVG BOX MODEL — THINK IN HTML, WRITE AS SVG
@@ -2002,7 +2024,7 @@ LAYOUT RULES
 5. Text group max width: ~${maxTextWidth}px — use this to avoid overflow
 6. Color: white (#fff) on dark areas, golden (#FFD700) for promo numbers
 7. line-height equivalent: dy="1.0em" for promo numbers, dy="1.25em" for headlines, dy="1.4em" for body
-8. ⚠️ CRITICAL — NO COMPONENT OVERLAP: Every text group translate(TX,TY) must be fully OUTSIDE all FORBIDDEN TEXT ZONES above. The text block rectangle [TX, TY, TX+groupWidth, TY+groupHeight] must NOT intersect any component rectangle. Move text to the REQUIRED TEXT ZONE if it would otherwise overlap.
+8. ⚠️ CRITICAL — STAY IN CONTAINER: Every translate(TX,TY) MUST be inside the PRE-DEFINED TEXT CONTAINER above. This is a hard clip boundary — anything outside is invisible. Do NOT place any block outside the container x/y bounds.
 
 ═══════════════════════════════════════
 CONTRAST — MANDATORY
@@ -2027,7 +2049,7 @@ RETURN FORMAT — OUTPUT <SVG_OVERLAY> FIRST, THEN <META>
 No markdown fences. No JSON wrapping of SVG. SVG first, META second.
 
 <SVG_OVERLAY>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${canvasWidth} ${canvasHeight}" width="${canvasWidth}" height="${canvasHeight}" overflow="hidden">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${canvasWidth} ${canvasHeight}" width="${canvasWidth}" height="${canvasHeight}">
   <defs>
     <filter id="f0" x="-20%" y="-20%" width="140%" height="140%">
       <feDropShadow dx="2" dy="4" stdDeviation="6" flood-color="#000" flood-opacity="0.85"/>
@@ -2061,8 +2083,6 @@ Replace ALL placeholders with real campaign copy and computed pixel values.
 CRITICAL Y-POSITION RULE (MUST FOLLOW):
 - For a text group with translate(X, Y_PX): the BOTTOM of the last text line must stay within maxY=${maxY}px
 - Formula: Y_PX + (first_font_size * 1.05) + (headline_font_size * 1.1) + (body_font_size * 1.3) < ${maxY}
-- Example for promo text: if font-size=160px + 2 extra lines, set translate Y <= ${Math.round(canvasHeight * 0.45)} so all lines fit
-- If only 1 promo number: translate Y can be up to ${Math.round(canvasHeight * 0.75)}
 - Fine print line: ALWAYS translate(${safeX}, ${maxY - 15}) — do NOT put it lower than maxY`;
 
     console.log("[SVG] Prompt length:", prompt.length, "chars");
@@ -2121,6 +2141,12 @@ CRITICAL Y-POSITION RULE (MUST FOLLOW):
       throw new Error(
         "[suggestLayoutSVG] svg_overlay contains disallowed content",
       );
+    }
+
+    // Post-process: clamp any out-of-zone translate(X,Y) values back into the text zone.
+    // LLM uses absolute canvas coords, so this is a pure enforcement step — no coordinate conversion.
+    if (textZonePx) {
+      parsed.svg_overlay = this._enforceZoneBounds(parsed.svg_overlay, textZonePx);
     }
 
     console.log(
@@ -2369,6 +2395,83 @@ YOUR_IMPROVED_SVG_HERE
     }
 
     return svgOverlay;
+  }
+
+  /**
+   * Deterministically enforce that all translate(TX,TY) in the SVG stay within the text zone.
+   * LLM uses absolute canvas coordinates, so we just clamp any out-of-bounds placements.
+   * Also clamps Y so that the estimated text block height fits within zone bottom.
+   */
+  private _enforceZoneBounds(
+    svg: string,
+    zone: { x: number; y: number; w: number; h: number },
+  ): string {
+    const parts: string[] = [];
+    let lastIndex = 0;
+    // Match both "translate(X,Y)" and "translate(X Y)" (SVG allows space separator)
+    const translateRe = /transform="translate\(([^,)\s]+)[,\s]\s*([^)]+)\)"/g;
+    let m: RegExpExecArray | null;
+
+    const zoneRight = zone.x + zone.w;
+    const zoneBottom = zone.y + zone.h;
+
+    while ((m = translateRe.exec(svg)) !== null) {
+      parts.push(svg.slice(lastIndex, m.index));
+
+      const txStr = m[1].trim();
+      const tyStr = m[2].trim();
+      let tx = parseFloat(txStr);
+      let ty = parseFloat(tyStr);
+
+      // Look ahead ~2000 chars for font-sizes and tspan count in this block
+      const lookahead = svg.slice(m.index, m.index + 2000);
+      const fontSizes: number[] = [];
+      const fsRe = /font-size="(\d+(?:\.\d+)?)"/g;
+      let fm: RegExpExecArray | null;
+      while ((fm = fsRe.exec(lookahead)) !== null) {
+        fontSizes.push(parseFloat(fm[1]));
+      }
+      const tspanCount = Math.max(1, (lookahead.match(/<tspan/g) || []).length);
+
+      let newTx = tx;
+      let newTy = ty;
+
+      if (fontSizes.length > 0) {
+        const maxFont = Math.max(...fontSizes);
+        const subFonts = fontSizes.filter((f) => f < maxFont);
+        const avgSubFont =
+          subFonts.length > 0
+            ? subFonts.reduce((a, b) => a + b, 0) / subFonts.length
+            : maxFont * 0.4;
+        const additionalLines = Math.max(0, tspanCount - 1);
+        const estimatedHeight = maxFont * 1.4 + additionalLines * avgSubFont * 1.4;
+        const estimatedWidth = maxFont * 0.7 * Math.max(3, 8); // rough width estimate
+
+        // Clamp X: must start within zone, must not push text past zone right edge
+        const maxTx = zoneRight - Math.min(estimatedWidth, zone.w * 0.5) - 20;
+        newTx = Math.max(zone.x, Math.min(maxTx, tx));
+
+        // Clamp Y: text block bottom must stay within zone
+        const maxTy = zoneBottom - estimatedHeight - 30;
+        newTy = Math.max(zone.y, Math.min(maxTy > zone.y ? maxTy : zone.y, ty));
+
+        if (newTx !== tx || newTy !== ty) {
+          console.log(
+            `[SVG] Zone enforce: translate(${tx},${ty}) → (${Math.round(newTx)},${Math.round(newTy)}) zone=[${zone.x}-${zoneRight},${zone.y}-${zoneBottom}] estH=${Math.round(estimatedHeight)}`,
+          );
+        }
+      } else {
+        // No font info — just clamp to zone boundaries
+        newTx = Math.max(zone.x, Math.min(zoneRight - 50, tx));
+        newTy = Math.max(zone.y, Math.min(zoneBottom - 50, ty));
+      }
+
+      parts.push(`transform="translate(${Math.round(newTx)}, ${Math.round(newTy)})"`);
+      lastIndex = m.index + m[0].length;
+    }
+
+    parts.push(svg.slice(lastIndex));
+    return parts.join("");
   }
 
   /**
