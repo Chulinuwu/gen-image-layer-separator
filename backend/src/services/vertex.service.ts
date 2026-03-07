@@ -2481,18 +2481,26 @@ YOUR_IMPROVED_SVG_HERE
    * the text zone — hard visual boundary, nothing can paint outside it.
    */
   private _injectZoneClip(svg: string, zone: { x: number; y: number; w: number; h: number }): string {
-    // Parse the <svg ...> opening tag
-    const svgTagMatch = svg.match(/^(<svg[^>]*>)/);
+    // Match opening <svg ...> tag — use [\s\S]*? to handle potential multi-line attributes
+    const svgTagMatch = svg.match(/^(<svg[\s\S]*?>)/);
     if (!svgTagMatch) return svg;
     const svgTag = svgTagMatch[1];
 
     const clipId = "textZoneClip";
-    const defs = `<defs><clipPath id="${clipId}"><rect x="${zone.x}" y="${zone.y}" width="${zone.w}" height="${zone.h}" /></clipPath></defs>`;
+    const clipRect = `<clipPath id="${clipId}"><rect x="${zone.x}" y="${zone.y}" width="${zone.w}" height="${zone.h}" /></clipPath>`;
 
-    // Everything after the opening <svg ...> tag becomes the inner content
     const inner = svg.slice(svgTag.length, -"</svg>".length).trim();
 
-    return `${svgTag}${defs}<g clip-path="url(#${clipId})">${inner}</g></svg>`;
+    let result: string;
+    if (inner.includes("<defs>")) {
+      // Merge clipPath into existing <defs> to avoid double-wrapping
+      const mergedInner = inner.replace("<defs>", `<defs>${clipRect}`);
+      result = `${svgTag}<g clip-path="url(#${clipId})">${mergedInner}</g></svg>`;
+    } else {
+      // No existing <defs> — prepend a new one
+      result = `${svgTag}<defs>${clipRect}</defs><g clip-path="url(#${clipId})">${inner}</g></svg>`;
+    }
+    return result;
   }
 
   /**
