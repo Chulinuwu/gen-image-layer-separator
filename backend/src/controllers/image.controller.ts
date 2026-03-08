@@ -4,6 +4,7 @@ import fs from "fs";
 import path from "path";
 import sharp from "sharp";
 import { computeSafeZones, assignTextToZones } from "../utils/safeZones";
+import { buildSVG } from "../utils/svgBuilder";
 import { logEvent } from "../utils/ai-logger";
 
 export const processImage = async (req: Request, res: Response) => {
@@ -1259,10 +1260,10 @@ export const createCampaign = async (req: Request, res: Response) => {
 
       sendSSE("progress", {
         step: "text_layout",
-        message: "AI is generating SVG layout...",
+        message: "AI is generating layout intent...",
       });
 
-      // Tell the AI where components are (use their final suggested_position or position)
+      // Compute canvas dimensions and text zone for the new Measure→SVG pipeline
       const fixedPositions = visualComponents.map((c) => ({
         label: c.label,
         top: c.position.top || 0,
@@ -1272,38 +1273,98 @@ export const createCampaign = async (req: Request, res: Response) => {
       }));
 
       try {
-        const htmlAnalysis = await vertexService.suggestLayoutSVG(
+        const imgMeta = await sharp(imageBuffer).metadata();
+        const canvasW = imgMeta.width || 1080;
+        const canvasH = imgMeta.height || 1080;
+
+        // Compute text-safe zone from component positions (normalized 0-1000 → canvas px)
+        const computeTextZone = (): { x: number; y: number; w: number; h: number } => {
+          // If art director specified a zone, use it (convert from normalized to px)
+          if (artDirectorTextZone) {
+            return {
+              x: Math.round((artDirectorTextZone.left / 1000) * canvasW),
+              y: Math.round((artDirectorTextZone.top / 1000) * canvasH),
+              w: Math.round((artDirectorTextZone.width / 1000) * canvasW),
+              h: Math.round((artDirectorTextZone.height / 1000) * canvasH),
+            };
+          }
+
+          if (!fixedPositions?.length) {
+            // No components — use right 45% of canvas with margins
+            const margin = Math.round(canvasW * 0.05);
+            return { x: Math.round(canvasW * 0.5), y: margin, w: Math.round(canvasW * 0.45), h: canvasH - margin * 2 };
+          }
+
+          // Compute coverage on left vs right half (normalized 0-1000 coords)
+          const leftCov = fixedPositions.reduce((acc, c) => {
+            const overlap = Math.max(0, Math.min(c.left + c.width, 500) - Math.max(c.left, 0));
+            return acc + overlap * c.height;
+          }, 0);
+          const rightCov = fixedPositions.reduce((acc, c) => {
+            const overlap = Math.max(0, Math.min(c.left + c.width, 1000) - Math.max(c.left, 500));
+            return acc + overlap * c.height;
+          }, 0);
+
+          const INSET = 30;
+          let zoneNorm: { left: number; top: number; width: number; height: number };
+
+          if (leftCov <= rightCov) {
+            const rightEdge = Math.min(...fixedPositions.map((c) => c.left), 950);
+            const zoneWidth = Math.max(rightEdge - 50 - INSET, 250);
+            zoneNorm = { top: 50, left: 50, width: zoneWidth, height: 900 };
+          } else {
+            const leftEdge = Math.max(...fixedPositions.map((c) => c.left + c.width), 50);
+            const zoneLeft = Math.min(leftEdge + INSET, 950 - 200);
+            const zoneWidth = 950 - zoneLeft;
+            zoneNorm = { top: 50, left: zoneLeft, width: zoneWidth, height: 900 };
+          }
+
+          // Narrow zone guard: if < 250 normalized, use full canvas fallback
+          if (zoneNorm.width < 250) {
+            const margin = Math.round(canvasW * 0.05);
+            return { x: margin, y: margin, w: canvasW - margin * 2, h: canvasH - margin * 2 };
+          }
+
+          return {
+            x: Math.round((zoneNorm.left / 1000) * canvasW),
+            y: Math.round((zoneNorm.top / 1000) * canvasH),
+            w: Math.round((zoneNorm.width / 1000) * canvasW),
+            h: Math.round((zoneNorm.height / 1000) * canvasH),
+          };
+        };
+
+        const textZone = computeTextZone();
+        console.log(`[Pass2] Text zone: x=${textZone.x}, y=${textZone.y}, w=${textZone.w}, h=${textZone.h}`);
+
+        // Step A: AI provides creative intent (JSON, not SVG)
+        const intent = await vertexService.suggestLayoutIntent(
           imageBuffer,
           mimeType,
           targetText,
+          textZone,
+          { w: canvasW, h: canvasH },
           layoutHint,
-          fixedPositions,
-          artDirectorTextZone || undefined,
         );
-        svgOverlay = htmlAnalysis.svg_overlay;
+
+        console.log(`[Pass2] Layout intent: ${intent.blocks.length} blocks, vibe="${intent.campaign_vibe}"`);
+
+        // Step B: Server builds measured SVG from intent
+        const svgResult = buildSVG({
+          blocks: intent.blocks,
+          textZone,
+          canvasSize: { w: canvasW, h: canvasH },
+        });
+
+        svgOverlay = svgResult.svg;
         analysis.svg_overlay = svgOverlay;
-        analysis.background_description =
-          htmlAnalysis.background_description ||
-          analysis.background_description;
-        analysis.campaign_vibe =
-          htmlAnalysis.campaign_vibe || analysis.campaign_vibe;
-        if (htmlAnalysis.no_go_zones?.length) {
-          analysis.no_go_zones = htmlAnalysis.no_go_zones;
-        }
-        // components from HTML analysis may also update positions — clamp to safe zone
-        if (htmlAnalysis.components?.length) {
-          componentSuggestions = htmlAnalysis.components.map((c: any) => ({
-            ...c,
-            position: clampToSafeZone(c.position),
-            suggested_position: c.suggested_position
-              ? clampToSafeZone(c.suggested_position)
-              : undefined,
-          }));
-          analysis.components = componentSuggestions;
-        }
+        analysis.background_description = intent.background_description || analysis.background_description;
+        analysis.campaign_vibe = intent.campaign_vibe || analysis.campaign_vibe;
+
+        console.log(`[Pass2] SVG built: ${svgResult.blocks.length} blocks placed, ${svgOverlay.length} chars`);
+
       } catch (pass2Err) {
         console.warn(
-          "[Pass2] SVG layout failed, proceeding with empty overlay:",
+          "[Pass2] Layout intent pipeline failed, proceeding with empty overlay:",
           pass2Err,
         );
       }
