@@ -112,6 +112,9 @@ export function buildSVG(intent: LayoutIntent): BuildSVGResult {
     }));
     measured = measureAllBlocks(scaled, maxTextWidth);
     ({ placements, totalUsed } = computeVerticalStack(measured, zone, padding));
+    if (totalUsed > availableH) {
+      console.warn(`[svgBuilder] Text still overflows after scaling: ${Math.round(totalUsed)}px > ${Math.round(availableH)}px zone height`);
+    }
   }
 
   // Step 3 — build SVG string
@@ -122,7 +125,7 @@ export function buildSVG(intent: LayoutIntent): BuildSVGResult {
   svgLines.push('  <defs>');
   svgLines.push('    <filter id="textShadow">');
   svgLines.push(
-    '      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="rgba(0,0,0,0.5)" />',
+    '      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000000" flood-opacity="0.5" />',
   );
   svgLines.push('    </filter>');
   svgLines.push('  </defs>');
@@ -156,7 +159,7 @@ export function buildSVG(intent: LayoutIntent): BuildSVGResult {
     }
 
     svgLines.push(
-      `  <g id="block-${p.role}" transform="translate(${blockX}, ${blockY})"${filterAttr}>`,
+      `  <g id="block-${p.role}-${resultBlocks.length}" transform="translate(${blockX}, ${blockY})"${filterAttr}>`,
     );
     svgLines.push(
       `    <text font-family="Kanit, sans-serif" font-size="${p.fontSize}" font-weight="${p.fontWeight}" fill="${escapeXml(p.color)}"${strokeAttrs} text-anchor="${anchor}">`,
