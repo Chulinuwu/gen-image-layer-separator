@@ -1223,6 +1223,14 @@ export const createCampaign = async (req: Request, res: Response) => {
     }
 
     // ───── Step 1C: Pass 2 — Text Layout Around Fixed Components ──────────────
+    // Hoisted so they're accessible in the refinement loop below
+    let canvasW = 1080;
+    let canvasH = 1080;
+    let textZone: { x: number; y: number; w: number; h: number } = { x: 0, y: 0, w: 1080, h: 1080 };
+    let layoutHint:
+      | Awaited<ReturnType<typeof vertexService.planLayoutStrategy>>
+      | undefined;
+
     if (mode !== "only_bg_comp") {
       sendSSE("progress", {
         step: "text_layout",
@@ -1233,9 +1241,6 @@ export const createCampaign = async (req: Request, res: Response) => {
       // Character depth (interaction_zone z-index) handles visual separation instead.
 
       // Step 0 (DesignAsCode Plan phase): let AI brainstorm layout concept before committing to coordinates
-      let layoutHint:
-        | Awaited<ReturnType<typeof vertexService.planLayoutStrategy>>
-        | undefined;
       try {
         layoutHint = await vertexService.planLayoutStrategy(
           imageBuffer,
@@ -1274,8 +1279,8 @@ export const createCampaign = async (req: Request, res: Response) => {
 
       try {
         const imgMeta = await sharp(imageBuffer).metadata();
-        const canvasW = imgMeta.width || 1080;
-        const canvasH = imgMeta.height || 1080;
+        canvasW = imgMeta.width || 1080;
+        canvasH = imgMeta.height || 1080;
 
         // Compute text-safe zone from component positions (normalized 0-1000 → canvas px)
         const computeTextZone = (): { x: number; y: number; w: number; h: number } => {
@@ -1333,7 +1338,7 @@ export const createCampaign = async (req: Request, res: Response) => {
           };
         };
 
-        const textZone = computeTextZone();
+        textZone = computeTextZone();
         console.log(`[Pass2] Text zone: x=${textZone.x}, y=${textZone.y}, w=${textZone.w}, h=${textZone.h}`);
 
         // Step A: AI provides creative intent (JSON, not SVG)
@@ -1611,18 +1616,19 @@ export const createCampaign = async (req: Request, res: Response) => {
           message: `Iteration ${currentIteration}/${MAX_ITERATIONS}: Generating preview...`,
         });
 
-        // In SVG mode, textSuggestions is empty — parse svg_overlay to get approx boxes for preview
-        const previewTextSuggestions = svgOverlay
-          ? parseSVGOverlayToApproxSuggestions(svgOverlay)
-          : textSuggestions;
-
-        // Generate visual preview using SVG overlay (matches editor output)
-        const previewBuffer = await vertexService.generateLayoutPreview(
-          imageBuffer,
-          previewTextSuggestions,
-          componentSuggestions,
-          analysis.no_go_zones || [],
-        );
+        // Generate preview by compositing the measured SVG overlay directly onto the base image.
+        // This is much more accurate than the old parse-and-re-render approach.
+        let previewBuffer: Buffer;
+        if (svgOverlay && svgOverlay.length > 50) {
+          const svgBuffer = Buffer.from(svgOverlay);
+          previewBuffer = await sharp(imageBuffer)
+            .composite([{ input: svgBuffer, top: 0, left: 0 }])
+            .png()
+            .toBuffer();
+        } else {
+          // Fallback: use base image without overlay
+          previewBuffer = await sharp(imageBuffer).png().toBuffer();
+        }
 
         // Save preview for debugging and frontend display
         const previewFilename = `preview-iter${currentIteration}-${Date.now()}.png`;
@@ -1810,57 +1816,41 @@ export const createCampaign = async (req: Request, res: Response) => {
           message: "Refining SVG layout based on feedback...",
         });
 
-        // Refine the SVG overlay — pass previewBuffer so AI can SEE the problems
-        let refinedResult: { svg_overlay: string; components?: any[] } | null =
-          null;
+        // Refine: re-run the intent pipeline with critique feedback
         try {
-          refinedResult = await vertexService.refineLayoutSVG(
+          const critiqueFeedback = critique.feedback + (critique.actionable_steps?.length
+            ? '\nActionable steps: ' + critique.actionable_steps.join('; ')
+            : '');
+          const refinedTargetText = `${targetText}\n\n[REFINEMENT FEEDBACK — address these issues]:\n${critiqueFeedback}`;
+
+          const refinedIntent = await vertexService.suggestLayoutIntent(
             imageBuffer,
             mimeType,
-            targetText,
-            svgOverlay,
-            critique,
-            previewBuffer,
-            componentSuggestions,
+            refinedTargetText,
+            textZone,
+            { w: canvasW, h: canvasH },
+            layoutHint,
           );
-        } catch (refineErr) {
-          console.warn(
-            "[Refine] refineLayoutSVG failed, keeping current overlay:",
-            refineErr,
-          );
-        }
 
-        if (refinedResult) {
-          if (
-            refinedResult.svg_overlay &&
-            refinedResult.svg_overlay.length > 50
-          ) {
-            svgOverlay = refinedResult.svg_overlay;
+          const refinedSvg = buildSVG({
+            blocks: refinedIntent.blocks,
+            textZone,
+            canvasSize: { w: canvasW, h: canvasH },
+          });
+
+          if (refinedSvg.svg && refinedSvg.svg.length > 50) {
+            svgOverlay = refinedSvg.svg;
             analysis.svg_overlay = svgOverlay;
+            console.log(`[Refine] Intent refined: ${refinedSvg.blocks.length} blocks`);
           } else {
-            console.warn(
-              "[Refine] Refined svg_overlay too short — keeping previous",
-            );
+            console.warn("[Refine] Refined SVG too short — keeping previous");
             sendSSE("refine_rejected", {
               iteration: currentIteration,
-              message:
-                "⚠️ Refinement returned empty overlay — keeping previous layout.",
+              message: "⚠️ Refinement returned empty overlay — keeping previous layout.",
             });
           }
-          if (refinedResult.components?.length) {
-            componentSuggestions = refinedResult.components;
-            analysis.components = refinedResult.components;
-            // Sync + clamp positions back into visualComponents (images stay, positions update)
-            for (const vc of visualComponents) {
-              const updated = componentSuggestions.find(
-                (c: any) => c.label === vc.label,
-              );
-              if (updated?.position) {
-                vc.position = clampToSafeZone(updated.position);
-                vc.z_index = updated.z_index || vc.z_index;
-              }
-            }
-          }
+        } catch (refineErr) {
+          console.warn("[Refine] Refinement failed, keeping current overlay:", refineErr);
         }
 
         sendSSE("iteration_end", {
