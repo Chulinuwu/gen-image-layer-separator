@@ -2273,6 +2273,213 @@ CRITICAL Y-POSITION RULE (MUST FOLLOW):
   }
 
   /**
+   * Ask the AI for Layout Intent JSON — creative decisions only (text blocks,
+   * hierarchy, colors, approximate font sizes).  The server-side svgBuilder
+   * will turn this into pixel-perfect SVG, so the AI never has to do spatial math.
+   */
+  async suggestLayoutIntent(
+    imageBuffer: Buffer,
+    mimeType: string,
+    targetText: string,
+    textZone: { x: number; y: number; w: number; h: number },
+    canvasSize: { w: number; h: number },
+    layoutHint?: {
+      layout_concept: string;
+      dominant_element: string;
+      text_hierarchy: string[];
+      composition_notes: string;
+    },
+  ): Promise<{
+    blocks: Array<{
+      text: string;
+      role:
+        | "promo"
+        | "headline"
+        | "subheadline"
+        | "body"
+        | "offer"
+        | "fineprint";
+      fontSize: number;
+      fontWeight: string;
+      color: string;
+      strokeColor?: string;
+      strokeWidth?: number;
+      align?: "left" | "center" | "right";
+    }>;
+    campaign_vibe: string;
+    background_description: string;
+  }> {
+    // ── Image preprocessing (same as suggestLayoutSVG) ──
+    let processingBuffer = imageBuffer;
+    let processingMime = mimeType;
+    try {
+      const meta = await sharp(imageBuffer).metadata();
+      const origW = meta.width || canvasSize.w;
+      processingBuffer = await sharp(imageBuffer)
+        .resize(Math.min(1500, origW))
+        .jpeg({ quality: 90 })
+        .toBuffer();
+      processingMime = "image/jpeg";
+    } catch (_e) {
+      /* use original */
+    }
+
+    const model =
+      process.env.GEMINI_MODEL_ENDPOINT_2 ||
+      process.env.GEMINI_MODEL_ENDPOINT ||
+      "gemini-2.0-flash-exp";
+
+    // ── Build prompt ──
+    const strategyBlock = layoutHint
+      ? `
+ART DIRECTOR STRATEGY:
+- Concept: ${layoutHint.layout_concept}
+- Dominant element: "${layoutHint.dominant_element}"
+- Text hierarchy: ${layoutHint.text_hierarchy.join(" › ")}
+- Notes: ${layoutHint.composition_notes}`
+      : "";
+
+    const prompt = `You are a professional Thai advertising art director.
+
+Your task: Decide the TEXT CONTENT, VISUAL HIERARCHY, COLORS, and APPROXIMATE FONT SIZES for an advertising campaign overlay.
+
+IMPORTANT: You are NOT generating SVG or HTML. You are providing creative direction as structured JSON.
+The server will handle exact pixel placement — you focus on creative decisions only.
+
+CAMPAIGN TEXT TO USE:
+${targetText}
+${strategyBlock}
+
+TEXT ZONE AVAILABLE: ${textZone.w}px wide × ${textZone.h}px tall
+(The server will auto-fit text to this zone. Your font sizes are suggestions — the server may adjust them.)
+
+RULES:
+1. Split the campaign text into logical blocks with clear roles:
+   - "promo": The dominant promotional number/offer (e.g. "2 ต่อ", "50%", "฿199")  — MUST be the largest, most eye-catching element
+   - "headline": Main message headline
+   - "subheadline": Supporting headline
+   - "body": Body text, details
+   - "offer": Special offer callout (e.g. "รับฟรี*", "สมัครวันนี้")
+   - "fineprint": Legal text, terms and conditions — smallest
+
+2. Font sizes are SUGGESTIONS (the server will auto-fit). Think in terms of visual hierarchy:
+   - promo: Very large (150-300px suggested)
+   - headline: Medium-large (40-80px)
+   - subheadline: Medium (30-50px)
+   - body: Medium-small (24-40px)
+   - offer: Medium (30-50px)
+   - fineprint: Small (12-18px)
+
+3. Choose colors that:
+   - Contrast well with the background image
+   - Follow the campaign mood/vibe
+   - Use stroke (outline) for text over busy backgrounds
+
+4. fontWeight: Use "900" for promo, "700" for headlines/offers, "400" for body/fineprint
+
+5. align: "left" for most text, "center" for promo numbers
+
+OUTPUT FORMAT — respond with ONLY this JSON (no markdown, no explanation):
+{
+  "blocks": [
+    { "text": "...", "role": "promo", "fontSize": 200, "fontWeight": "900", "color": "#FFD700", "strokeColor": "#000000", "strokeWidth": 3, "align": "center" },
+    { "text": "...", "role": "headline", "fontSize": 50, "fontWeight": "700", "color": "#FFFFFF" },
+    ...
+  ],
+  "campaign_vibe": "description of the visual mood",
+  "background_description": "brief description of what's in the background image"
+}`;
+
+    console.log(
+      `[LayoutIntent] Calling ${model} for layout intent (textZone: ${textZone.w}×${textZone.h}, canvas: ${canvasSize.w}×${canvasSize.h})`,
+    );
+
+    // ── Call the AI ──
+    const response = await this.client.models.generateContent({
+      model,
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              inlineData: {
+                mimeType: processingMime,
+                data: processingBuffer.toString("base64"),
+              },
+            },
+            { text: prompt },
+          ],
+        },
+      ],
+      config: { temperature: 0.7 },
+    });
+
+    const raw = response.text ?? "";
+    console.log(
+      `[LayoutIntent] Raw response length: ${raw.length} chars`,
+    );
+
+    // ── Parse response ──
+    try {
+      // Strip markdown code fences if present
+      const cleaned = raw
+        .replace(/^```(?:json)?\s*/i, "")
+        .replace(/\s*```$/i, "")
+        .trim();
+
+      const parsed = JSON.parse(cleaned);
+
+      if (!Array.isArray(parsed.blocks) || parsed.blocks.length === 0) {
+        throw new Error("Parsed JSON has no blocks array");
+      }
+
+      // Validate each block has required fields
+      for (const block of parsed.blocks) {
+        if (!block.text || !block.role || !block.fontSize || !block.color) {
+          throw new Error(
+            `Block missing required fields: ${JSON.stringify(block)}`,
+          );
+        }
+      }
+
+      console.log(
+        `[LayoutIntent] Success — ${parsed.blocks.length} blocks, vibe: "${parsed.campaign_vibe}"`,
+      );
+
+      return {
+        blocks: parsed.blocks,
+        campaign_vibe: parsed.campaign_vibe || "modern Thai advertising",
+        background_description:
+          parsed.background_description || "campaign background",
+      };
+    } catch (err) {
+      console.error(
+        "[LayoutIntent] Failed to parse AI response, using fallback.",
+        err,
+      );
+      console.error("[LayoutIntent] Raw response was:", raw.substring(0, 500));
+
+      // Fallback: return the full text as a single headline block
+      return {
+        blocks: [
+          {
+            text: targetText,
+            role: "headline" as const,
+            fontSize: 48,
+            fontWeight: "700",
+            color: "#FFFFFF",
+            strokeColor: "#000000",
+            strokeWidth: 2,
+            align: "center" as const,
+          },
+        ],
+        campaign_vibe: "default",
+        background_description: "campaign background",
+      };
+    }
+  }
+
+  /**
    * SVG equivalent of refineLayoutHTML — refines SVG overlay based on critique.
    */
   async refineLayoutSVG(
