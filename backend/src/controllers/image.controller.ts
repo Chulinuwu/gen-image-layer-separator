@@ -1300,41 +1300,106 @@ export const createCampaign = async (req: Request, res: Response) => {
             return { x: Math.round(canvasW * 0.5), y: margin, w: Math.round(canvasW * 0.45), h: canvasH - margin * 2 };
           }
 
-          // Compute coverage on left vs right half (normalized 0-1000 coords)
-          const leftCov = fixedPositions.reduce((acc, c) => {
-            const overlap = Math.max(0, Math.min(c.left + c.width, 500) - Math.max(c.left, 0));
-            return acc + overlap * c.height;
-          }, 0);
-          const rightCov = fixedPositions.reduce((acc, c) => {
-            const overlap = Math.max(0, Math.min(c.left + c.width, 1000) - Math.max(c.left, 500));
-            return acc + overlap * c.height;
-          }, 0);
+          // --- Find the largest free rectangle that avoids ALL components ---
+          // Generate candidate zones: left, right, top, bottom of each component,
+          // plus gaps between components. Then pick the biggest usable one.
+          const INSET = 30; // padding from component edge
+          const MARGIN = 50; // canvas margin
 
-          const INSET = 30;
-          let zoneNorm: { left: number; top: number; width: number; height: number };
+          type Rect = { left: number; top: number; width: number; height: number };
+          const candidates: Rect[] = [];
 
-          if (leftCov <= rightCov) {
-            const rightEdge = Math.min(...fixedPositions.map((c) => c.left), 950);
-            const zoneWidth = Math.max(rightEdge - 50 - INSET, 250);
-            zoneNorm = { top: 50, left: 50, width: zoneWidth, height: 900 };
-          } else {
-            const leftEdge = Math.max(...fixedPositions.map((c) => c.left + c.width), 50);
-            const zoneLeft = Math.min(leftEdge + INSET, 950 - 200);
-            const zoneWidth = 950 - zoneLeft;
-            zoneNorm = { top: 50, left: zoneLeft, width: zoneWidth, height: 900 };
+          // Candidate 1: Left of ALL components (to the left of the leftmost component)
+          const minLeft = Math.min(...fixedPositions.map(c => c.left));
+          if (minLeft - MARGIN - INSET > 200) {
+            candidates.push({ left: MARGIN, top: MARGIN, width: minLeft - MARGIN - INSET, height: 1000 - MARGIN * 2 });
           }
 
-          // Narrow zone guard: if < 250 normalized, use full canvas fallback
-          if (zoneNorm.width < 250) {
+          // Candidate 2: Right of ALL components (to the right of the rightmost component edge)
+          const maxRight = Math.max(...fixedPositions.map(c => c.left + c.width));
+          if (1000 - MARGIN - maxRight - INSET > 200) {
+            candidates.push({ left: maxRight + INSET, top: MARGIN, width: 1000 - MARGIN - maxRight - INSET, height: 1000 - MARGIN * 2 });
+          }
+
+          // Candidate 3: Above ALL components (above the topmost component)
+          const minTop = Math.min(...fixedPositions.map(c => c.top));
+          if (minTop - MARGIN - INSET > 150) {
+            candidates.push({ left: MARGIN, top: MARGIN, width: 1000 - MARGIN * 2, height: minTop - MARGIN - INSET });
+          }
+
+          // Candidate 4: Below ALL components (below the bottommost component)
+          const maxBottom = Math.max(...fixedPositions.map(c => c.top + c.height));
+          if (1000 - MARGIN - maxBottom - INSET > 150) {
+            candidates.push({ left: MARGIN, top: maxBottom + INSET, width: 1000 - MARGIN * 2, height: 1000 - MARGIN - maxBottom - INSET });
+          }
+
+          // Candidate 5-6: Left/Right with VERTICAL CLIPPING
+          // For left-side zone: clip Y range to avoid components that overlap X-wise
+          const leftZoneRight = minLeft - INSET;
+          if (leftZoneRight - MARGIN > 150) {
+            // Find components that overlap this X range
+            const overlapping = fixedPositions.filter(c => c.left < leftZoneRight);
+            if (overlapping.length > 0) {
+              // Try above the lowest-top overlapping component
+              const lowestOverlapTop = Math.min(...overlapping.map(c => c.top));
+              if (lowestOverlapTop - MARGIN - INSET > 200) {
+                candidates.push({ left: MARGIN, top: MARGIN, width: leftZoneRight - MARGIN, height: lowestOverlapTop - MARGIN - INSET });
+              }
+              // Try below the highest-bottom overlapping component
+              const highestOverlapBottom = Math.max(...overlapping.map(c => c.top + c.height));
+              if (1000 - MARGIN - highestOverlapBottom - INSET > 200) {
+                candidates.push({ left: MARGIN, top: highestOverlapBottom + INSET, width: leftZoneRight - MARGIN, height: 1000 - MARGIN - highestOverlapBottom - INSET });
+              }
+            } else {
+              // No overlap — full height
+              candidates.push({ left: MARGIN, top: MARGIN, width: leftZoneRight - MARGIN, height: 1000 - MARGIN * 2 });
+            }
+          }
+
+          const rightZoneLeft = maxRight + INSET;
+          if (1000 - MARGIN - rightZoneLeft > 150) {
+            const overlapping = fixedPositions.filter(c => c.left + c.width > rightZoneLeft);
+            if (overlapping.length > 0) {
+              const lowestOverlapTop = Math.min(...overlapping.map(c => c.top));
+              if (lowestOverlapTop - MARGIN - INSET > 200) {
+                candidates.push({ left: rightZoneLeft, top: MARGIN, width: 1000 - MARGIN - rightZoneLeft, height: lowestOverlapTop - MARGIN - INSET });
+              }
+              const highestOverlapBottom = Math.max(...overlapping.map(c => c.top + c.height));
+              if (1000 - MARGIN - highestOverlapBottom - INSET > 200) {
+                candidates.push({ left: rightZoneLeft, top: highestOverlapBottom + INSET, width: 1000 - MARGIN - rightZoneLeft, height: 1000 - MARGIN - highestOverlapBottom - INSET });
+              }
+            } else {
+              candidates.push({ left: rightZoneLeft, top: MARGIN, width: 1000 - MARGIN - rightZoneLeft, height: 1000 - MARGIN * 2 });
+            }
+          }
+
+          // Score candidates: prefer larger area, penalize zones that are too narrow or too short
+          const scored = candidates
+            .filter(c => c.width >= 200 && c.height >= 200)
+            .map(c => ({
+              ...c,
+              area: c.width * c.height,
+            }))
+            .sort((a, b) => b.area - a.area);
+
+          console.log(`[TextZone] ${scored.length} candidate zones from ${fixedPositions.length} components:`);
+          scored.forEach((c, i) => console.log(`  [${i}] left=${c.left} top=${c.top} w=${c.width} h=${c.height} area=${c.area}`));
+
+          const best = scored[0];
+          if (!best) {
+            // Fallback: full canvas with margins
+            console.log(`[TextZone] No valid candidate — falling back to full canvas`);
             const margin = Math.round(canvasW * 0.05);
             return { x: margin, y: margin, w: canvasW - margin * 2, h: canvasH - margin * 2 };
           }
 
+          console.log(`[TextZone] Selected: left=${best.left} top=${best.top} w=${best.width} h=${best.height}`);
+
           return {
-            x: Math.round((zoneNorm.left / 1000) * canvasW),
-            y: Math.round((zoneNorm.top / 1000) * canvasH),
-            w: Math.round((zoneNorm.width / 1000) * canvasW),
-            h: Math.round((zoneNorm.height / 1000) * canvasH),
+            x: Math.round((best.left / 1000) * canvasW),
+            y: Math.round((best.top / 1000) * canvasH),
+            w: Math.round((best.width / 1000) * canvasW),
+            h: Math.round((best.height / 1000) * canvasH),
           };
         };
 
