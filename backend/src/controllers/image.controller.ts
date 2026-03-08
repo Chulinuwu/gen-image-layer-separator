@@ -1240,18 +1240,52 @@ export const createCampaign = async (req: Request, res: Response) => {
       // textNoGoZones removed — Pass 2 no longer uses forbidden zones.
       // Character depth (interaction_zone z-index) handles visual separation instead.
 
-      // Step 0 (DesignAsCode Plan phase): let AI brainstorm layout concept before committing to coordinates
+      // Step 0 (DesignAsCode Plan phase): AI plans UNIFIED layout — components + text zone together
+      const currentComponentPositions = visualComponents.map((c) => ({
+        label: c.label,
+        top: c.position.top || 0,
+        left: c.position.left || 0,
+        width: c.position.width || 200,
+        height: c.position.height || 200,
+      }));
+
       try {
         layoutHint = await vertexService.planLayoutStrategy(
           imageBuffer,
           mimeType,
           targetText,
           visualComponents.map((c) => c.label),
+          currentComponentPositions,
         );
         console.log(
           `[Pipeline] Plan Phase Strategy:`,
           JSON.stringify(layoutHint, null, 2),
         );
+
+        // Apply the plan's component positions back to visualComponents
+        if (layoutHint.component_layout?.length) {
+          for (const planned of layoutHint.component_layout) {
+            const comp = visualComponents.find((c) => c.label === planned.label);
+            if (comp) {
+              console.log(`[Plan] Moving ${planned.label}: (${comp.position.left},${comp.position.top}) → (${planned.left},${planned.top})`);
+              comp.position = {
+                ...comp.position,
+                top: planned.top,
+                left: planned.left,
+                width: planned.width,
+                height: planned.height,
+              };
+            }
+          }
+          // Update componentSuggestions too
+          componentSuggestions = visualComponents.map((c) => ({
+            ...componentSuggestions.find((cs: any) => cs.label === c.label) || {},
+            label: c.label,
+            position: c.position,
+          }));
+          analysis.components = componentSuggestions;
+        }
+
         sendSSE("progress", {
           step: "layout_strategy",
           message: `🎨 Layout strategy: "${layoutHint.layout_concept}"`,
@@ -1284,7 +1318,18 @@ export const createCampaign = async (req: Request, res: Response) => {
 
         // Compute text-safe zone from component positions (normalized 0-1000 → canvas px)
         const computeTextZone = (): { x: number; y: number; w: number; h: number } => {
-          // If art director specified a zone, use it (convert from normalized to px)
+          // Priority 1: Use the unified plan's text_zone (planned together with components)
+          if (layoutHint?.text_zone && layoutHint.text_zone.width >= 200 && layoutHint.text_zone.height >= 200) {
+            console.log(`[TextZone] Using plan's unified text_zone: ${JSON.stringify(layoutHint.text_zone)}`);
+            return {
+              x: Math.round((layoutHint.text_zone.left / 1000) * canvasW),
+              y: Math.round((layoutHint.text_zone.top / 1000) * canvasH),
+              w: Math.round((layoutHint.text_zone.width / 1000) * canvasW),
+              h: Math.round((layoutHint.text_zone.height / 1000) * canvasH),
+            };
+          }
+
+          // Priority 2: If art director specified a zone, use it
           if (artDirectorTextZone) {
             return {
               x: Math.round((artDirectorTextZone.left / 1000) * canvasW),

@@ -298,12 +298,15 @@ export class AIService {
     mimeType: string,
     targetText: string,
     componentLabels: string[],
+    componentPositions?: Array<{ label: string; top: number; left: number; width: number; height: number }>,
   ): Promise<{
     layout_concept: string;
     dominant_element: string;
     text_hierarchy: string[];
     composition_notes: string;
     recommended_text_zone: "left" | "right" | "bottom" | "full";
+    text_zone?: { top: number; left: number; width: number; height: number };
+    component_layout?: Array<{ label: string; top: number; left: number; width: number; height: number }>;
   }> {
     let processingBuffer = imageBuffer;
     let processingMime = mimeType;
@@ -325,10 +328,17 @@ export class AIService {
         ? componentLabels.join(", ")
         : "none detected yet";
 
+    const componentPositionsBlock = componentPositions?.length
+      ? `\nCURRENT COMPONENT POSITIONS (normalized 0-1000 coordinates):\n${componentPositions.map(c => `- ${c.label}: top=${c.top}, left=${c.left}, width=${c.width}, height=${c.height} (covers x:${c.left}-${c.left + c.width}, y:${c.top}-${c.top + c.height})`).join('\n')}`
+      : '';
+
     const prompt = `You are a senior Thai advertising Art Director at a top Bangkok agency (SCB, Grab, PTT style).
 
-Look at this campaign image and text brief. Output a LAYOUT STRATEGY in JSON only.
-Do NOT write pixel coordinates. Think like a designer doing a quick thumbnail sketch.
+Look at this campaign image and text brief. Output a UNIFIED LAYOUT STRATEGY in JSON only.
+
+CRITICAL: You must plan WHERE COMPONENTS GO and WHERE TEXT GOES **together** as ONE layout.
+Components and text MUST NOT overlap. Think of the canvas as a grid — assign clear regions.
+${componentPositionsBlock}
 
 TEXT BRIEF:
 """
@@ -339,17 +349,30 @@ VISUAL COMPONENTS AVAILABLE: ${componentsAvailable}
 
 Respond with ONLY this JSON (no markdown fences, no explanation):
 {
-  "layout_concept": "one short phrase for the composition approach, e.g. 'hero-right text-left stacked'",
-  "dominant_element": "the SINGLE most visually important piece of text or number that must dominate, e.g. '2 ต่อ'",
+  "layout_concept": "one short phrase, e.g. 'hero-right text-left stacked'",
+  "dominant_element": "the SINGLE most visually important text/number, e.g. '2 ต่อ'",
   "text_hierarchy": ["ordered text parts from most to least visually important"],
-  "composition_notes": "1-2 sentence design decision, e.g. 'promotional number bleeds into character lower body; headline above it; CTA small below'",
-  "recommended_text_zone": "left | right | bottom | full"
+  "composition_notes": "1-2 sentence design decision",
+  "recommended_text_zone": "left | right | bottom | full",
+  "text_zone": {
+    "top": <number 0-1000>, "left": <number 0-1000>, "width": <number 0-1000>, "height": <number 0-1000>
+  },
+  "component_layout": [
+    { "label": "<component name>", "top": <0-1000>, "left": <0-1000>, "width": <0-1000>, "height": <0-1000> }
+  ]
 }
 
-SCB ad style rules I follow:
+RULES FOR text_zone + component_layout:
+1. text_zone and component_layout rectangles MUST NOT OVERLAP — leave at least 30 units gap
+2. All elements must be within 50-950 range (safe zone margins)
+3. Components should be on one side, text on the opposite side or in a clear gap
+4. text_zone must be large enough for readable text: at least 250 wide AND 300 tall
+5. If components are spread across both sides, stack text above or below them
+
+SCB ad style rules:
 - Promotional numbers (e.g. 2, 50%, 1.5×) → ALWAYS the dominant element, huge font
 - Character/person → right or center; text → opposite side
-- Text lock-up: related items (number + unit) = one visual block, not scattered
+- Text lock-up: related items (number + unit) = one visual block
 - Fine print → tiny, bottom edge`;
 
     try {
