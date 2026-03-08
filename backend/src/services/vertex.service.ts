@@ -2214,57 +2214,14 @@ CRITICAL Y-POSITION RULE (MUST FOLLOW):
       );
     }
 
-    // ===== DEBUG: trace zone computation and enforcement =====
-    console.log(
-      `[SVG-DEBUG] canvasWidth=${canvasWidth}, canvasHeight=${canvasHeight}`,
-    );
-    console.log(
-      `[SVG-DEBUG] fixedComponentPositions:`,
-      JSON.stringify(fixedComponentPositions),
-    );
-    console.log(
-      `[SVG-DEBUG] computedTextZone (normalized 0-1000):`,
-      JSON.stringify(computedTextZone),
-    );
-    console.log(
-      `[SVG-DEBUG] effectiveTextZone (normalized 0-1000):`,
-      JSON.stringify(effectiveTextZone),
-    );
-    console.log(
-      `[SVG-DEBUG] textZonePx (canvas px):`,
-      JSON.stringify(textZonePx),
-    );
-    console.log(
-      `[SVG-DEBUG] safeX=${safeX}, safeY=${safeY}, maxX=${maxX}, maxY=${maxY}, maxTextWidth=${maxTextWidth}`,
-    );
-    console.log(
-      `[SVG-DEBUG] SVG BEFORE enforcement (first 500 chars):`,
-      parsed.svg_overlay?.substring(0, 500),
-    );
-
     // Post-process: clamp any out-of-zone translate(X,Y) values back into the text zone.
-    // LLM uses absolute canvas coords, so this is a pure enforcement step — no coordinate conversion.
     if (textZonePx) {
       parsed.svg_overlay = this._enforceZoneBounds(
         parsed.svg_overlay,
         textZonePx,
       );
-      console.log(
-        `[SVG-DEBUG] SVG AFTER _enforceZoneBounds (first 500 chars):`,
-        parsed.svg_overlay?.substring(0, 500),
-      );
       parsed.svg_overlay = this._injectZoneClip(parsed.svg_overlay, textZonePx);
-      console.log(
-        `[SVG-DEBUG] SVG AFTER _injectZoneClip (first 500 chars):`,
-        parsed.svg_overlay?.substring(0, 500),
-      );
-    } else {
-      console.log(
-        `[SVG-DEBUG] textZonePx is NULL — skipping enforcement and clipPath!`,
-      );
     }
-    console.log(`[SVG-DEBUG] FINAL SVG:`, parsed.svg_overlay);
-    // ===== END DEBUG =====
 
     console.log(
       `[SVG] Overlay generated (${parsed.svg_overlay.length} chars). Vibe: "${parsed.campaign_vibe}". Components: ${parsed.components?.length || 0}`,
