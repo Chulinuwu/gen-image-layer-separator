@@ -538,6 +538,7 @@ const connectSSE = async (formData: FormData) => {
     liveTextLayers.value = [];
     liveComponents.value = [];
     liveSvgOverlay.value = ""; // clear previous SVG overlay
+    currentFlexTree.value = null; // clear previous layout boxes
     pipelineSteps.value = [];
     statusText.value = "Initializing design suite...";
 
