@@ -1586,17 +1586,26 @@ export const createCampaign = async (req: Request, res: Response) => {
         const flexBoxes = computeFlexLayout(flexResult.flexTree, canvasW, canvasH);
         console.log(`[Pass2] Flex layout computed: ${flexBoxes.length} boxes`);
 
-        // Build component images map (label → imageUrl)
+        // Build component images map (label → full URL for browser SVG rendering)
+        const origin = `${req.protocol}://${req.get('host')}`;
         const componentImages = new Map<string, string>();
         for (const vc of visualComponents) {
-          if (vc.imageUrl) componentImages.set(vc.label, vc.imageUrl);
+          if (vc.imageUrl) componentImages.set(vc.label, `${origin}${vc.imageUrl}`);
         }
+
+        // Background image URL for SVG
+        const svgBgUrl = generatedBackgroundImageUrl
+          ? `${origin}${generatedBackgroundImageUrl}`
+          : refImageUrl
+            ? `${origin}${refImageUrl}`
+            : undefined;
 
         // Build single SVG from flex boxes
         const svgResult = buildFlexSVG({
           boxes: flexBoxes,
           canvasW,
           canvasH,
+          bgImageUrl: svgBgUrl,
           componentImages,
         });
 
@@ -2099,13 +2108,20 @@ export const createCampaign = async (req: Request, res: Response) => {
 
           const refinedComponentImages = new Map<string, string>();
           for (const vc of visualComponents) {
-            refinedComponentImages.set(vc.label, vc.imageUrl);
+            if (vc.imageUrl) refinedComponentImages.set(vc.label, `${origin}${vc.imageUrl}`);
           }
+
+          const refinedSvgBgUrl = generatedBackgroundImageUrl
+            ? `${origin}${generatedBackgroundImageUrl}`
+            : refImageUrl
+              ? `${origin}${refImageUrl}`
+              : undefined;
 
           const refinedSvg = buildFlexSVG({
             boxes: refinedFlexBoxes,
             canvasW,
             canvasH,
+            bgImageUrl: refinedSvgBgUrl,
             componentImages: refinedComponentImages,
           });
 
