@@ -1,4 +1,5 @@
 import { measureText, wrapText, autoFitFontSize } from './textMeasure';
+import { LayoutBox } from './flexLayout';
 
 // ── Interfaces ──────────────────────────────────────────────────────────
 
@@ -294,4 +295,174 @@ function computeVerticalStack(
 
   const totalUsed = cursorY - (zone.y + padding);
   return { placements, totalUsed };
+}
+
+// ── Flex SVG Builder ─────────────────────────────────────────────────────
+
+export interface FlexSVGInput {
+  boxes: LayoutBox[];
+  canvasW: number;
+  canvasH: number;
+  bgImageUrl?: string;
+  componentImages?: Map<string, string>; // label → image URL
+}
+
+export interface FlexSVGResult {
+  svg: string;
+  boxes: LayoutBox[];
+}
+
+const FLEX_FONT_SIZES: Record<string, number> = {
+  xlarge: 72,
+  large: 56,
+  medium: 36,
+  small: 24,
+  xsmall: 16,
+};
+
+interface FlexTextRender {
+  defs: string[];    // clipPath elements for <defs>
+  elements: string[]; // text elements for the body
+}
+
+/**
+ * Render a single text box into SVG elements.
+ * Auto-shrinks font until wrapped text fits within box height.
+ */
+function renderTextBox(box: LayoutBox, clipId: string): FlexTextRender {
+  const defs: string[] = [];
+  const elements: string[] = [];
+  const style = box.style ?? {};
+  const text = box.text ?? '';
+  if (!text) return { defs, elements };
+
+  const align = style.align ?? 'center';
+  const anchor = anchorForAlign(align);
+  const fontWeight = style.fontWeight ?? '700';
+  const color = style.color ?? '#FFFFFF';
+
+  const maxFont = FLEX_FONT_SIZES[style.fontSize ?? 'medium'] ?? 36;
+  const minFont = Math.max(12, Math.round(maxFont * 0.3));
+  const boxPadding = 4;
+  const maxTextWidth = box.w - boxPadding * 2;
+
+  // Auto-fit: shrink by 0.9 until wrapped text fits box height
+  let fontSize = maxFont;
+  let wrapped = wrapText(text, maxTextWidth, fontSize, fontWeight);
+
+  while (wrapped.totalHeight > box.h && fontSize > minFont) {
+    fontSize = Math.max(minFont, Math.round(fontSize * 0.9));
+    wrapped = wrapText(text, maxTextWidth, fontSize, fontWeight);
+  }
+
+  const lineHeight = fontSize * 1.35;
+  const totalTextHeight = wrapped.lines.length * lineHeight;
+
+  // Center text vertically within the box
+  const offsetY = Math.max(0, (box.h - totalTextHeight) / 2);
+
+  // Compute X based on alignment
+  let textX: number;
+  if (align === 'center') {
+    textX = box.x + box.w / 2;
+  } else if (align === 'right') {
+    textX = box.x + box.w - boxPadding;
+  } else {
+    textX = box.x + boxPadding;
+  }
+
+  // ClipPath for safety
+  defs.push(`    <clipPath id="${clipId}">`);
+  defs.push(`      <rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" />`);
+  defs.push(`    </clipPath>`);
+
+  // Stroke attributes
+  let strokeAttrs = '';
+  if (style.strokeColor) {
+    const sw = style.strokeWidth ?? 2;
+    strokeAttrs = ` stroke="${escapeXml(style.strokeColor)}" stroke-width="${sw}" paint-order="stroke"`;
+  }
+
+  const metrics = measureText(text, fontSize, fontWeight);
+  const baselineY = box.y + offsetY + metrics.ascent;
+
+  elements.push(
+    `  <text id="${escapeXml(box.id)}" data-role="text" clip-path="url(#${clipId})" ` +
+    `font-family="Kanit, sans-serif" font-size="${fontSize}" font-weight="${fontWeight}" ` +
+    `fill="${escapeXml(color)}"${strokeAttrs} text-anchor="${anchor}">`,
+  );
+
+  wrapped.lines.forEach((line, i) => {
+    const dy = i === 0 ? String(baselineY) : String(lineHeight);
+    const dyAttr = i === 0 ? `y="${dy}"` : `dy="${dy}"`;
+    elements.push(
+      `    <tspan x="${textX}" ${dyAttr}>${escapeXml(line)}</tspan>`,
+    );
+  });
+
+  elements.push('  </text>');
+  return { defs, elements };
+}
+
+/**
+ * Build a complete SVG from flex layout boxes.
+ */
+export function buildFlexSVG(input: FlexSVGInput): FlexSVGResult {
+  const { boxes, canvasW, canvasH, bgImageUrl, componentImages } = input;
+
+  const svgLines: string[] = [];
+  svgLines.push(
+    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" ` +
+    `viewBox="0 0 ${canvasW} ${canvasH}" width="${canvasW}" height="${canvasH}">`,
+  );
+
+  // Background image
+  if (bgImageUrl) {
+    svgLines.push(
+      `  <image href="${escapeXml(bgImageUrl)}" x="0" y="0" width="${canvasW}" height="${canvasH}" preserveAspectRatio="xMidYMid slice" />`,
+    );
+  }
+
+  svgLines.push('  <defs>');
+
+  // Pre-render all text boxes to collect clipPath defs and text elements
+  const allTextElements: string[] = [];
+  let clipIdx = 0;
+
+  for (const box of boxes) {
+    if (box.type === 'text') {
+      const clipId = `flex-clip-${clipIdx++}`;
+      const { defs, elements } = renderTextBox(box, clipId);
+      for (const d of defs) {
+        svgLines.push(`  ${d.trimStart()}`);
+      }
+      allTextElements.push(...elements);
+    }
+  }
+
+  svgLines.push('  </defs>');
+
+  // Render component images
+  for (const box of boxes) {
+    if (box.type === 'component') {
+      const imgUrl = componentImages?.get(box.label ?? '') ?? '';
+      if (imgUrl) {
+        svgLines.push(
+          `  <image id="${escapeXml(box.id)}" data-role="component" ` +
+          `href="${escapeXml(imgUrl)}" ` +
+          `x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" ` +
+          `preserveAspectRatio="xMidYMid meet" />`,
+        );
+      }
+    }
+  }
+
+  // Render text elements
+  for (const el of allTextElements) {
+    svgLines.push(`  ${el.trimStart()}`);
+  }
+
+  svgLines.push('</svg>');
+
+  return { svg: svgLines.join('\n'), boxes };
 }
