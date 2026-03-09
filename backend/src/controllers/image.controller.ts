@@ -1319,8 +1319,10 @@ export const createCampaign = async (req: Request, res: Response) => {
 
         if (overlapResults.length > 0) {
           console.warn(`[Plan] ⚠️ ${overlapResults.length} overlaps detected after plan`);
+          logEvent("Post-Plan Overlap Check", `⚠️ ${overlapResults.length} overlaps detected:\n${overlapResults.join('\n')}`);
         } else {
           console.log(`[Plan] ✅ No overlaps — all elements have clear space`);
+          logEvent("Post-Plan Overlap Check", "✅ No overlaps detected — all elements have clear space");
         }
 
         sendSSE("progress", {
