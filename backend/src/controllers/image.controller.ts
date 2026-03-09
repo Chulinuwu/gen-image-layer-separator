@@ -1589,7 +1589,7 @@ export const createCampaign = async (req: Request, res: Response) => {
         // Build component images map (label → imageUrl)
         const componentImages = new Map<string, string>();
         for (const vc of visualComponents) {
-          componentImages.set(vc.label, vc.imageUrl);
+          if (vc.imageUrl) componentImages.set(vc.label, vc.imageUrl);
         }
 
         // Build single SVG from flex boxes
