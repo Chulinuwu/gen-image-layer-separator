@@ -448,7 +448,7 @@ export function buildFlexSVG(input: FlexSVGInput): FlexSVGResult {
       const imgUrl = componentImages?.get(box.label ?? '') ?? '';
       if (imgUrl) {
         svgLines.push(
-          `  <image id="${escapeXml(box.id)}" data-role="component" ` +
+          `  <image id="${escapeXml(box.id)}" data-role="component" data-label="${escapeXml(box.label ?? '')}" ` +
           `href="${escapeXml(imgUrl)}" ` +
           `x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" ` +
           `preserveAspectRatio="xMidYMid meet" />`,
