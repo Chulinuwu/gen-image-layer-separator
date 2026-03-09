@@ -165,7 +165,6 @@ export class AIService {
       console.log(`[GenAI] Generating image with model: ${targetModel}`);
 
       const config: any = {
-        maxOutputTokens: 32768,
         temperature: 1,
         topP: 0.95,
         responseModalities: ["TEXT", "IMAGE"],
@@ -332,13 +331,34 @@ export class AIService {
       ? `\nCURRENT COMPONENT POSITIONS (normalized 0-1000 coordinates):\n${componentPositions.map(c => `- ${c.label}: top=${c.top}, left=${c.left}, width=${c.width}, height=${c.height} (covers x:${c.left}-${c.left + c.width}, y:${c.top}-${c.top + c.height})`).join('\n')}`
       : '';
 
+    // Compute overlap warnings to include in prompt
+    let overlapWarnings = '';
+    if (componentPositions && componentPositions.length > 1) {
+      const warnings: string[] = [];
+      for (let i = 0; i < componentPositions.length; i++) {
+        for (let j = i + 1; j < componentPositions.length; j++) {
+          const a = componentPositions[i];
+          const b = componentPositions[j];
+          const overlapX = Math.max(0, Math.min(a.left + a.width, b.left + b.width) - Math.max(a.left, b.left));
+          const overlapY = Math.max(0, Math.min(a.top + a.height, b.top + b.height) - Math.max(a.top, b.top));
+          if (overlapX > 0 && overlapY > 0) {
+            const overlapArea = overlapX * overlapY;
+            warnings.push(`⚠️ "${a.label}" and "${b.label}" OVERLAP by ${overlapArea} sq units (${overlapX}w × ${overlapY}h). You MUST move them apart.`);
+          }
+        }
+      }
+      if (warnings.length > 0) {
+        overlapWarnings = `\n\n🚨 OVERLAP DETECTED IN CURRENT POSITIONS:\n${warnings.join('\n')}\nYou MUST fix these overlaps in your component_layout output.\n`;
+      }
+    }
+
     const prompt = `You are a senior Thai advertising Art Director at a top Bangkok agency (SCB, Grab, PTT style).
 
 Look at this campaign image and text brief. Output a UNIFIED LAYOUT STRATEGY in JSON only.
 
 CRITICAL: You must plan WHERE COMPONENTS GO and WHERE TEXT GOES **together** as ONE layout.
 Components and text MUST NOT overlap. Think of the canvas as a grid — assign clear regions.
-${componentPositionsBlock}
+${componentPositionsBlock}${overlapWarnings}
 
 TEXT BRIEF:
 """
@@ -347,27 +367,31 @@ ${targetText}
 
 VISUAL COMPONENTS AVAILABLE: ${componentsAvailable}
 
-Respond with ONLY this JSON (no markdown fences, no explanation):
+Respond with ONLY this JSON (no markdown fences, no explanation).
+CRITICAL: text_zone and component_layout are the MOST IMPORTANT fields — output them FIRST.
+
 {
   "layout_concept": "one short phrase, e.g. 'hero-right text-left stacked'",
   "dominant_element": "the SINGLE most visually important text/number, e.g. '2 ต่อ'",
-  "text_hierarchy": ["ordered text parts from most to least visually important"],
-  "composition_notes": "1-2 sentence design decision",
-  "recommended_text_zone": "left | right | bottom | full",
   "text_zone": {
     "top": <number 0-1000>, "left": <number 0-1000>, "width": <number 0-1000>, "height": <number 0-1000>
   },
   "component_layout": [
     { "label": "<component name>", "top": <0-1000>, "left": <0-1000>, "width": <0-1000>, "height": <0-1000> }
-  ]
+  ],
+  "recommended_text_zone": "left | right | bottom | full",
+  "composition_notes": "1-2 sentence design decision",
+  "text_hierarchy": ["ordered text parts from most to least visually important"]
 }
 
 RULES FOR text_zone + component_layout:
 1. text_zone and component_layout rectangles MUST NOT OVERLAP — leave at least 30 units gap
-2. All elements must be within 50-950 range (safe zone margins)
-3. Components should be on one side, text on the opposite side or in a clear gap
-4. text_zone must be large enough for readable text: at least 250 wide AND 300 tall
-5. If components are spread across both sides, stack text above or below them
+2. component_layout items MUST NOT OVERLAP EACH OTHER — leave at least 30 units gap between any two components
+3. All elements must be within 50-950 range (safe zone margins)
+4. Components should be on one side, text on the opposite side or in a clear gap
+5. text_zone must be large enough for readable text: at least 250 wide AND 300 tall
+6. If components are spread across both sides, stack text above or below them
+7. EVERY element on canvas must be clearly readable — no element should obscure another
 
 SCB ad style rules:
 - Promotional numbers (e.g. 2, 50%, 1.5×) → ALWAYS the dominant element, huge font
@@ -395,27 +419,28 @@ SCB ad style rules:
               ],
             },
           ],
-          config: { maxOutputTokens: 2048, temperature: 0.7 },
+          config: { temperature: 0.7 },
         }),
       );
 
       const raw = (response.text || "").trim();
       traceAI("Plan Strategy", prompt, raw);
+      console.log(`[Plan] Raw response length: ${raw.length} chars. Contains text_zone: ${raw.includes('"text_zone"')}. Contains component_layout: ${raw.includes('"component_layout"')}`);
       const rawCleaned = raw.replace(/```json|```/g, "").trim();
 
       // Attempt parse with truncation repair (AI sometimes cuts off mid-JSON)
       let strategy: any = null;
       try {
-        strategy = JSON.parse(raw || "{}");
+        strategy = JSON.parse(rawCleaned || "{}");
       } catch {
         // Try to close truncated JSON by appending missing braces/brackets
         const repaired =
-          raw.replace(/,\s*$/, "") + // trailing comma
+          rawCleaned.replace(/,\s*$/, "") + // trailing comma
           "}".repeat(
-            (raw.match(/{/g) || []).length - (raw.match(/}/g) || []).length,
+            (rawCleaned.match(/{/g) || []).length - (rawCleaned.match(/}/g) || []).length,
           ) +
           "]".repeat(
-            (raw.match(/\[/g) || []).length - (raw.match(/]/g) || []).length,
+            (rawCleaned.match(/\[/g) || []).length - (rawCleaned.match(/]/g) || []).length,
           );
         try {
           strategy = JSON.parse(repaired);
@@ -426,9 +451,9 @@ SCB ad style rules:
           );
           // Extract fields from raw string as last resort
           strategy = {};
-          const conceptMatch = raw.match(/"layout_concept"\s*:\s*"([^"]+)"/);
-          const domMatch = raw.match(/"dominant_element"\s*:\s*"([^"]+)"/);
-          const notesMatch = raw.match(/"composition_notes"\s*:\s*"([^"]+)"/);
+          const conceptMatch = rawCleaned.match(/"layout_concept"\s*:\s*"([^"]+)"/);
+          const domMatch = rawCleaned.match(/"dominant_element"\s*:\s*"([^"]+)"/);
+          const notesMatch = rawCleaned.match(/"composition_notes"\s*:\s*"([^"]+)"/);
           if (conceptMatch) strategy.layout_concept = conceptMatch[1];
           if (domMatch) strategy.dominant_element = domMatch[1];
           if (notesMatch) strategy.composition_notes = notesMatch[1];
@@ -436,7 +461,7 @@ SCB ad style rules:
       }
 
       // Ensure all required fields have valid values
-      const result = {
+      const result: any = {
         layout_concept: strategy?.layout_concept || "default",
         dominant_element: strategy?.dominant_element || "",
         text_hierarchy: Array.isArray(strategy?.text_hierarchy)
@@ -445,6 +470,20 @@ SCB ad style rules:
         composition_notes: strategy?.composition_notes || "",
         recommended_text_zone: strategy?.recommended_text_zone || "left",
       };
+
+      // Extract the critical unified layout fields
+      if (strategy?.text_zone && typeof strategy.text_zone === "object") {
+        result.text_zone = strategy.text_zone;
+        console.log(`[Plan] ✅ text_zone extracted: ${JSON.stringify(result.text_zone)}`);
+      } else {
+        console.warn(`[Plan] ⚠️ text_zone NOT found in plan response — falling back to computed zone`);
+      }
+      if (Array.isArray(strategy?.component_layout) && strategy.component_layout.length > 0) {
+        result.component_layout = strategy.component_layout;
+        console.log(`[Plan] ✅ component_layout extracted: ${strategy.component_layout.length} components`);
+      } else {
+        console.warn(`[Plan] ⚠️ component_layout NOT found in plan response`);
+      }
 
       console.log(
         `[Plan] Strategy: "${result.layout_concept}" | dominant: "${result.dominant_element}"`,
@@ -880,7 +919,6 @@ ${
     `;
 
     const config: any = {
-      maxOutputTokens: 65535,
       temperature: 1,
       topP: 0.95,
       safetySettings: [
@@ -1822,7 +1860,6 @@ Example html_overlay for "2 ต่อ รับฟรี บัตรขึ้�
 "<div style='position:absolute;inset:0;pointer-events:none;overflow:hidden'><div style='position:absolute;top:52%;left:4%;z-index:5;display:flex;flex-direction:column;gap:0.5cqw;max-width:45%'><span style='font-family:Kanit,sans-serif;font-size:16cqw;font-weight:900;color:#FFD700;line-height:1.0;letter-spacing:-0.03em;text-shadow:2px 2px 0 #000,-2px -2px 0 #000,2px -2px 0 #000,-2px 2px 0 #000,0 4px 12px rgba(0,0,0,0.8);-webkit-text-stroke:2px rgba(0,0,0,0.4)'>2 ต่อ</span><span style='font-family:Kanit,sans-serif;font-size:3.5cqw;font-weight:700;color:#fff;line-height:1.25;text-shadow:1px 1px 0 #000,-1px -1px 0 #000,0 3px 8px rgba(0,0,0,0.7)'>รับฟรี บัตรขึ้นชิงช้าสวรรค์</span></div><div style='position:absolute;bottom:1.5%;left:2%;z-index:5'><span style='font-family:Kanit,sans-serif;font-size:1.1cqw;font-weight:400;color:rgba(255,255,255,0.8)'>เงื่อนไขเป็นไปตามที่ธนาคารกำหนด</span></div></div>"`;
 
     const htmlConfig: any = {
-      maxOutputTokens: 8192,
       temperature: 0.9,
       topP: 0.95,
       safetySettings: [
@@ -3029,7 +3066,7 @@ YOUR_IMPROVED_HTML_STRING_WITH_SINGLE_QUOTE_ATTRIBUTES
       this.client.models.generateContent({
         model,
         contents: [{ role: "user", parts }],
-        config: { maxOutputTokens: 8192, temperature: 0.8 },
+        config: { temperature: 0.8 },
       }),
     );
 
@@ -4396,7 +4433,6 @@ YOUR_IMPROVED_HTML_STRING_WITH_SINGLE_QUOTE_ATTRIBUTES
     ];
 
     const config: any = {
-      maxOutputTokens: 32768,
       temperature: 1,
       topP: 0.95,
       responseModalities: ["TEXT", "IMAGE"],
