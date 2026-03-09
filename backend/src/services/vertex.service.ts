@@ -5148,7 +5148,7 @@ OUTPUT FORMAT — respond with ONLY this JSON (no markdown, no explanation):
 
     // Embed the description
     const embedResp = await this.client.models.embedContent({
-      model: "text-embedding-004",
+      model: "gemini-embedding-001",
       contents: description,
       config: { taskType: "RETRIEVAL_QUERY" as any, outputDimensionality: 1536 },
     });

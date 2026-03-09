@@ -24,7 +24,7 @@ const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp"]);
 
 const VISION_MODEL =
   process.env.GEMINI_TEXT_ENDPOINT || "gemini-2.5-flash";
-const EMBEDDING_MODEL = "text-embedding-004";
+const EMBEDDING_MODEL = "gemini-embedding-001";
 
 const DESCRIBE_PROMPT =
   "Describe this advertisement image for similarity matching. " +
