@@ -128,7 +128,12 @@ export function buildSVG(intent: LayoutIntent): BuildSVGResult {
     '      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000000" flood-opacity="0.5" />',
   );
   svgLines.push('    </filter>');
+  // Hard clip: nothing renders outside the text zone
+  svgLines.push(`    <clipPath id="zoneClip">`);
+  svgLines.push(`      <rect x="${zone.x}" y="${zone.y}" width="${zone.w}" height="${zone.h}" />`);
+  svgLines.push(`    </clipPath>`);
   svgLines.push('  </defs>');
+  svgLines.push(`  <g clip-path="url(#zoneClip)">`);
 
   const resultBlocks: BuildSVGResult['blocks'] = [];
 
@@ -187,6 +192,7 @@ export function buildSVG(intent: LayoutIntent): BuildSVGResult {
     });
   }
 
+  svgLines.push('  </g>'); // close zoneClip group
   svgLines.push('</svg>');
 
   return { svg: svgLines.join('\n'), blocks: resultBlocks };
