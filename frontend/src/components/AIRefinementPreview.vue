@@ -92,6 +92,23 @@
               :style="getComponentStyle(c, showDebugBoxes)"
             />
           </template>
+
+          <!-- Debug: Flex layout boxes overlay -->
+          <template v-if="showDebugBoxes && debugBoxes.length">
+            <div
+              v-for="box in debugBoxes"
+              :key="'db-' + box.id"
+              class="debug-layout-box"
+              :style="{
+                left: (box.x / 1024 * 100) + '%',
+                top: (box.y / 1024 * 100) + '%',
+                width: (box.w / 1024 * 100) + '%',
+                height: (box.h / 1024 * 100) + '%',
+              }"
+            >
+              <span class="debug-box-label">{{ box.id }} ({{ box.type }})</span>
+            </div>
+          </template>
         </div>
       </div>
     </div>
@@ -272,6 +289,58 @@ const currentFlexTree = ref<any>(null);
 const hasSvgOverlay = computed(
   () => !!liveSvgOverlay.value && liveSvgOverlay.value.length > 50,
 );
+
+// Flatten flex tree into layout boxes for debug overlay
+interface DebugBox {
+  id: string;
+  type: string;
+  x: number; y: number; w: number; h: number;
+  text?: string;
+  label?: string;
+}
+function flattenFlexTree(node: any, x: number, y: number, w: number, h: number, out: DebugBox[]): void {
+  if (!node) return;
+  const pad = node.padding ?? 0;
+  const ix = x + pad, iy = y + pad, iw = w - pad * 2, ih = h - pad * 2;
+
+  if (node.type && !node.children?.length) {
+    out.push({ id: node.id, type: node.type, x: ix, y: iy, w: iw, h: ih, text: node.text, label: node.label });
+    return;
+  }
+  const children = node.children ?? [];
+  if (!children.length) return;
+  const dir = node.direction ?? 'column';
+  const gap = node.gap ?? 8;
+  const totalGap = gap * (children.length - 1);
+  const avail = (dir === 'row' ? iw : ih) - totalGap;
+
+  const sizes = children.map((c: any) => {
+    const pct = dir === 'row' ? c.width : c.height;
+    return pct ? parseFloat(pct) / 100 : null;
+  });
+  const allocd = sizes.reduce((s: number, v: number | null) => s + (v ?? 0), 0);
+  const unalloc = sizes.filter((s: number | null) => s === null).length;
+  const each = unalloc > 0 ? Math.max(0, 1 - allocd) / unalloc : 0;
+
+  let cursor = dir === 'row' ? ix : iy;
+  for (let i = 0; i < children.length; i++) {
+    const frac = sizes[i] ?? each;
+    const main = avail * frac;
+    const cx = dir === 'row' ? cursor : ix;
+    const cy = dir === 'row' ? iy : cursor;
+    const cw = dir === 'row' ? main : iw;
+    const ch = dir === 'row' ? ih : main;
+    flattenFlexTree(children[i], cx, cy, cw, ch, out);
+    cursor += main + gap;
+  }
+}
+
+const debugBoxes = computed<DebugBox[]>(() => {
+  if (!currentFlexTree.value) return [];
+  const out: DebugBox[] = [];
+  flattenFlexTree(currentFlexTree.value, 0, 0, 1024, 1024, out);
+  return out;
+});
 const sanitizedSvgOverlay = computed(() => {
   if (!liveSvgOverlay.value) return "";
   return DOMPurify.sanitize(liveSvgOverlay.value, {
@@ -800,6 +869,29 @@ defineExpose({ connectSSE });
 }
 .debug-toggle-btn.active {
   background: #3b82f6;
+}
+
+/* Debug layout box overlay */
+.debug-layout-box {
+  position: absolute;
+  border: 2px dashed rgba(59, 130, 246, 0.7);
+  background: rgba(59, 130, 246, 0.08);
+  pointer-events: none;
+  z-index: 30;
+  box-sizing: border-box;
+}
+.debug-box-label {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  background: rgba(59, 130, 246, 0.85);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+  line-height: 1.3;
 }
 
 /* Pipeline Filmstrip */
