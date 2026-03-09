@@ -1581,10 +1581,14 @@ export const createCampaign = async (req: Request, res: Response) => {
         );
 
         console.log(`[Pass2] Flex layout: vibe="${flexResult.campaign_vibe}", tree received`);
+        console.log(`[Pass2] Flex tree JSON:\n${JSON.stringify(flexResult.flexTree, null, 2)}`);
 
         // Compute bounding boxes from flex tree
         const flexBoxes = computeFlexLayout(flexResult.flexTree, canvasW, canvasH);
         console.log(`[Pass2] Flex layout computed: ${flexBoxes.length} boxes`);
+        for (const b of flexBoxes) {
+          console.log(`  [Box] ${b.id} (${b.type}): x=${Math.round(b.x)} y=${Math.round(b.y)} w=${Math.round(b.w)} h=${Math.round(b.h)}${b.text ? ` text="${b.text.substring(0, 30)}"` : ''}${b.label ? ` label="${b.label}"` : ''}`);
+        }
 
         // Build component images map (label → full URL for browser SVG rendering)
         const origin = `${req.protocol}://${req.get('host')}`;
@@ -1616,6 +1620,12 @@ export const createCampaign = async (req: Request, res: Response) => {
         analysis.campaign_vibe = flexResult.campaign_vibe || analysis.campaign_vibe;
 
         console.log(`[Pass2] Flex SVG built: ${svgResult.boxes.length} boxes, ${svgOverlay.length} chars`);
+        sendSSE("debug", {
+          step: "flex_layout",
+          message: "Flex tree computed",
+          flexTree: flexResult.flexTree,
+          boxes: flexBoxes.map(b => ({ id: b.id, type: b.type, x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.w), h: Math.round(b.h) })),
+        });
         logEvent("Flex SVG Built", `Flex tree → SVG pipeline complete`, {
           boxCount: svgResult.boxes.length,
           boxes: svgResult.boxes.map(b => ({
