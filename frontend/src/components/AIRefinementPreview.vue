@@ -197,25 +197,6 @@
       </div>
 
       <div class="sidebar-footer">
-        <!-- SVG Export Panel — shown when SVG overlay is ready -->
-        <div v-if="liveSvgOverlay && isComplete" class="export-svg-panel">
-          <div class="export-mode-row">
-            <label>Export mode:</label>
-            <select v-model="exportMode">
-              <option value="embed-fonts">Embed Fonts (editable text)</option>
-              <option value="paths">
-                Convert to Paths (max fidelity, requires TTF)
-              </option>
-            </select>
-          </div>
-          <button
-            class="btn btn-export"
-            :disabled="isExporting"
-            @click="exportSVGFile()"
-          >
-            {{ isExporting ? "Exporting…" : "Export SVG" }}
-          </button>
-        </div>
         <button v-if="isComplete" @click="$emit('close')" class="btn-finalize">
           FINALIZE DESIGN
         </button>
@@ -279,14 +260,18 @@ const onPreviewImageLoad = (e: Event) => {
     const ratio = `${img.naturalWidth} / ${img.naturalHeight}`;
     previewCanvasContent.value.style.aspectRatio = ratio;
     const rect = previewCanvasContent.value.getBoundingClientRect();
-    console.log(`[Preview] Image natural: ${img.naturalWidth}x${img.naturalHeight}, container: ${Math.round(rect.width)}x${Math.round(rect.height)}, aspect-ratio: ${ratio}`);
+    console.log(
+      `[Preview] Image natural: ${img.naturalWidth}x${img.naturalHeight}, container: ${Math.round(rect.width)}x${Math.round(rect.height)}, aspect-ratio: ${ratio}`,
+    );
   }
 };
 
 // SVG overlay mode — AI returns SVG string instead of HTML/CSS
 const liveSvgOverlay = ref<string>("");
 const currentFlexTree = ref<any>(null);
-const hasSvgOverlay = computed(() => !!liveSvgOverlay.value && liveSvgOverlay.value.length > 50);
+const hasSvgOverlay = computed(
+  () => !!liveSvgOverlay.value && liveSvgOverlay.value.length > 50,
+);
 const sanitizedSvgOverlay = computed(() => {
   if (!liveSvgOverlay.value) return "";
   return DOMPurify.sanitize(liveSvgOverlay.value, {
@@ -335,40 +320,6 @@ const sanitizedSvgOverlay = computed(() => {
     ],
   });
 });
-
-// SVG export state
-const exportMode = ref<"embed-fonts" | "paths">("embed-fonts");
-const isExporting = ref(false);
-
-const exportSVGFile = async () => {
-  if (!liveSvgOverlay.value) return;
-  isExporting.value = true;
-  try {
-    const res = await fetch("http://localhost:5001/api/image/export-svg", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        svgString: liveSvgOverlay.value,
-        mode: exportMode.value,
-      }),
-    });
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(errText);
-    }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `ad-layout-${exportMode.value}.svg`;
-    a.click();
-    URL.revokeObjectURL(url);
-  } catch (err) {
-    console.error("[SVG Export]", err);
-  } finally {
-    isExporting.value = false;
-  }
-};
 
 // Thai Ad Typography tokens for Kanit — weight/spacing/line-height per hierarchy
 const KANIT_TOKENS: Record<
@@ -1292,45 +1243,5 @@ defineExpose({ connectSSE });
 ::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 2px;
-}
-
-.export-svg-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 12px;
-  padding: 12px;
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-}
-.export-mode-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-}
-.export-mode-row select {
-  flex: 1;
-  padding: 4px 8px;
-  border-radius: 4px;
-  background: #1a1a2e;
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  font-size: 13px;
-}
-.btn-export {
-  background: #6c63ff;
-  color: white;
-  border: none;
-  padding: 8px 16px;
-  border-radius: 6px;
-  cursor: pointer;
-  font-weight: 600;
-  font-size: 14px;
-}
-.btn-export:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 </style>

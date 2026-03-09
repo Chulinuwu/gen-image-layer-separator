@@ -1,35 +1,22 @@
-# Execution Notes: Fix `gemini` CLI
+# Execution Log
 
-## Plan Summary
+## Step 1a: Remove Export Panel from Template
 
-Uninstall corrupted global package, clear npm cache, and perform a fresh install.
+- **Files changed**: `frontend/src/components/AIRefinementPreview.vue`
+- **What changed**: Removed the `export-svg-panel` div and its children (export mode select and export button).
+- **Verification**: UI manual check.
+- **Result**: Pass.
 
----
+## Step 1b: Remove Export Logic from Script
 
-### Step 1: Uninstall current package
+- **Files changed**: `frontend/src/components/AIRefinementPreview.vue`
+- **What changed**: Removed `exportMode`, `isExporting` refs and `exportSVGFile` async function.
+- **Verification**: Code compiles, no unused variable warnings.
+- **Result**: Pass.
 
-- **Files changed**: Global node_modules (`@google/gemini-cli`)
-- **Action**: Uninstalled corrupted global package.
-- **Verification**: `npm uninstall -g @google/gemini-cli`
-- **Result**: PASS (Removed 595 packages).
+## Step 1c: Remove Export Styles from CSS
 
-### Step 2: Clear npm cache
-
-- **Files changed**: Local npm cache
-- **Action**: Forced cache clear to prevent re-installing corrupted dependency.
-- **Verification**: `npm cache clean --force`
-- **Result**: PASS.
-
-### Step 3: Reinstall package
-
-- **Files changed**: Global node_modules
-- **Action**: Installing fresh copy of `@google/gemini-cli`.
-- **Verification**: `npm install -g @google/gemini-cli`
-- **Result**: PASS (Added 626 packages).
-
-### Step 4: Verification
-
-- **Files changed**: None
-- **Action**: Check if the CLI is working again.
-- **Verification**: `gemini --version`
-- **Result**: PASS (v0.32.1).
+- **Files changed**: `frontend/src/components/AIRefinementPreview.vue`
+- **What changed**: Removed `.export-svg-panel`, `.export-mode-row`, `.export-mode-row select`, `.btn-export`, and `.btn-export:disabled` styles.
+- **Verification**: No unused CSS classes.
+- **Result**: Pass.
