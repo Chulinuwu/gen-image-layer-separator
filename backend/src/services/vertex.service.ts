@@ -4945,15 +4945,46 @@ CREATIVE LAYOUT GUIDANCE:
 17. Use strokeColor for text over busy or colorful backgrounds to ensure readability.
 18. If reference images are provided, draw INSPIRATION from their composition and spacing style.
 
+EXAMPLE LAYOUTS (for inspiration — DO NOT copy blindly, adapt to your content):
+
+Example A — Text overlay on top half, components bottom-right:
+{
+  "id": "root", "direction": "column", "padding": 40, "gap": 20,
+  "children": [
+    { "id": "header", "direction": "column", "height": "35%", "gap": 8, "children": [
+      { "id": "h1", "type": "text", "text": "HEADLINE", "height": "60%", "style": {"fontSize":"xlarge","fontWeight":"900","color":"#FFFFFF","strokeColor":"#000","strokeWidth":3,"align":"left"} },
+      { "id": "h2", "type": "text", "text": "Subheadline", "height": "40%", "style": {"fontSize":"medium","fontWeight":"700","color":"#FFD700","align":"left"} }
+    ]},
+    { "id": "middle", "direction": "row", "height": "45%", "gap": 16, "children": [
+      { "id": "offer", "type": "text", "text": "GET FREE*", "width": "40%", "style": {"fontSize":"large","fontWeight":"900","color":"#FF0000","align":"center"} },
+      { "id": "person", "type": "component", "label": "Woman", "width": "60%" }
+    ]},
+    { "id": "footer", "type": "text", "text": "Terms apply", "height": "10%", "style": {"fontSize":"xsmall","fontWeight":"400","color":"#CCCCCC","align":"left"} }
+  ]
+}
+
+Example B — Components on left, stacked text on right:
+{
+  "id": "root", "direction": "row", "padding": 50, "gap": 30,
+  "children": [
+    { "id": "visual", "direction": "column", "width": "40%", "gap": 16, "children": [
+      { "id": "mascot", "type": "component", "label": "Mascot", "height": "50%" },
+      { "id": "promo", "type": "text", "text": "2x", "height": "50%", "style": {"fontSize":"xlarge","fontWeight":"900","color":"#FFD700","strokeColor":"#000","strokeWidth":4,"align":"center"} }
+    ]},
+    { "id": "info", "direction": "column", "width": "50%", "gap": 10, "children": [
+      { "id": "title", "type": "text", "text": "Join now", "height": "25%", "style": {"fontSize":"large","fontWeight":"900","color":"#FFFFFF","align":"left"} },
+      { "id": "desc", "type": "text", "text": "Details here", "height": "20%", "style": {"fontSize":"medium","fontWeight":"700","color":"#FFFFFF","align":"left"} },
+      { "id": "cta", "type": "text", "text": "Free ticket!", "height": "25%", "style": {"fontSize":"large","fontWeight":"900","color":"#FF0000","align":"left"} },
+      { "id": "fine", "type": "text", "text": "T&C apply", "height": "10%", "style": {"fontSize":"xsmall","fontWeight":"400","color":"#999","align":"left"} }
+    ]}
+  ]
+}
+
+IMPORTANT: Notice how examples use varied proportions (40/50, 35/45/10), large padding (40-50), generous gaps (16-30), and DO NOT fill 100%. Adapt the layout to the background — if the BG has an interesting right side, put text on the left and vice versa.
+
 OUTPUT FORMAT — respond with ONLY this JSON (no markdown, no explanation):
 {
-  "flexTree": {
-    "id": "root",
-    "direction": "row",
-    "padding": 30,
-    "gap": 20,
-    "children": [ ... ]
-  },
+  "flexTree": { ... your creative layout ... },
   "campaign_vibe": "brief description of the visual mood/style",
   "background_description": "brief description of what's in the background image"
 }`;
