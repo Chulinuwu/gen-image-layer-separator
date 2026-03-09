@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from "vue";
+import { ref, computed, onMounted, nextTick } from "vue";
 import AIRefinementPreview from "./AIRefinementPreview.vue";
 
 const props = defineProps({
@@ -11,6 +11,25 @@ const targetText = ref("SUMMER SALE 50%");
 const loading = ref(false);
 const analysis = ref<any>(null);
 const error = ref("");
+
+// Extract text nodes from flex tree for display when textLayers is empty (SVG mode)
+const flexTextNodes = computed(() => {
+  const tree = analysis.value?.flexTree;
+  if (!tree) return [];
+  const nodes: any[] = [];
+  function walk(node: any) {
+    if (!node) return;
+    if (node.type === 'text' && node.text) {
+      const size = node.style?.fontSize || 'medium';
+      const sizeClass = size === 'xlarge' || size === 'large' ? 'headline' : size === 'xsmall' ? 'fineprint' : 'body';
+      nodes.push({ ...node, sizeClass });
+    }
+    if (node.children) node.children.forEach(walk);
+  }
+  walk(tree);
+  return nodes;
+});
+
 const selectedFile = ref<File | null>(null);
 const previewUrl = ref<string | null>(null);
 const progressMessage = ref("");
@@ -228,11 +247,11 @@ const useGeneratedBg = () => {
           </div>
         </div>
 
-        <!-- Text suggestions -->
+        <!-- Text suggestions (legacy JSON mode) -->
         <h3 v-if="analysis.textLayers?.length">
           Text Layers ({{ analysis.textLayers.length }})
         </h3>
-        <div class="suggestions-list">
+        <div class="suggestions-list" v-if="analysis.textLayers?.length">
           <div
             v-for="(s, idx) in analysis.textLayers"
             :key="'t' + idx"
@@ -271,6 +290,32 @@ const useGeneratedBg = () => {
               <span class="detail-badge" v-if="s.style?.line_height">
                 Line: {{ s.style?.line_height }}
               </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Text from flex tree (SVG mode — text baked into SVG) -->
+        <h3 v-if="!analysis.textLayers?.length && flexTextNodes.length">
+          Text Elements ({{ flexTextNodes.length }})
+        </h3>
+        <div class="suggestions-list" v-if="!analysis.textLayers?.length && flexTextNodes.length">
+          <div
+            v-for="(node, idx) in flexTextNodes"
+            :key="'ft' + idx"
+            class="suggestion-item"
+          >
+            <div class="suggestion-header">
+              <span class="hierarchy-badge" :class="node.sizeClass">
+                {{ node.id }}
+              </span>
+              <span class="position-info">
+                {{ node.style?.fontSize || 'medium' }} | {{ node.style?.align || 'center' }}
+              </span>
+            </div>
+            <h4 class="text-preview" :style="{ color: node.style?.color }">{{ node.text }}</h4>
+            <div class="style-tag">
+              Kanit | {{ node.style?.fontWeight || '700' }} |
+              <span :style="{ color: node.style?.color }">{{ node.style?.color }}</span>
             </div>
           </div>
         </div>

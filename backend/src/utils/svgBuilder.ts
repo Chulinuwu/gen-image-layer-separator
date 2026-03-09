@@ -344,7 +344,7 @@ function renderTextBox(box: LayoutBox, clipId: string): FlexTextRender {
 
   // Scale font to fill the box — semantic size is a ratio hint, not a cap
   const ratio = FLEX_FONT_RATIO[style.fontSize ?? 'medium'] ?? 0.5;
-  const boxPadding = 4;
+  const boxPadding = style.backgroundColor ? 20 : 4;
   const maxTextWidth = box.w - boxPadding * 2;
 
   // Start from a font size proportional to box height, then binary-search down to fit width
@@ -446,6 +446,16 @@ export function buildFlexSVG(input: FlexSVGInput): FlexSVGResult {
   }
 
   svgLines.push('  </defs>');
+
+  // Render background rects for boxes with backgroundColor
+  for (const box of boxes) {
+    if (box.style?.backgroundColor) {
+      svgLines.push(
+        `  <rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" ` +
+        `fill="${escapeXml(box.style.backgroundColor)}" />`,
+      );
+    }
+  }
 
   // Render component images
   for (const box of boxes) {

@@ -16,6 +16,7 @@ export interface FlexNodeStyle {
   strokeColor?: string;
   strokeWidth?: number;
   align?: 'left' | 'center' | 'right';
+  backgroundColor?: string;
 }
 
 export interface FlexNode {

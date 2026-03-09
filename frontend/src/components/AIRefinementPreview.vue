@@ -100,10 +100,10 @@
               :key="'db-' + box.id"
               class="debug-layout-box"
               :style="{
-                left: (box.x / 1024 * 100) + '%',
-                top: (box.y / 1024 * 100) + '%',
-                width: (box.w / 1024 * 100) + '%',
-                height: (box.h / 1024 * 100) + '%',
+                left: (box.x / debugCanvasSize.w * 100) + '%',
+                top: (box.y / debugCanvasSize.h * 100) + '%',
+                width: (box.w / debugCanvasSize.w * 100) + '%',
+                height: (box.h / debugCanvasSize.h * 100) + '%',
               }"
             >
               <span class="debug-box-label">{{ box.id }} ({{ box.type }})</span>
@@ -268,6 +268,7 @@ const pipelineSteps = ref<
   Array<{ label: string; src: string; elapsed?: string }>
 >([]);
 const showDebugBoxes = ref(true);
+const debugCanvasSize = ref<{ w: number; h: number }>({ w: 1080, h: 1080 });
 const previewCanvasContent = ref<HTMLElement | null>(null);
 
 // Force container aspect-ratio to match the loaded image — prevents layout mismatch with editor
@@ -338,7 +339,8 @@ function flattenFlexTree(node: any, x: number, y: number, w: number, h: number, 
 const debugBoxes = computed<DebugBox[]>(() => {
   if (!currentFlexTree.value) return [];
   const out: DebugBox[] = [];
-  flattenFlexTree(currentFlexTree.value, 0, 0, 1024, 1024, out);
+  const { w, h } = debugCanvasSize.value;
+  flattenFlexTree(currentFlexTree.value, 0, 0, w, h, out);
   return out;
 });
 const sanitizedSvgOverlay = computed(() => {
@@ -643,6 +645,9 @@ const handleSSEEvent = (event: string, data: any) => {
       addMessage("Layout finalized successfully", "success");
       if (data.data?.flexTree) {
         currentFlexTree.value = data.data.flexTree;
+        if (data.data.canvasSize) {
+          debugCanvasSize.value = data.data.canvasSize;
+        }
       }
       if (data.data?.svg_overlay && data.data.svg_overlay.length > 50) {
         // SVG mode — SVG contains BG + components + text
@@ -697,6 +702,9 @@ const handleSSEEvent = (event: string, data: any) => {
       }
       if (data.flexTree) {
         currentFlexTree.value = data.flexTree;
+        if (data.canvasSize) {
+          debugCanvasSize.value = data.canvasSize;
+        }
       }
       break;
     }

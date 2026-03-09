@@ -85,6 +85,130 @@ const sanitizedEditorSvgOverlay = computed(() => {
   });
 });
 
+/**
+ * Convert a flex tree + component image URLs into editable layer objects.
+ * Uses computeFlexLayout-equivalent logic to get bounding boxes, then maps to layers.
+ */
+function flexTreeToLayers(
+  flexTree: any,
+  canvasSize: { w: number; h: number },
+  componentImageUrls: Record<string, string>,
+): any[] {
+  if (!flexTree) return [];
+
+  const cw = canvasSize.w || 1080;
+  const ch = canvasSize.h || 1080;
+  const layers: any[] = [];
+  let layerId = 0;
+
+  // Flatten flex tree into bounding boxes (same logic as frontend flattenFlexTree + backend computeFlexLayout)
+  interface Box {
+    id: string; type?: string; text?: string; label?: string;
+    x: number; y: number; w: number; h: number;
+    style?: any;
+  }
+
+  function flatten(node: any, x: number, y: number, w: number, h: number, out: Box[]): void {
+    if (!node) return;
+    const pad = node.padding ?? 0;
+    const ix = x + pad, iy = y + pad, iw = w - pad * 2, ih = h - pad * 2;
+
+    if (node.type && !node.children?.length) {
+      out.push({ id: node.id, type: node.type, text: node.text, label: node.label, x: ix, y: iy, w: iw, h: ih, style: node.style });
+      return;
+    }
+    const children = node.children ?? [];
+    if (!children.length) return;
+    const dir = node.direction ?? 'column';
+    const gap = node.gap ?? 8;
+    const totalGap = gap * (children.length - 1);
+    const avail = (dir === 'row' ? iw : ih) - totalGap;
+
+    const sizes = children.map((c: any) => {
+      const pct = dir === 'row' ? c.width : c.height;
+      return pct ? parseFloat(pct) / 100 : null;
+    });
+    const allocd = sizes.reduce((s: number, v: number | null) => s + (v ?? 0), 0);
+    const unalloc = sizes.filter((s: number | null) => s === null).length;
+    const each = unalloc > 0 ? Math.max(0, 1 - allocd) / unalloc : 0;
+
+    let cursor = dir === 'row' ? ix : iy;
+    for (let i = 0; i < children.length; i++) {
+      const frac = sizes[i] ?? each;
+      const main = avail * frac;
+      const cx = dir === 'row' ? cursor : ix;
+      const cy = dir === 'row' ? iy : cursor;
+      const cWidth = dir === 'row' ? main : iw;
+      const cHeight = dir === 'row' ? ih : main;
+      flatten(children[i], cx, cy, cWidth, cHeight, out);
+      cursor += main + gap;
+    }
+  }
+
+  const boxes: Box[] = [];
+  flatten(flexTree, 0, 0, cw, ch, boxes);
+  console.log(`[Editor] flexTreeToLayers: ${boxes.length} boxes from ${cw}×${ch} canvas`);
+
+  // Font size mapping (same as svgBuilder FLEX_FONT_RATIO)
+  const fontRatio: Record<string, number> = {
+    xlarge: 1.0, large: 0.75, medium: 0.5, small: 0.35, xsmall: 0.22,
+  };
+
+  for (const box of boxes) {
+    if (box.type === 'component') {
+      const imgUrl = componentImageUrls[box.label || ''] || '';
+      layers.push({
+        type: 'image',
+        label: box.label || box.id,
+        imageUrl: imgUrl,
+        id: layerId++,
+        x: (box.x / cw) * 100,
+        y: (box.y / ch) * 100,
+        w: (box.w / cw) * 100,
+        h: (box.h / ch) * 100,
+        rotation: 0,
+        z_index: 15,
+      });
+    } else if (box.type === 'text' && box.text) {
+      const s = box.style || {};
+      const ratio = fontRatio[s.fontSize || 'medium'] || 0.5;
+      const pxFont = Math.round(box.h * ratio);
+      const fontSizeNormalized = Math.round((pxFont / cw) * 1000);
+
+      const alignMap: Record<string, string> = { left: 'left', center: 'center', right: 'right' };
+
+      layers.push({
+        type: 'text',
+        content: box.text,
+        id: layerId++,
+        x: (box.x / cw) * 100,
+        y: (box.y / ch) * 100,
+        w: (box.w / cw) * 100,
+        h: (box.h / ch) * 100,
+        rotation: 0,
+        z_index: 10,
+        visual_container: 'none',
+        style: {
+          font_family: 'Kanit',
+          font_weight: s.fontWeight || '700',
+          font_size_normalized: fontSizeNormalized,
+          color_hex: s.color || '#FFFFFF',
+          stroke_hex: s.strokeColor || undefined,
+          stroke_width: s.strokeWidth || undefined,
+          letter_spacing: 0,
+          line_height: 1.35,
+          shadow: s.strokeColor ? 'none' : 'subtle',
+          align: alignMap[s.align || 'center'] || 'center',
+          background_color: s.backgroundColor || undefined,
+        },
+      });
+    }
+  }
+
+  console.log(`[Editor] flexTreeToLayers: ${layers.length} layers (${layers.filter(l => l.type === 'image').length} images, ${layers.filter(l => l.type === 'text').length} text)`);
+  return layers;
+}
+
 // Watch for background prop
 watch(
   () => props.initialBackground,
@@ -115,6 +239,8 @@ watch(
         referenceImage: data.referenceImage,
         generatedBackgroundImageUrl: data.generatedBackgroundImageUrl || "NULL",
         svg_overlay: data.svg_overlay ? `${data.svg_overlay.length} chars` : "NONE",
+        flexTree: data.flexTree ? "YES" : "NO",
+        canvasSize: data.canvasSize || "NONE",
         textLayers: data.textLayers?.length || 0,
         visualComponents: data.visualComponents?.length || 0,
         componentPositions: data.visualComponents?.map((c: any) => ({
@@ -230,20 +356,37 @@ watch(
     //   });
     // }
 
-    // SVG overlay mode: SVG contains BG + components + text
+    // Convert flex tree into editable layers (preferred) or fall back to SVG overlay
     const hasCleanBg = !!data.generatedBackgroundImageUrl;
-    if (data.svg_overlay && data.svg_overlay.length > 50) {
+    if (data.flexTree && data.canvasSize) {
+      // Build component image URL map from visualComponents
+      const compUrls: Record<string, string> = {};
+      if (data.visualComponents?.length) {
+        for (const vc of data.visualComponents) {
+          compUrls[vc.label] = `http://localhost:5001${vc.imageUrl}`;
+        }
+      }
+      const flexLayers = flexTreeToLayers(data.flexTree, data.canvasSize, compUrls);
+      if (flexLayers.length > 0) {
+        svgOverlay.value = ""; // editable layers — no read-only SVG
+        layers.value = flexLayers;
+        console.log(`[Editor] Flex tree → ${flexLayers.length} editable layers`);
+      } else {
+        // Fallback: show read-only SVG
+        svgOverlay.value = data.svg_overlay || "";
+        layers.value = hasCleanBg ? [...imageLayers, ...textLayers] : [...textLayers];
+        console.log(`[Editor] Flex tree empty — fallback mode`);
+      }
+    } else if (data.svg_overlay && data.svg_overlay.length > 50) {
+      // No flex tree available — show read-only SVG
       svgOverlay.value = data.svg_overlay;
-      // SVG already contains background + components + text — skip separate layers
       layers.value = [];
-      console.log(
-        `[Editor] Full SVG mode: overlay ${data.svg_overlay.length} chars — BG + components baked in`,
-      );
+      console.log(`[Editor] SVG overlay mode (no flex tree): ${data.svg_overlay.length} chars`);
     } else {
       svgOverlay.value = "";
       layers.value = hasCleanBg
         ? [...imageLayers, ...textLayers]
-        : [...textLayers]; // skip component images if no clean BG
+        : [...textLayers];
     }
 
     // Initial sync of text content to DOM refs
@@ -290,8 +433,22 @@ watch(
   { deep: true },
 );
 
-// visual_container system removed — containers stripped at source
-const getEditorContainerStyle = (_layer: any): Record<string, string> => ({});
+// Additional container styles (background color, text alignment from SVG parsing)
+const getEditorContainerStyle = (layer: any): Record<string, string> => {
+  const s: Record<string, string> = {};
+  if (layer.style?.background_color) {
+    s.backgroundColor = layer.style.background_color;
+    s.padding = "8px 16px";
+    s.borderRadius = "4px";
+  }
+  if (layer.style?.align) {
+    s.textAlign = layer.style.align;
+  }
+  if (layer.w) {
+    s.width = layer.w + "cqw";
+  }
+  return s;
+};
 
 const getShadowStyle = (shadow: string) => {
   switch (shadow) {
@@ -1012,11 +1169,15 @@ const downloadAsSvg = async () => {
                   color: layer.style.color_hex,
                   fontSize:
                     (layer.style.font_size_normalized || 40) * 0.1 + 'cqw',
-                  fontFamily: `${layer.style.font_family}, sans-serif`,
+                  fontFamily: `${layer.style.font_family || 'Kanit'}, sans-serif`,
                   fontWeight: layer.style.font_weight,
                   letterSpacing: (layer.style.letter_spacing || 0) + 'px',
                   lineHeight: layer.style.line_height || 1.2,
                   textShadow: getShadowStyle(layer.style.shadow),
+                  WebkitTextStroke: layer.style.stroke_hex
+                    ? `${layer.style.stroke_width || 1}px ${layer.style.stroke_hex}`
+                    : undefined,
+                  paintOrder: layer.style.stroke_hex ? 'stroke fill' : undefined,
                   transform: `rotate(${layer.rotation || 0}deg)`,
                   zIndex: layer.z_index,
                 }

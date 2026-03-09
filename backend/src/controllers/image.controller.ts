@@ -1229,6 +1229,8 @@ export const createCampaign = async (req: Request, res: Response) => {
     // Hoisted so they're accessible in the refinement loop below
     let canvasW = 1080;
     let canvasH = 1080;
+    let refImageBuffers: Buffer[] = [];
+    let footerText = '';
     let textZone: { x: number; y: number; w: number; h: number } = { x: 0, y: 0, w: 1080, h: 1080 };
     let layoutHint:
       | Awaited<ReturnType<typeof vertexService.planLayoutStrategy>>
@@ -1572,7 +1574,7 @@ export const createCampaign = async (req: Request, res: Response) => {
         });
 
         // ── Reference Image Lookup ──
-        let refImageBuffers: Buffer[] = [];
+        refImageBuffers = [];
         console.log(`[Pass2] Starting reference image lookup...`);
         logEvent("Reference Image Lookup", "Starting reference image search");
         try {
@@ -1607,6 +1609,15 @@ export const createCampaign = async (req: Request, res: Response) => {
           });
         }
 
+        // ── Read footer disclaimer text ──
+        const footerPath = path.join(__dirname, '../../assets/Ref_Footer/footer.txt');
+        try {
+          if (fs.existsSync(footerPath)) {
+            footerText = fs.readFileSync(footerPath, 'utf-8').trim();
+            console.log(`[Pass2] Footer text loaded (${footerText.length} chars)`);
+          }
+        } catch {}
+
         // ── Flex Tree Pipeline ──
         const componentLabels = visualComponents.map((c) => c.label);
         const flexResult = await vertexService.suggestFlexLayout(
@@ -1616,6 +1627,7 @@ export const createCampaign = async (req: Request, res: Response) => {
           componentLabels,
           { w: canvasW, h: canvasH },
           refImageBuffers,
+          footerText || undefined,
         );
 
         console.log(`[Pass2] Flex layout: vibe="${flexResult.campaign_vibe}", tree received`);
@@ -1750,12 +1762,14 @@ export const createCampaign = async (req: Request, res: Response) => {
       componentCount: visualComponents.length,
       components: componentSuggestions,
       visualComponents,
+      flexTree: (analysis as any).flexTree || null,
+      canvasSize: { w: canvasW, h: canvasH },
     });
 
     // ════════════════════════════════════════════════════════════════
     // Step 3: REFINEMENT LOOP — adjusts BOTH text AND component positions
     // ════════════════════════════════════════════════════════════════
-    const MAX_ITERATIONS = 1;
+    const MAX_ITERATIONS = 3;
     let currentIteration = 0;
     let lastCritique: any = { status: "FAIL" };
 
@@ -2159,6 +2173,8 @@ export const createCampaign = async (req: Request, res: Response) => {
             refinedTargetText,
             refinedComponentLabels,
             { w: canvasW, h: canvasH },
+            refImageBuffers,
+            footerText || undefined,
           );
 
           const refinedFlexBoxes = computeFlexLayout(refinedFlexResult.flexTree, canvasW, canvasH);
@@ -2215,6 +2231,8 @@ export const createCampaign = async (req: Request, res: Response) => {
           componentCount: componentSuggestions.length,
           components: componentSuggestions,
           visualComponents,
+          flexTree: (analysis as any).flexTree || null,
+          canvasSize: { w: canvasW, h: canvasH },
         });
       }
 
@@ -2240,6 +2258,7 @@ export const createCampaign = async (req: Request, res: Response) => {
         campaignVibe: analysis.campaign_vibe || "",
         svg_overlay: svgOverlay, // SVG overlay — main output
         flexTree: (analysis as any).flexTree || null, // flex tree for client-side re-layout
+        canvasSize: { w: canvasW, h: canvasH },
         textLayers: [], // backward compat: empty in SVG mode
         visualComponents,
         stackImageUrls: stackImageUrls || [],

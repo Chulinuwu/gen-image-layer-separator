@@ -1380,11 +1380,25 @@ ${
       NOTE ON FINE PRINT: Legal disclaimers, terms, and conditions (hierarchy="FinePrint") are ALLOWED to be very small (font_size 8-16). Do NOT fail them for being small. That is intentional.
       
       ═══════════════════════════════════════
-      QUALITY CHECKS:
+      COMPOSITION & BALANCE CHECKS:
       ═══════════════════════════════════════
-      
+
+      ✗ ALIGNMENT INCONSISTENCY:
+        - Text elements in the same visual group should share an alignment axis (all left-aligned, or all center-aligned)
+        - If a hero number is left-aligned but its description is center-aligned → FAIL (they look disconnected)
+        - Mixed alignment within the same column of text → FAIL
+
+      ✗ VISUAL WEIGHT IMBALANCE:
+        - If one side of the layout is very heavy (large component + text) while the other side is empty → FAIL
+        - A mascot or character sitting alone in a large empty space with no nearby text → FAIL (unanchored)
+        - Good balance: large element on one side, supporting text on the other
+
+      ✗ UNANCHORED ELEMENTS:
+        - If an element (text or component) sits alone in a large empty area with no visual connection to neighbors → FAIL
+        - Every element should feel like it BELONGS to a group
+
       ○ VISUAL HIERARCHY: Is headline the largest? Is fine print the smallest?
-      ○ BALANCE: Professional layout, not cluttered?
+      ○ PROFESSIONAL POLISH: Does it look like a real bank advertisement, not a student project?
       ○ INTENT: Does it match the brief?
       
       ═══════════════════════════════════════
@@ -1441,9 +1455,28 @@ ${
       const text = response.text || "";
       traceAI("Critique Layout", prompt, text);
 
-      const jsonStr =
-        text.match(/\{[\s\S]*\}/)?.[0] ||
-        '{"status": "FAIL", "feedback": "Could not extract JSON from response", "actionable_steps": []}';
+      let jsonStr = text.match(/\{[\s\S]*\}/)?.[0] || "";
+
+      // Fallback: if no JSON braces found, try to extract status/feedback from freeform text
+      if (!jsonStr) {
+        const statusMatch = text.match(/status:\s*"?(PASS|FAIL)"?/i);
+        const feedbackMatch = text.match(/feedback:\s*"([\s\S]*?)(?:"\s*(?:,|\n|actionable|confidence))/i);
+        const confidenceMatch = text.match(/confidence:\s*([\d.]+)/);
+        const stepsMatch = text.match(/actionable_steps:\s*\[([\s\S]*?)\]/);
+
+        if (statusMatch) {
+          const status = statusMatch[1].toUpperCase();
+          const feedback = feedbackMatch?.[1] || text.substring(0, 500);
+          const confidence = confidenceMatch ? parseFloat(confidenceMatch[1]) : 0.5;
+          const stepsRaw = stepsMatch?.[1] || "";
+          const steps = stepsRaw.match(/"([^"]+)"/g)?.map(s => s.replace(/"/g, "")) || [];
+
+          console.log(`[GenAI] Critique: extracted freeform response → ${status}`);
+          jsonStr = JSON.stringify({ status, confidence, feedback, actionable_steps: steps });
+        } else {
+          jsonStr = '{"status": "FAIL", "feedback": "Could not extract JSON from response", "actionable_steps": []}';
+        }
+      }
 
       try {
         return JSON.parse(jsonStr);
@@ -4826,6 +4859,7 @@ YOUR_IMPROVED_HTML_STRING_WITH_SINGLE_QUOTE_ATTRIBUTES
     componentLabels: string[],
     canvasSize: { w: number; h: number },
     refImages?: Buffer[],
+    footerText?: string,
   ): Promise<{
     flexTree: FlexNode;
     campaign_vibe: string;
@@ -4882,18 +4916,28 @@ ${targetText}
 
 ${componentsList}
 
-CANVAS SIZE: ${canvasSize.w}px × ${canvasSize.h}px
+${footerText ? `FOOTER DISCLAIMER TEXT (MUST be placed at the very bottom):
+"${footerText}"
+This is the standard bank disclaimer. It MUST appear as a footer strip at the bottom of the canvas.
+The footer should have:
+- A solid background color (dark purple or brand color) spanning full width
+- Very small text (fontSize "xsmall", fontWeight "400")
+- This is NOT optional — every professional bank ad has a footer disclaimer strip.
+
+` : ''}CANVAS SIZE: ${canvasSize.w}px × ${canvasSize.h}px
 
 YOUR TASK: Plan and create a flex tree layout. You MUST follow this workflow in order:
 
 STEP 1 — DESIGN REASONING (mandatory):
 Write your design thinking inside <layout_thought>...</layout_thought> tags.
-You MUST cover:
+You MUST cover ALL of the following (skip none):
 - Background analysis: describe what's in the image, where are open/calm areas vs busy areas
 - Visual hierarchy: which text is the hero element (biggest), which is supporting, which is fine print
 - Component placement strategy: where should each component go and why
 - Color strategy: what text colors will contrast well with the background
 - Composition style: what kind of layout will you use (NOT a boring 50/50 split)
+- ALIGNMENT AXES: decide which elements share a left-edge, center-axis, or right-edge. Elements in the same visual group MUST align on at least one axis. Example: "headline, offer-desc, and location all left-align at x=5%. Hero number center-aligns with offer-tag."
+- VISUAL WEIGHT BALANCE: the layout should feel balanced — if a large component is on the right, balance it with text weight on the left. Don't leave large empty gaps next to heavy elements.
 
 STEP 2 — ELEMENT GROUPING (mandatory):
 Write element groupings inside <grouping>...</grouping> tags as a JSON array.
@@ -4924,7 +4968,7 @@ CONTAINER NODE:
   "height": "40%",                 // percentage of parent's main axis (for column parent)
   "width": "60%",                  // percentage of parent's main axis (for row parent)
   "gap": 16,                       // px gap between children (default 8, use 16-40 for breathing room)
-  "padding": 30                    // px inset from edges (default 0, use 20-50 for margins)
+  "padding": 20                    // px inset from edges (default 0, use 10-30 for margins)
 }
 
 TEXT LEAF NODE:
@@ -4939,7 +4983,8 @@ TEXT LEAF NODE:
     "color": "#FFD700",
     "strokeColor": "#000000",      // optional outline for readability on busy backgrounds
     "strokeWidth": 2,              // optional
-    "align": "center"              // options: "left" | "center" | "right"
+    "align": "center",             // options: "left" | "center" | "right"
+    "backgroundColor": "#4B0082"   // optional solid color rect behind text (use for footer strips, highlight bars)
   }
 }
 
@@ -4951,45 +4996,48 @@ COMPONENT LEAF NODE (die-cut image):
   "height": "50%"                  // percentage along parent's main axis
 }
 
-LAYOUT DESIGN PRINCIPLES:
-1. Every line of the campaign text MUST appear as a text leaf node.
-2. Every available component MUST appear exactly once as a component leaf.
-3. Use 2-3 levels of nesting for interesting composition (root → sections → subsections → leaves).
-4. Promotional numbers/prices should use fontSize "xlarge" or "large" and fontWeight "900".
-5. Fine print / legal text should use fontSize "xsmall" or "small" and fontWeight "400".
+STRUCTURAL RULES (non-negotiable):
+- Every line of the campaign text MUST appear as a text leaf node.
+- Every available component MUST appear exactly once as a component leaf.
 
-BACKGROUND-AWARE DESIGN:
-6. FIRST analyze the background image — find open/calm areas vs busy/detailed areas.
-7. Place text in CALM areas (solid colors, gradients, sky, plain surfaces) where it's most readable.
-8. AVOID placing text over busy areas (buildings, faces, detailed textures) unless using strong strokeColor.
-9. Layout does NOT need to fill the entire canvas. Leave empty areas where the background is beautiful.
+DESIGN THINKING — think like a professional graphic designer:
 
-CREATIVE LAYOUT GUIDANCE:
-10. Choose text colors that contrast well with the background image.
-11. Use strokeColor for text over busy or colorful backgrounds to ensure readability.
-12. If reference images are provided, study their composition and ADAPT their style.
+1. VISUAL HIERARCHY: Every good ad has one dominant element that catches the eye first (the hero).
+   The promotional number or key offer should be the biggest, boldest thing on the canvas.
+   Supporting text should be clearly smaller. Fine print should be tiny. The viewer's eye
+   should flow naturally: hero → supporting details → fine print.
 
-⛔ FORBIDDEN PATTERNS — DO NOT DO THESE:
-- DO NOT split into "all text on left, all components on right" (or vice versa). This is boring.
-- DO NOT use a simple two-column 50/50 row split at root level.
-- DO NOT give every sibling the same percentage (e.g., all children at 33%).
-- DO NOT make every text block the same font size.
-- DO NOT fill the entire canvas — leave at least 15-25% as breathing whitespace.
+2. GROUPING & PROXIMITY: Elements that are related should be near each other.
+   A headline belongs with its subtitle. An offer belongs with its description.
+   A component (mascot, person) can anchor a group — place it near the text it relates to,
+   not isolated in its own empty zone.
 
-✅ REQUIRED CREATIVE PATTERNS — YOU MUST DO THESE:
-- MIX text and components in the SAME container. A component can sit between two text blocks.
-- Use ASYMMETRIC proportions: 70/30, 65/25 (leaving 10% whitespace), 40/35/15.
-- Root should use "column" direction with padding 30-60. Nest "row" containers inside for horizontal grouping.
-- Create a clear VISUAL HIERARCHY: one hero element (big number, key offer, or main component) gets 30-40% of canvas. Supporting text gets much less.
-- Place the KEY PROMOTIONAL NUMBER/PRICE as the LARGEST element — it should dominate visually.
-- Group related items: headline+subtitle together, offer+details together, component+caption together.
-- Fine print goes at very bottom, tiny.
+3. ALIGNMENT: Professional designs have invisible alignment axes that connect elements.
+   Elements in the same group should share an edge (left-aligned together, or center-aligned together).
+   Random alignment looks amateur — if you start left-aligning a group, commit to it.
+
+4. BALANCE: The layout should feel visually balanced, not lopsided.
+   If you place a heavy element (large component or big text) on one side,
+   balance the other side with content — don't leave it empty.
+
+5. BACKGROUND AWARENESS: Read the image. Place text where it's readable — over calm,
+   solid, or gradient areas. Avoid placing text over busy textures or faces.
+   Use strokeColor or backgroundColor when text must sit over complex areas.
+
+6. FILL THE CANVAS PURPOSEFULLY: The layout should feel complete and anchored —
+   content fills the canvas from top to bottom. Footer sits at the very bottom edge.
+   Use gap between elements for breathing room, not dead zones at edges.
+   Think of it like a real printed ad — no wasted empty strips.
+
+7. COLOR & CONTRAST: Choose text colors that pop against the background.
+   Study the reference images for color palette inspiration.
+   Dark text on light areas, light text on dark areas. Use stroke for extra readability.
 
 EXAMPLE LAYOUTS (study the STRUCTURE, adapt to your content):
 
 Example A — Hero offer with mixed content rows:
 {
-  "id": "root", "direction": "column", "padding": 40, "gap": 24,
+  "id": "root", "direction": "column", "padding": 20, "gap": 20,
   "children": [
     { "id": "top-band", "direction": "row", "height": "18%", "gap": 16, "children": [
       { "id": "headline", "type": "text", "text": "SUMMER SALE", "width": "55%", "style": {"fontSize":"large","fontWeight":"900","color":"#FFFFFF","strokeColor":"#000","strokeWidth":2,"align":"left"} },
@@ -5009,7 +5057,7 @@ Example A — Hero offer with mixed content rows:
 
 Example B — Vertical hero with side panel:
 {
-  "id": "root", "direction": "column", "padding": 50, "gap": 20,
+  "id": "root", "direction": "column", "padding": 20, "gap": 16,
   "children": [
     { "id": "hero", "type": "text", "text": "BIG DEAL", "height": "20%", "style": {"fontSize":"xlarge","fontWeight":"900","color":"#FFD700","strokeColor":"#000","strokeWidth":4,"align":"center"} },
     { "id": "content", "direction": "row", "height": "50%", "gap": 24, "children": [
