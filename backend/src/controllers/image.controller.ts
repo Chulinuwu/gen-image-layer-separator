@@ -1574,7 +1574,7 @@ export const createCampaign = async (req: Request, res: Response) => {
         // ── Reference Image Lookup ──
         let refImageBuffers: Buffer[] = [];
         try {
-          const { description, embedding } = await vertexService.describeAndEmbed(imageBuffer, mimeType);
+          const { embedding } = await vertexService.describeAndEmbed(imageBuffer, mimeType);
           const refs = findSimilarRefs(embedding, 3);
           if (refs.length > 0) {
             console.log(`[Pass2] Found ${refs.length} reference ads: ${refs.map(r => `${r.filename} (${r.score.toFixed(3)})`).join(', ')}`);
