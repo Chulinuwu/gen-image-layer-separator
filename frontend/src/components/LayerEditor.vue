@@ -35,6 +35,7 @@ const renderMode = ref("ai"); // 'ai' or 'simple'
 
 // SVG overlay mode — set when campaignData has svg_overlay
 const svgOverlay = ref<string>("");
+const hasSvgOverlay = computed(() => !!svgOverlay.value && svgOverlay.value.length > 50);
 const sanitizedEditorSvgOverlay = computed(() => {
   if (!svgOverlay.value) return "";
   return DOMPurify.sanitize(svgOverlay.value, {
@@ -50,6 +51,7 @@ const sanitizedEditorSvgOverlay = computed(() => {
       "feDropShadow",
       "image",
       "style",
+      "clipPath",
     ],
     ADD_ATTR: [
       "viewBox",
@@ -78,6 +80,7 @@ const sanitizedEditorSvgOverlay = computed(() => {
       "preserveAspectRatio",
       "id",
       "letter-spacing",
+      "clip-path",
     ],
   });
 });
@@ -227,22 +230,14 @@ watch(
     //   });
     // }
 
-    // SVG overlay mode: text is in svg_overlay, only load component image layers
+    // SVG overlay mode: SVG contains BG + components + text
     const hasCleanBg = !!data.generatedBackgroundImageUrl;
     if (data.svg_overlay && data.svg_overlay.length > 50) {
       svgOverlay.value = data.svg_overlay;
-      // Only show die-cut components if we have a clean BG (without them baked in).
-      // If using reference image as BG, components are already visible in the photo.
-      if (hasCleanBg) {
-        layers.value = [...imageLayers]; // components only — text in SVG overlay
-      } else {
-        layers.value = []; // reference image already has components — only show SVG text
-        console.warn(
-          `[Editor] No clean BG — skipping component layers to avoid doubles`,
-        );
-      }
+      // SVG already contains background + components + text — skip separate layers
+      layers.value = [];
       console.log(
-        `[Editor] SVG mode: overlay ${data.svg_overlay.length} chars, ${imageLayers.length} component layers, cleanBG=${hasCleanBg}`,
+        `[Editor] Full SVG mode: overlay ${data.svg_overlay.length} chars — BG + components baked in`,
       );
     } else {
       svgOverlay.value = "";
@@ -976,7 +971,7 @@ const downloadAsSvg = async () => {
         ref="editorCanvasEl"
       >
         <img
-          v-if="bgPreviewUrl || previewUrl"
+          v-if="(bgPreviewUrl || previewUrl) && !hasSvgOverlay"
           :src="
             (layers.length > 0 ? bgPreviewUrl || previewUrl : previewUrl) ??
             undefined
@@ -987,11 +982,11 @@ const downloadAsSvg = async () => {
           @load="onEditorImageLoad"
         />
 
-        <!-- SVG overlay — AI-generated SVG text, read-only -->
+        <!-- SVG overlay — AI-generated SVG (BG + components + text), read-only -->
         <div
           v-if="sanitizedEditorSvgOverlay"
           v-html="sanitizedEditorSvgOverlay"
-          class="editor-svg-overlay-layer"
+          :class="['editor-svg-overlay-layer', { 'full-svg': hasSvgOverlay }]"
           title="Text generated as SVG — use AI refinement to edit"
         />
 
@@ -1280,6 +1275,16 @@ select {
   pointer-events: none;
   overflow: hidden;
   z-index: 10;
+}
+/* Full SVG mode — SVG contains BG + components + text, displayed as standalone */
+.editor-svg-overlay-layer.full-svg {
+  position: relative;
+  inset: auto;
+}
+.editor-svg-overlay-layer.full-svg :deep(svg) {
+  width: 100%;
+  height: auto;
+  display: block;
 }
 .editor-svg-overlay-layer > svg {
   position: absolute;

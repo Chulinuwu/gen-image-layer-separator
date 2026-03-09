@@ -53,7 +53,7 @@
         </button>
         <div class="canvas-content" ref="previewCanvasContent">
           <img
-            v-if="currentPreviewUrl"
+            v-if="currentPreviewUrl && !hasSvgOverlay"
             :src="currentPreviewUrl"
             class="design-preview"
             @load="onPreviewImageLoad"
@@ -67,7 +67,7 @@
           <div
             v-if="sanitizedSvgOverlay"
             v-html="sanitizedSvgOverlay"
-            class="svg-overlay-layer"
+            :class="['svg-overlay-layer', { 'full-svg': hasSvgOverlay }]"
           />
 
           <!-- Fallback: JSON text overlay mode -->
@@ -82,8 +82,8 @@
             </div>
           </template>
 
-          <!-- Component overlays always rendered (regardless of mode) -->
-          <template v-if="currentPreviewUrl">
+          <!-- Component overlays — hidden when SVG already contains BG + components -->
+          <template v-if="currentPreviewUrl && !hasSvgOverlay">
             <img
               v-for="(c, idx) in liveComponents"
               :key="'lc' + idx"
@@ -285,6 +285,8 @@ const onPreviewImageLoad = (e: Event) => {
 
 // SVG overlay mode — AI returns SVG string instead of HTML/CSS
 const liveSvgOverlay = ref<string>("");
+const currentFlexTree = ref<any>(null);
+const hasSvgOverlay = computed(() => !!liveSvgOverlay.value && liveSvgOverlay.value.length > 50);
 const sanitizedSvgOverlay = computed(() => {
   if (!liveSvgOverlay.value) return "";
   return DOMPurify.sanitize(liveSvgOverlay.value, {
@@ -300,6 +302,7 @@ const sanitizedSvgOverlay = computed(() => {
       "feDropShadow",
       "image",
       "style",
+      "clipPath",
     ],
     ADD_ATTR: [
       "viewBox",
@@ -328,6 +331,7 @@ const sanitizedSvgOverlay = computed(() => {
       "preserveAspectRatio",
       "id",
       "letter-spacing",
+      "clip-path",
     ],
   });
 });
@@ -616,12 +620,14 @@ const handleSSEEvent = (event: string, data: any) => {
       statusText.value = "Design Approved";
       isComplete.value = true;
       addMessage("Layout finalized successfully", "success");
+      if (data.data?.flexTree) {
+        currentFlexTree.value = data.data.flexTree;
+      }
       if (data.data?.svg_overlay && data.data.svg_overlay.length > 50) {
-        // SVG mode
+        // SVG mode — SVG contains BG + components + text
         liveSvgOverlay.value = data.data.svg_overlay;
         liveTextLayers.value = [];
-        liveComponents.value =
-          data.data.visualComponents || data.data.components || [];
+        liveComponents.value = []; // components are baked into the SVG
       } else if (data.data?.textLayers?.length) {
         // Fallback JSON mode
         const components =
@@ -642,7 +648,7 @@ const handleSSEEvent = (event: string, data: any) => {
       }, 1000);
       break;
     case "iteration_end": {
-      // SVG overlay mode: use svg_overlay if present
+      // SVG overlay mode: use svg_overlay if present (contains BG + components + text)
       if (
         data.svg_overlay &&
         typeof data.svg_overlay === "string" &&
@@ -650,6 +656,7 @@ const handleSSEEvent = (event: string, data: any) => {
       ) {
         liveSvgOverlay.value = data.svg_overlay;
         liveTextLayers.value = [];
+        liveComponents.value = []; // components are baked into the SVG
       } else if (data.textLayers) {
         // Fallback: old JSON layer mode
         const components = data.visualComponents || data.components || [];
@@ -660,12 +667,15 @@ const handleSSEEvent = (event: string, data: any) => {
         applyInteractionZoneDepth(rawTextLayers, components);
         liveTextLayers.value = rawTextLayers;
         liveSvgOverlay.value = "";
+        // Components only in JSON mode
+        if (data.visualComponents?.length) {
+          liveComponents.value = data.visualComponents;
+        } else if (data.components) {
+          liveComponents.value = data.components;
+        }
       }
-      // Components always JSON
-      if (data.visualComponents?.length) {
-        liveComponents.value = data.visualComponents;
-      } else if (data.components) {
-        liveComponents.value = data.components;
+      if (data.flexTree) {
+        currentFlexTree.value = data.flexTree;
       }
       break;
     }
@@ -783,6 +793,16 @@ defineExpose({ connectSSE });
   inset: 0;
   pointer-events: none;
   overflow: hidden;
+}
+/* Full SVG mode — SVG contains BG + components + text, displayed as standalone */
+.full-svg {
+  position: relative;
+  inset: auto;
+}
+.full-svg :deep(svg) {
+  width: 100%;
+  height: auto;
+  display: block;
 }
 /* Force the inner <svg> to fill the container and clip overflow on both components */
 .svg-overlay-layer > svg,
