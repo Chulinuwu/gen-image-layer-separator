@@ -312,12 +312,13 @@ export interface FlexSVGResult {
   boxes: LayoutBox[];
 }
 
-const FLEX_FONT_SIZES: Record<string, number> = {
-  xlarge: 72,
-  large: 56,
-  medium: 36,
-  small: 24,
-  xsmall: 16,
+// Semantic font sizes used as a RATIO hint — actual size scales to fill the box
+const FLEX_FONT_RATIO: Record<string, number> = {
+  xlarge: 1.0,   // fill box fully
+  large: 0.75,
+  medium: 0.5,
+  small: 0.35,
+  xsmall: 0.22,
 };
 
 interface FlexTextRender {
@@ -341,16 +342,20 @@ function renderTextBox(box: LayoutBox, clipId: string): FlexTextRender {
   const fontWeight = style.fontWeight ?? '700';
   const color = style.color ?? '#FFFFFF';
 
-  const maxFont = FLEX_FONT_SIZES[style.fontSize ?? 'medium'] ?? 36;
-  const minFont = Math.max(12, Math.round(maxFont * 0.3));
+  // Scale font to fill the box — semantic size is a ratio hint, not a cap
+  const ratio = FLEX_FONT_RATIO[style.fontSize ?? 'medium'] ?? 0.5;
   const boxPadding = 4;
   const maxTextWidth = box.w - boxPadding * 2;
 
-  // Auto-fit: shrink by 0.9 until wrapped text fits box height
-  let fontSize = maxFont;
+  // Start from a font size proportional to box height, then binary-search down to fit width
+  const startFont = Math.round(box.h * ratio);
+  const minFont = Math.max(12, Math.round(startFont * 0.15));
+
+  let fontSize = Math.max(minFont, startFont);
   let wrapped = wrapText(text, maxTextWidth, fontSize, fontWeight);
 
-  while (wrapped.totalHeight > box.h && fontSize > minFont) {
+  // Shrink until wrapped text fits both width and height
+  while (wrapped.totalHeight > box.h * 0.95 && fontSize > minFont) {
     fontSize = Math.max(minFont, Math.round(fontSize * 0.9));
     wrapped = wrapText(text, maxTextWidth, fontSize, fontWeight);
   }
