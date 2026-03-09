@@ -8,6 +8,7 @@ import { buildSVG } from "../utils/svgBuilder";
 import { computeFlexLayout } from '../utils/flexLayout';
 import { buildFlexSVG } from '../utils/svgBuilder';
 import { logEvent, traceAI } from "../utils/ai-logger";
+import { findSimilarRefs } from '../utils/refImageSearch';
 
 export const processImage = async (req: Request, res: Response) => {
   try {
@@ -1570,6 +1571,24 @@ export const createCampaign = async (req: Request, res: Response) => {
           planComponentLayout: layoutHint?.component_layout || "not provided",
         });
 
+        // ── Reference Image Lookup ──
+        let refImageBuffers: Buffer[] = [];
+        try {
+          const { description, embedding } = await vertexService.describeAndEmbed(imageBuffer, mimeType);
+          const refs = findSimilarRefs(embedding, 3);
+          if (refs.length > 0) {
+            console.log(`[Pass2] Found ${refs.length} reference ads: ${refs.map(r => `${r.filename} (${r.score.toFixed(3)})`).join(', ')}`);
+            refImageBuffers = refs.map(r => fs.readFileSync(r.filepath));
+            sendSSE("debug", {
+              step: "ref_images",
+              message: `Found ${refs.length} similar reference ads`,
+              refs: refs.map(r => ({ filename: r.filename, score: r.score.toFixed(3), description: r.description })),
+            });
+          }
+        } catch (err: any) {
+          console.warn(`[Pass2] Reference image search failed: ${err.message}`);
+        }
+
         // ── Flex Tree Pipeline ──
         const componentLabels = visualComponents.map((c) => c.label);
         const flexResult = await vertexService.suggestFlexLayout(
@@ -1578,6 +1597,7 @@ export const createCampaign = async (req: Request, res: Response) => {
           targetText,
           componentLabels,
           { w: canvasW, h: canvasH },
+          refImageBuffers,
         );
 
         console.log(`[Pass2] Flex layout: vibe="${flexResult.campaign_vibe}", tree received`);

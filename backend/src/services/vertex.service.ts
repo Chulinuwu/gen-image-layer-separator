@@ -4825,6 +4825,7 @@ YOUR_IMPROVED_HTML_STRING_WITH_SINGLE_QUOTE_ATTRIBUTES
     targetText: string,
     componentLabels: string[],
     canvasSize: { w: number; h: number },
+    refImages?: Buffer[],
   ): Promise<{
     flexTree: FlexNode;
     campaign_vibe: string;
@@ -4856,9 +4857,24 @@ YOUR_IMPROVED_HTML_STRING_WITH_SINGLE_QUOTE_ATTRIBUTES
         ? `Available die-cut component images:\n${componentLabels.map((l) => `  - "${l}"`).join("\n")}`
         : "No die-cut components available.";
 
+    const refSection = refImages && refImages.length > 0
+      ? `REFERENCE IMAGES:
+The first ${refImages.length} images are examples of well-designed advertisement layouts.
+Study their composition, spacing, visual hierarchy, and use of whitespace.
+Use them as INSPIRATION — do not copy exactly, but learn from their design principles.
+
+THE LAST IMAGE is the actual background for this campaign. Analyze it:
+- Where are open/calm areas? (good for text)
+- Where are busy/detailed areas? (avoid text there)
+- What are dominant colors? (choose contrasting text colors)
+- Layout does NOT need to fill the entire canvas — whitespace is valuable.
+
+`
+      : '';
+
     const prompt = `You are a professional graphic designer creating an advertising campaign layout.
 
-CAMPAIGN TEXT TO PLACE:
+${refSection}CAMPAIGN TEXT TO PLACE:
 ${targetText}
 
 ${componentsList}
@@ -4936,8 +4952,21 @@ OUTPUT FORMAT — respond with ONLY this JSON (no markdown, no explanation):
 }`;
 
     console.log(
-      `[FlexLayout] Calling ${model} for flex tree layout (canvas: ${canvasSize.w}×${canvasSize.h}, components: ${componentLabels.length})`,
+      `[FlexLayout] Calling ${model} for flex tree layout (canvas: ${canvasSize.w}×${canvasSize.h}, components: ${componentLabels.length}, refImages: ${refImages?.length || 0})`,
     );
+
+    // ── Build parts array ──
+    const parts: any[] = [];
+    // Reference images first
+    if (refImages && refImages.length > 0) {
+      for (const ref of refImages) {
+        parts.push({ inlineData: { mimeType: "image/jpeg", data: ref.toString("base64") } });
+      }
+    }
+    // Background image
+    parts.push({ inlineData: { mimeType: processingMime, data: processingBuffer.toString("base64") } });
+    // Text prompt
+    parts.push({ text: prompt });
 
     // ── Call the AI ──
     const response = await this.client.models.generateContent({
@@ -4945,15 +4974,7 @@ OUTPUT FORMAT — respond with ONLY this JSON (no markdown, no explanation):
       contents: [
         {
           role: "user",
-          parts: [
-            {
-              inlineData: {
-                mimeType: processingMime,
-                data: processingBuffer.toString("base64"),
-              },
-            },
-            { text: prompt },
-          ],
+          parts,
         },
       ],
       config: { temperature: 0.7 },
