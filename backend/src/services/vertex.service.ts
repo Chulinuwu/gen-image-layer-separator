@@ -4928,15 +4928,22 @@ LAYOUT DESIGN PRINCIPLES:
 4. Promotional numbers/prices should use fontSize "xlarge" or "large" and fontWeight "900".
 5. Fine print / legal text should use fontSize "xsmall" or "small" and fontWeight "400".
 
+BACKGROUND-AWARE DESIGN:
+6. FIRST analyze the background image — find open/calm areas vs busy/detailed areas.
+7. Place text in CALM areas (solid colors, gradients, sky, plain surfaces) where it's most readable.
+8. AVOID placing text over busy areas (buildings, faces, detailed textures) unless using strong strokeColor.
+9. Layout does NOT need to fill the entire canvas. Leave empty areas where the background is beautiful.
+
 CREATIVE LAYOUT GUIDANCE:
-6. DO NOT make a boring 50/50 split. Vary proportions: 65/35, 70/30, or asymmetric layouts.
-7. Sibling percentages do NOT need to sum to 100% — leaving unused space creates whitespace and breathing room.
-8. Use padding (20-50) on the ROOT node to create margins. Use gap (16-40) between siblings.
-9. Mix row and column directions at different levels for dynamic layouts.
-10. Components can be placed alongside text (not just in a separate column). Be creative.
-11. Think like a magazine designer: hero element large, supporting text compact, whitespace is valuable.
-12. Choose text colors that contrast well with the background image.
-13. Use strokeColor for text over busy or colorful backgrounds to ensure readability.
+10. DO NOT make a boring 50/50 split. Vary proportions: 65/35, 70/30, or asymmetric layouts.
+11. Sibling percentages do NOT need to sum to 100% — unused space = whitespace = good design.
+12. Use padding (20-60) on ROOT and containers. Use gap (16-40) between siblings.
+13. Mix row and column directions at different levels for dynamic layouts.
+14. Components can be placed alongside text (not just in a separate column). Be creative.
+15. Think like a magazine designer: hero element large, supporting text compact, background breathes.
+16. Choose text colors that contrast well with the background image.
+17. Use strokeColor for text over busy or colorful backgrounds to ensure readability.
+18. If reference images are provided, draw INSPIRATION from their composition and spacing style.
 
 OUTPUT FORMAT — respond with ONLY this JSON (no markdown, no explanation):
 {
