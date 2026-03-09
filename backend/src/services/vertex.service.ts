@@ -5150,7 +5150,7 @@ OUTPUT FORMAT — respond with ONLY this JSON (no markdown, no explanation):
     const embedResp = await this.client.models.embedContent({
       model: "text-embedding-004",
       contents: description,
-      config: { taskType: "RETRIEVAL_QUERY" as any },
+      config: { taskType: "RETRIEVAL_QUERY" as any, outputDimensionality: 1536 },
     });
     const embedding = (embedResp as any).embeddings?.[0]?.values || [];
 

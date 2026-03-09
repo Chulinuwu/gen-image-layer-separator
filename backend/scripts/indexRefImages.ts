@@ -173,7 +173,7 @@ async function embedDescription(
       client.models.embedContent({
         model: EMBEDDING_MODEL,
         contents: description,
-        config: { taskType: "RETRIEVAL_DOCUMENT" as any },
+        config: { taskType: "RETRIEVAL_DOCUMENT" as any, outputDimensionality: 1536 },
       }),
     "embed",
   );
