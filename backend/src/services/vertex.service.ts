@@ -292,6 +292,7 @@ export class AIService {
    * Step 0: Layout Strategy Planner (DesignAsCode-inspired Plan phase)
    * Thinks about composition BEFORE committing to pixel coordinates.
    * Separates "what should the layout look like?" from "give me coordinates".
+   * @deprecated Replaced by flex tree layout system
    */
   async planLayoutStrategy(
     imageBuffer: Buffer,
@@ -1946,6 +1947,7 @@ Example html_overlay for "2 ต่อ รับฟรี บัตรขึ้�
    * SVG layout generation — AI outputs svg_overlay string.
    * Uses absolute px coordinates based on actual canvas size.
    * Box-model mental model: <g transform> = container, <rect> = background, <tspan dy> = line stack.
+   * @deprecated Use suggestFlexLayout() instead
    */
   async suggestLayoutSVG(
     imageBuffer: Buffer,
@@ -2313,6 +2315,7 @@ CRITICAL Y-POSITION RULE (MUST FOLLOW):
    * Ask the AI for Layout Intent JSON — creative decisions only (text blocks,
    * hierarchy, colors, approximate font sizes).  The server-side svgBuilder
    * will turn this into pixel-perfect SVG, so the AI never has to do spatial math.
+   * @deprecated Use suggestFlexLayout() instead
    */
   async suggestLayoutIntent(
     imageBuffer: Buffer,
