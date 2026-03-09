@@ -5078,6 +5078,56 @@ OUTPUT FORMAT — respond with ONLY this JSON (no markdown, no explanation):
       };
     }
   }
+
+  /**
+   * Describe an image briefly, then embed the description for similarity search.
+   */
+  async describeAndEmbed(
+    imageBuffer: Buffer,
+    mimeType: string,
+  ): Promise<{ description: string; embedding: number[] }> {
+    // Resize for efficiency
+    let processingBuffer = imageBuffer;
+    let processingMime = mimeType;
+    try {
+      const meta = await sharp(imageBuffer).metadata();
+      const origW = meta.width || 1024;
+      const targetW = Math.min(800, origW);
+      if (targetW < origW) {
+        processingBuffer = await sharp(imageBuffer)
+          .resize({ width: targetW })
+          .jpeg({ quality: 80 })
+          .toBuffer();
+        processingMime = "image/jpeg";
+      }
+    } catch {}
+
+    const model = process.env.GEMINI_TEXT_ENDPOINT || "gemini-2.5-flash";
+
+    // Describe the image
+    const descResp = await this.client.models.generateContent({
+      model,
+      contents: [{
+        role: "user",
+        parts: [
+          { inlineData: { mimeType: processingMime, data: processingBuffer.toString("base64") } },
+          { text: "Describe this image for ad-layout similarity matching in 2-3 sentences. Cover: layout areas (open space, busy areas), dominant colors, visual style, mood." },
+        ],
+      }],
+      config: { temperature: 0.3 },
+    });
+    const description = descResp.text?.trim() || "Generic advertisement background";
+
+    // Embed the description
+    const embedResp = await this.client.models.embedContent({
+      model: "text-embedding-004",
+      contents: description,
+      config: { taskType: "RETRIEVAL_QUERY" as any },
+    });
+    const embedding = (embedResp as any).embeddings?.[0]?.values || [];
+
+    return { description, embedding };
+  }
 }
 
 export const vertexService = new AIService();
