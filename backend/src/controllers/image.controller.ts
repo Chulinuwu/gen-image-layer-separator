@@ -1619,7 +1619,7 @@ export const createCampaign = async (req: Request, res: Response) => {
         );
 
         console.log(`[Pass2] Flex layout: vibe="${flexResult.campaign_vibe}", tree received`);
-        console.log(`[Pass2] Flex tree JSON:\n${JSON.stringify(flexResult.flexTree, null, 2)}`);
+        console.log(`[Pass2] Flex tree JSON: ${JSON.stringify(flexResult.flexTree).substring(0, 500)}`);
 
         if (flexResult.layoutThought) {
           logEvent("Layout Design Reasoning", flexResult.layoutThought.substring(0, 1500));

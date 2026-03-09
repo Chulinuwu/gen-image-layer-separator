@@ -4848,10 +4848,11 @@ YOUR_IMPROVED_HTML_STRING_WITH_SINGLE_QUOTE_ATTRIBUTES
       /* use original */
     }
 
+    // Use best text model — gemini-2.5-pro for layout reasoning
     const model =
-      process.env.GEMINI_MODEL_ENDPOINT_2 ||
+      process.env.GEMINI_TEXT_ENDPOINT ||
       process.env.GEMINI_MODEL_ENDPOINT ||
-      "gemini-2.0-flash-exp";
+      "gemini-2.5-flash";
 
     // ── Build prompt ──
     const componentsList =
@@ -5129,7 +5130,8 @@ KEY INSIGHT from examples: Components are MIXED with text nodes inside the same 
         "[FlexLayout] Failed to parse AI response, using fallback.",
         err,
       );
-      console.error("[FlexLayout] Raw response was:", raw.substring(0, 500));
+      console.error("[FlexLayout] Raw response was:", raw.substring(0, 1000));
+      traceAI("Flex Layout PARSE ERROR", `Error: ${err}\n\nRaw response (first 2000 chars):\n${raw.substring(0, 2000)}`);
 
       // Fallback: simple single-column layout with all text
       const textLines = targetText
