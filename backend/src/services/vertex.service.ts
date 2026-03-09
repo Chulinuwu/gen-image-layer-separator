@@ -13,6 +13,7 @@ import path from "path";
 import os from "os";
 import dotenv from "dotenv";
 import { traceAI } from "../utils/ai-logger";
+import { FlexNode } from "../utils/flexLayout";
 
 // RMBG-2.0 model singleton — loaded once, reused across all calls
 // Using @huggingface/transformers which runs ONNX models locally (no API call)
@@ -331,6 +332,25 @@ export class AIService {
       ? `\nCURRENT COMPONENT POSITIONS (normalized 0-1000 coordinates):\n${componentPositions.map(c => `- ${c.label}: top=${c.top}, left=${c.left}, width=${c.width}, height=${c.height} (covers x:${c.left}-${c.left + c.width}, y:${c.top}-${c.top + c.height})`).join('\n')}`
       : '';
 
+    // Dynamically estimate text space requirements from content
+    const textLines = targetText.split('\n').filter((l: string) => l.trim().length > 0);
+    const hasPromoNumber = /\d/.test(targetText); // contains a number → needs large promo space
+    // Estimate: promo ~150 units, each other line ~50-60 units, gaps ~20 per line
+    const estimatedPromoHeight = hasPromoNumber ? 180 : 0;
+    const estimatedOtherLinesHeight = (textLines.length - (hasPromoNumber ? 1 : 0)) * 65;
+    const estimatedTextHeight = Math.round(estimatedPromoHeight + estimatedOtherLinesHeight + 40); // +40 for padding
+    const totalComponentArea = (componentPositions || []).reduce((sum, c) => sum + c.width * c.height, 0);
+    const canvasArea = 1000 * 1000; // normalized space
+    const componentAreaPercent = Math.round((totalComponentArea / canvasArea) * 100);
+
+    const textSpaceBlock = `
+TEXT SPACE ANALYSIS (computed from content):
+- Text items: ${textLines.length} lines
+- Contains promotional number: ${hasPromoNumber ? 'YES — needs large font space' : 'NO'}
+- Estimated minimum text zone height needed: ~${estimatedTextHeight} units (out of 1000)
+- Component area used: ${componentAreaPercent}% of canvas
+- IMPORTANT: If components use too much space, SHRINK components to make room for text. Text is the primary message.`;
+
     // Compute overlap warnings to include in prompt
     let overlapWarnings = '';
     if (componentPositions && componentPositions.length > 1) {
@@ -358,7 +378,7 @@ Look at this campaign image and text brief. Output a UNIFIED LAYOUT STRATEGY in 
 
 CRITICAL: You must plan WHERE COMPONENTS GO and WHERE TEXT GOES **together** as ONE layout.
 Components and text MUST NOT overlap. Think of the canvas as a grid — assign clear regions.
-${componentPositionsBlock}${overlapWarnings}
+${componentPositionsBlock}${overlapWarnings}${textSpaceBlock}
 
 TEXT BRIEF:
 """
@@ -389,7 +409,7 @@ RULES FOR text_zone + component_layout:
 2. component_layout items MUST NOT OVERLAP EACH OTHER — leave at least 30 units gap between any two components
 3. All elements must be within 50-950 range (safe zone margins)
 4. Components should be on one side, text on the opposite side or in a clear gap
-5. text_zone must be large enough for readable text: at least 250 wide AND 300 tall
+5. text_zone must be large enough for ALL text to fit at readable sizes — see TEXT SPACE ANALYSIS above for the estimated height needed. Shrink components if necessary to make room.
 6. If components are spread across both sides, stack text above or below them
 7. EVERY element on canvas must be clearly readable — no element should obscure another
 
@@ -4732,6 +4752,317 @@ YOUR_IMPROVED_HTML_STRING_WITH_SINGLE_QUOTE_ATTRIBUTES
       await this._removeBgRMBG2(dummyBuffer);
     } catch (e) {
       console.warn("[RMBG-2.0] Warmup skip/fail:", e);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Flex-tree layout: AI outputs a hierarchical flex tree JSON
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Validate a flex tree produced by the AI. Returns an array of warning
+   * strings (empty = valid). Does not throw — AI output is best-effort.
+   */
+  private validateFlexTree(
+    node: FlexNode,
+    componentLabels: string[],
+    path = "root",
+  ): string[] {
+    const warnings: string[] = [];
+
+    if (!node.id) {
+      warnings.push(`${path}: missing id`);
+    }
+
+    const isContainer =
+      node.direction !== undefined || Array.isArray(node.children);
+
+    if (isContainer) {
+      if (!node.direction) {
+        warnings.push(`${path}: container missing direction`);
+      }
+      if (!Array.isArray(node.children) || node.children.length === 0) {
+        warnings.push(`${path}: container has no children`);
+      } else {
+        for (let i = 0; i < node.children.length; i++) {
+          const childPath = `${path}.children[${i}]`;
+          warnings.push(
+            ...this.validateFlexTree(node.children[i], componentLabels, childPath),
+          );
+        }
+      }
+    } else {
+      // Leaf node
+      if (node.type === "component") {
+        if (!node.label) {
+          warnings.push(`${path}: component leaf missing label`);
+        } else if (!componentLabels.includes(node.label)) {
+          warnings.push(
+            `${path}: component label "${node.label}" not in available labels [${componentLabels.join(", ")}]`,
+          );
+        }
+      } else if (node.type === "text") {
+        if (!node.text) {
+          warnings.push(`${path}: text leaf missing text content`);
+        }
+      }
+    }
+
+    return warnings;
+  }
+
+  /**
+   * Ask the AI for a Flex Tree JSON — a hierarchical layout tree with
+   * row/column containers and text/component leaves.  The flex layout engine
+   * (`computeFlexLayout`) will turn this into pixel-level bounding boxes.
+   */
+  async suggestFlexLayout(
+    imageBuffer: Buffer,
+    mimeType: string,
+    targetText: string,
+    componentLabels: string[],
+    canvasSize: { w: number; h: number },
+  ): Promise<{
+    flexTree: FlexNode;
+    campaign_vibe: string;
+    background_description: string;
+  }> {
+    // ── Image preprocessing ──
+    let processingBuffer = imageBuffer;
+    let processingMime = mimeType;
+    try {
+      const meta = await sharp(imageBuffer).metadata();
+      const origW = meta.width || canvasSize.w;
+      processingBuffer = await sharp(imageBuffer)
+        .resize(Math.min(1500, origW))
+        .jpeg({ quality: 90 })
+        .toBuffer();
+      processingMime = "image/jpeg";
+    } catch (_e) {
+      /* use original */
+    }
+
+    const model =
+      process.env.GEMINI_MODEL_ENDPOINT_2 ||
+      process.env.GEMINI_MODEL_ENDPOINT ||
+      "gemini-2.0-flash-exp";
+
+    // ── Build prompt ──
+    const componentsList =
+      componentLabels.length > 0
+        ? `Available die-cut component images:\n${componentLabels.map((l) => `  - "${l}"`).join("\n")}`
+        : "No die-cut components available.";
+
+    const prompt = `You are a professional graphic designer creating an advertising campaign layout.
+
+CAMPAIGN TEXT TO PLACE:
+${targetText}
+
+${componentsList}
+
+CANVAS SIZE: ${canvasSize.w}px × ${canvasSize.h}px
+
+YOUR TASK: Output a flex tree JSON that describes the layout hierarchy.
+
+THE FLEX TREE FORMAT:
+A tree of nested containers (row/column) with leaf nodes (text or component).
+
+CONTAINER NODE:
+{
+  "id": "unique-id",
+  "direction": "row" | "column",   // how children are arranged
+  "children": [ ... ],             // array of child nodes
+  "height": "40%",                 // percentage of parent's main axis (for column parent)
+  "width": "60%",                  // percentage of parent's main axis (for row parent)
+  "gap": 8,                        // optional px gap between children (default 8)
+  "padding": 10                    // optional px inset from edges (default 0)
+}
+
+TEXT LEAF NODE:
+{
+  "id": "unique-id",
+  "type": "text",
+  "text": "the text content",
+  "height": "30%",                 // percentage along parent's main axis
+  "style": {
+    "fontSize": "xlarge",          // options: "xlarge" | "large" | "medium" | "small" | "xsmall"
+    "fontWeight": "900",           // options: "400" | "700" | "900"
+    "color": "#FFD700",
+    "strokeColor": "#000000",      // optional outline for readability on busy backgrounds
+    "strokeWidth": 2,              // optional
+    "align": "center"              // options: "left" | "center" | "right"
+  }
+}
+
+COMPONENT LEAF NODE (die-cut image):
+{
+  "id": "unique-id",
+  "type": "component",
+  "label": "must match one of the available component labels exactly",
+  "height": "50%"                  // percentage along parent's main axis
+}
+
+LAYOUT RULES:
+1. Every line of the campaign text MUST appear as a text leaf node.
+2. Every available component MUST appear exactly once as a component leaf.
+3. Maximum 2 levels of nesting (root container → child containers → leaves).
+4. Promotional numbers/prices should use fontSize "xlarge" or "large" and fontWeight "900".
+5. Fine print / legal text should use fontSize "xsmall" or "small" and fontWeight "400".
+6. When both components and text exist, prefer placing them in separate columns (row at root with a text column and a component column).
+7. Percentage sizes of siblings should sum to approximately 100%.
+8. Choose text colors that contrast well with the background image.
+9. Use strokeColor for text over busy or colorful backgrounds to ensure readability.
+
+OUTPUT FORMAT — respond with ONLY this JSON (no markdown, no explanation):
+{
+  "flexTree": {
+    "id": "root",
+    "direction": "row",
+    "children": [ ... ]
+  },
+  "campaign_vibe": "brief description of the visual mood/style",
+  "background_description": "brief description of what's in the background image"
+}`;
+
+    console.log(
+      `[FlexLayout] Calling ${model} for flex tree layout (canvas: ${canvasSize.w}×${canvasSize.h}, components: ${componentLabels.length})`,
+    );
+
+    // ── Call the AI ──
+    const response = await this.client.models.generateContent({
+      model,
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              inlineData: {
+                mimeType: processingMime,
+                data: processingBuffer.toString("base64"),
+              },
+            },
+            { text: prompt },
+          ],
+        },
+      ],
+      config: { temperature: 0.7 },
+    });
+
+    const raw = response.text ?? "";
+    console.log(`[FlexLayout] Raw response length: ${raw.length} chars`);
+
+    // ── Parse response ──
+    try {
+      // Strip markdown code fences if present
+      const cleaned = raw
+        .replace(/^```(?:json)?\s*/i, "")
+        .replace(/\s*```$/i, "")
+        .trim();
+
+      const parsed = JSON.parse(cleaned);
+
+      if (!parsed.flexTree || typeof parsed.flexTree !== "object") {
+        throw new Error("Parsed JSON has no flexTree object");
+      }
+
+      // Validate the tree structure
+      const warnings = this.validateFlexTree(parsed.flexTree, componentLabels);
+      if (warnings.length > 0) {
+        console.warn(
+          `[FlexLayout] Validation warnings:\n  ${warnings.join("\n  ")}`,
+        );
+      }
+
+      console.log(
+        `[FlexLayout] Success — vibe: "${parsed.campaign_vibe}", warnings: ${warnings.length}`,
+      );
+
+      return {
+        flexTree: parsed.flexTree as FlexNode,
+        campaign_vibe: parsed.campaign_vibe || "modern advertising",
+        background_description:
+          parsed.background_description || "campaign background",
+      };
+    } catch (err) {
+      console.error(
+        "[FlexLayout] Failed to parse AI response, using fallback.",
+        err,
+      );
+      console.error("[FlexLayout] Raw response was:", raw.substring(0, 500));
+
+      // Fallback: simple single-column layout with all text
+      const textLines = targetText
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0);
+
+      const textChildren: FlexNode[] = textLines.map((line, i) => ({
+        id: `text-${i}`,
+        type: "text" as const,
+        text: line,
+        height: `${Math.floor(80 / textLines.length)}%`,
+        style: {
+          fontSize: i === 0 ? ("large" as const) : ("medium" as const),
+          fontWeight: i === 0 ? "900" : "400",
+          color: "#FFFFFF",
+          strokeColor: "#000000",
+          strokeWidth: 2,
+          align: "center" as const,
+        },
+      }));
+
+      const componentChildren: FlexNode[] = componentLabels.map((label, i) => ({
+        id: `comp-${i}`,
+        type: "component" as const,
+        label,
+        height: `${Math.floor(100 / componentLabels.length)}%`,
+      }));
+
+      const rootChildren: FlexNode[] = [];
+      if (textChildren.length > 0) {
+        rootChildren.push({
+          id: "text-col",
+          direction: "column",
+          children: textChildren,
+          width:
+            componentChildren.length > 0 ? "60%" : "100%",
+        });
+      }
+      if (componentChildren.length > 0) {
+        rootChildren.push({
+          id: "comp-col",
+          direction: "column",
+          children: componentChildren,
+          width: textChildren.length > 0 ? "40%" : "100%",
+        });
+      }
+
+      return {
+        flexTree: {
+          id: "root",
+          direction: "row",
+          children:
+            rootChildren.length > 0
+              ? rootChildren
+              : [
+                  {
+                    id: "fallback-text",
+                    type: "text",
+                    text: targetText,
+                    style: {
+                      fontSize: "large",
+                      fontWeight: "700",
+                      color: "#FFFFFF",
+                      strokeColor: "#000000",
+                      strokeWidth: 2,
+                      align: "center",
+                    },
+                  },
+                ],
+        },
+        campaign_vibe: "default",
+        background_description: "campaign background",
+      };
     }
   }
 }
