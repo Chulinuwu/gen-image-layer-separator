@@ -720,7 +720,7 @@ ${
            * overlap_left = suggested_position.left
            * overlap_width = min(200, suggested_position.width / 2)
            * overlap_height = suggested_position.height - 200
-           * Set interaction_zone.enabled = true for primary characters
+           * Set interaction_zone.enabled = false (DISABLED — no intentional overlap until system is ready)
          - MASCOTS / SECONDARY elements: z_index = 10 (same level as text)
          - LOGOS / BADGES: z_index = 20 (always on top)
          LOGOS / BADGES / RIBBONS: keep near detected position, scale width/height up by 20%
@@ -859,7 +859,7 @@ ${
             },
             "z_index": 15,
             "interaction_zone": {
-              "enabled": true,
+              "enabled": false,
               "overlap_top": 200,
               "overlap_left": 350,
               "overlap_width": 300,
@@ -1818,7 +1818,7 @@ RULES:
 3. Do NOT center components — centered blocks text space
 4. Scale component to fill 40-60% of canvas height for visual impact
 5. Use z_index: 15 for components (renders in front of text)
-6. interaction_zone: set overlap area where text is allowed to peek in front of component for depth
+6. interaction_zone: DISABLED — set enabled = false (no intentional overlap until system is ready)
 
 COMPONENT SIDE-ANCHOR PATTERN (preferred):
   - Mascot on RIGHT → text group on LEFT (left:5% to left:50%)
@@ -1845,7 +1845,7 @@ Do NOT wrap the HTML inside a JSON string. Separate them!
       "position": { "top": 600, "left": 600, "width": 350, "height": 400, "rotation": 0 },
       "suggested_position": { "top": 100, "left": 500, "width": 450, "height": 850, "rotation": 0, "rationale": "..." },
       "z_index": 15,
-      "interaction_zone": { "enabled": true, "overlap_top": 200, "overlap_left": 500, "overlap_width": 200, "overlap_height": 500 }
+      "interaction_zone": { "enabled": false, "overlap_top": 200, "overlap_left": 500, "overlap_width": 200, "overlap_height": 500 }
     }
   ]
 }
@@ -2200,7 +2200,7 @@ No markdown fences. No JSON wrapping of SVG. SVG first, META second.
   "background_description": "...",
   "campaign_vibe": "...",
   "no_go_zones": [{ "label": "face", "priority": "HIGH", "area": { "top": 0, "left": 0, "width": 0, "height": 0 }, "reason": "face" }],
-  "components": [{ "label": "name", "position": { "top": 0, "left": 0, "width": 0, "height": 0, "rotation": 0 }, "suggested_position": { "top": 0, "left": 0, "width": 0, "height": 0, "rotation": 0, "rationale": "..." }, "z_index": 15, "interaction_zone": { "enabled": true, "overlap_top": 0, "overlap_left": 0, "overlap_width": 0, "overlap_height": 0 } }]
+  "components": [{ "label": "name", "position": { "top": 0, "left": 0, "width": 0, "height": 0, "rotation": 0 }, "suggested_position": { "top": 0, "left": 0, "width": 0, "height": 0, "rotation": 0, "rationale": "..." }, "z_index": 15, "interaction_zone": { "enabled": false, "overlap_top": 0, "overlap_left": 0, "overlap_width": 0, "overlap_height": 0 } }]
 }
 </META>
 
@@ -2585,7 +2585,7 @@ YOUR_IMPROVED_SVG_HERE
 <META>
 {
   "components": [
-    { "label": "name", "position": { "top": 100, "left": 500, "width": 450, "height": 850, "rotation": 0 }, "suggested_position": { "top": 100, "left": 500, "width": 450, "height": 850, "rotation": 0, "rationale": "why" }, "z_index": 15, "interaction_zone": { "enabled": true, "overlap_top": 200, "overlap_left": 500, "overlap_width": 200, "overlap_height": 500 } }
+    { "label": "name", "position": { "top": 100, "left": 500, "width": 450, "height": 850, "rotation": 0 }, "suggested_position": { "top": 100, "left": 500, "width": 450, "height": 850, "rotation": 0, "rationale": "why" }, "z_index": 15, "interaction_zone": { "enabled": false, "overlap_top": 200, "overlap_left": 500, "overlap_width": 200, "overlap_height": 500 } }
   ]
 }
 </META>`;
@@ -3040,7 +3040,7 @@ Do NOT wrap the HTML inside a JSON string. Separate them!
       "position": { "top": <corrected>, "left": <corrected>, "width": <same or adjusted>, "height": <same or adjusted>, "rotation": 0 },
       "suggested_position": { "top": <ideal>, "left": <ideal>, "width": <ideal>, "height": <ideal>, "rotation": 0, "rationale": "why this position" },
       "z_index": 15,
-      "interaction_zone": { "enabled": true, "overlap_top": <n>, "overlap_left": <n>, "overlap_width": <n>, "overlap_height": <n> }
+      "interaction_zone": { "enabled": false, "overlap_top": <n>, "overlap_left": <n>, "overlap_width": <n>, "overlap_height": <n> }
     }
   ]
 }
@@ -3377,7 +3377,7 @@ YOUR_IMPROVED_HTML_STRING_WITH_SINGLE_QUOTE_ATTRIBUTES
       ❌ Woman holding a phone + "Purple Smartphone" listed separately → WRONG, causes duplicates
 
       Z-INDEX RULES (set per component type):
-      - PRIMARY characters/persons: z_index = 15, interaction_zone.enabled = true
+      - PRIMARY characters/persons: z_index = 15, interaction_zone.enabled = false (DISABLED — no intentional overlap until system is ready)
       - MASCOTS / secondary characters: z_index = 10, interaction_zone.enabled = false
       - LOGOS / BADGES / decorative icons: z_index = 20, interaction_zone.enabled = false
 
@@ -3389,7 +3389,7 @@ YOUR_IMPROVED_HTML_STRING_WITH_SINGLE_QUOTE_ATTRIBUTES
             "description": "Detailed visual description for recreation (e.g. 'A cute 3D cartoon Thai boy character wearing traditional gold and red Thai costume, waving hand, chibi style')",
             "position": { "top": 0, "left": 0, "width": 0, "height": 0, "rotation": 0 },
             "z_index": 15,
-            "interaction_zone": { "enabled": true, "overlap_top": 200, "overlap_left": 350, "overlap_width": 300, "overlap_height": 400 }
+            "interaction_zone": { "enabled": false, "overlap_top": 200, "overlap_left": 350, "overlap_width": 300, "overlap_height": 400 }
           }
         ]
       }

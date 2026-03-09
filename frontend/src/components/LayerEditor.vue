@@ -17,6 +17,18 @@ const bgFile = ref<File | null>(null);
 const previewUrl = ref<string | null>(null);
 const bgPreviewUrl = ref<string | null>(null);
 const canvasContainer = ref<HTMLElement | null>(null);
+const editorCanvasEl = ref<HTMLElement | null>(null);
+
+// Force canvas aspect-ratio to match the loaded BG image — must match preview exactly
+const onEditorImageLoad = (e: Event) => {
+  const img = e.target as HTMLImageElement;
+  if (img.naturalWidth && img.naturalHeight && editorCanvasEl.value) {
+    const ratio = `${img.naturalWidth} / ${img.naturalHeight}`;
+    editorCanvasEl.value.style.aspectRatio = ratio;
+    const rect = editorCanvasEl.value.getBoundingClientRect();
+    console.log(`[Editor] BG image natural: ${img.naturalWidth}x${img.naturalHeight}, container: ${Math.round(rect.width)}x${Math.round(rect.height)}, aspect-ratio: ${ratio}`);
+  }
+};
 const renderedImage = ref<string | null>(null);
 const hintText = ref("");
 const renderMode = ref("ai"); // 'ai' or 'simple'
@@ -98,13 +110,23 @@ watch(
       "[Editor] Campaign data received:",
       JSON.stringify({
         referenceImage: data.referenceImage,
+        generatedBackgroundImageUrl: data.generatedBackgroundImageUrl || "NULL",
+        svg_overlay: data.svg_overlay ? `${data.svg_overlay.length} chars` : "NONE",
         textLayers: data.textLayers?.length || 0,
         visualComponents: data.visualComponents?.length || 0,
+        componentPositions: data.visualComponents?.map((c: any) => ({
+          label: c.label,
+          top: c.position?.top,
+          left: c.position?.left,
+          width: c.position?.width,
+          height: c.position?.height,
+        })),
       }),
     );
 
     // Load background (prefer generated clean background if available)
     const bgToUse = data.generatedBackgroundImageUrl || data.referenceImage;
+    console.log(`[Editor] BG URL: ${bgToUse} (generated: ${data.generatedBackgroundImageUrl || 'NULL'}, ref: ${data.referenceImage})`);
     if (bgToUse) {
       try {
         const response = await fetch(`http://localhost:5001${bgToUse}`);
@@ -176,45 +198,57 @@ watch(
       });
     }
 
-    // Character depth interaction: lower z_index of text inside character's interaction_zone
-    const characterLayers = imageLayers.filter(
-      (l: any) => l.interaction_zone?.enabled,
-    );
-    if (characterLayers.length > 0) {
-      textLayers.forEach((tl: any) => {
-        const tLeft = tl.x;
-        const tTop = tl.y;
-        const tRight = tl.x + tl.w;
-        const tBottom = tl.y + tl.h;
-        for (const cl of characterLayers) {
-          const iz = cl.interaction_zone;
-          const izLeft = iz.overlap_left / 10;
-          const izTop = iz.overlap_top / 10;
-          const izRight = (iz.overlap_left + iz.overlap_width) / 10;
-          const izBottom = (iz.overlap_top + iz.overlap_height) / 10;
-          const overlaps = !(
-            tRight <= izLeft ||
-            tLeft >= izRight ||
-            tBottom <= izTop ||
-            tTop >= izBottom
-          );
-          if (overlaps) {
-            tl.z_index = Math.min(tl.z_index, cl.z_index - 5);
-          }
-        }
-      });
-    }
+    // Character depth interaction: DISABLED — no intentional overlap until system is ready
+    // const characterLayers = imageLayers.filter(
+    //   (l: any) => l.interaction_zone?.enabled,
+    // );
+    // if (characterLayers.length > 0) {
+    //   textLayers.forEach((tl: any) => {
+    //     const tLeft = tl.x;
+    //     const tTop = tl.y;
+    //     const tRight = tl.x + tl.w;
+    //     const tBottom = tl.y + tl.h;
+    //     for (const cl of characterLayers) {
+    //       const iz = cl.interaction_zone;
+    //       const izLeft = iz.overlap_left / 10;
+    //       const izTop = iz.overlap_top / 10;
+    //       const izRight = (iz.overlap_left + iz.overlap_width) / 10;
+    //       const izBottom = (iz.overlap_top + iz.overlap_height) / 10;
+    //       const overlaps = !(
+    //         tRight <= izLeft ||
+    //         tLeft >= izRight ||
+    //         tBottom <= izTop ||
+    //         tTop >= izBottom
+    //       );
+    //       if (overlaps) {
+    //         tl.z_index = Math.min(tl.z_index, cl.z_index - 5);
+    //       }
+    //     }
+    //   });
+    // }
 
     // SVG overlay mode: text is in svg_overlay, only load component image layers
+    const hasCleanBg = !!data.generatedBackgroundImageUrl;
     if (data.svg_overlay && data.svg_overlay.length > 50) {
       svgOverlay.value = data.svg_overlay;
-      layers.value = [...imageLayers]; // components only — text in SVG overlay
+      // Only show die-cut components if we have a clean BG (without them baked in).
+      // If using reference image as BG, components are already visible in the photo.
+      if (hasCleanBg) {
+        layers.value = [...imageLayers]; // components only — text in SVG overlay
+      } else {
+        layers.value = []; // reference image already has components — only show SVG text
+        console.warn(
+          `[Editor] No clean BG — skipping component layers to avoid doubles`,
+        );
+      }
       console.log(
-        `[Editor] SVG mode: overlay ${data.svg_overlay.length} chars, ${imageLayers.length} component layers`,
+        `[Editor] SVG mode: overlay ${data.svg_overlay.length} chars, ${imageLayers.length} component layers, cleanBG=${hasCleanBg}`,
       );
     } else {
       svgOverlay.value = "";
-      layers.value = [...imageLayers, ...textLayers];
+      layers.value = hasCleanBg
+        ? [...imageLayers, ...textLayers]
+        : [...textLayers]; // skip component images if no clean BG
     }
 
     // Initial sync of text content to DOM refs
@@ -939,6 +973,7 @@ const downloadAsSvg = async () => {
       <div
         v-if="previewUrl || bgPreviewUrl || layers.length > 0"
         class="canvas"
+        ref="editorCanvasEl"
       >
         <img
           v-if="bgPreviewUrl || previewUrl"
@@ -949,6 +984,7 @@ const downloadAsSvg = async () => {
           class="bg-img"
           draggable="false"
           style="user-select: none; pointer-events: none"
+          @load="onEditorImageLoad"
         />
 
         <!-- SVG overlay — AI-generated SVG text, read-only -->
@@ -1310,6 +1346,9 @@ select {
 .editor-view {
   position: relative;
   width: 100%;
+  max-width: 600px; /* match preview canvas max-width so proportions look identical */
+  margin-left: auto;
+  margin-right: auto;
   background: #f2f4f7;
   border: 1px solid var(--border);
   border-radius: 12px;

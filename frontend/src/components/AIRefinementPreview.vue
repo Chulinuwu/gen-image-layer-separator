@@ -51,11 +51,12 @@
         >
           {{ showDebugBoxes ? "🔲 BBOX ON" : "⬜ BBOX OFF" }}
         </button>
-        <div class="canvas-content">
+        <div class="canvas-content" ref="previewCanvasContent">
           <img
             v-if="currentPreviewUrl"
             :src="currentPreviewUrl"
             class="design-preview"
+            @load="onPreviewImageLoad"
           />
           <div v-else class="empty-canvas">
             <div class="loader-ring"></div>
@@ -269,6 +270,18 @@ const pipelineSteps = ref<
   Array<{ label: string; src: string; elapsed?: string }>
 >([]);
 const showDebugBoxes = ref(true);
+const previewCanvasContent = ref<HTMLElement | null>(null);
+
+// Force container aspect-ratio to match the loaded image — prevents layout mismatch with editor
+const onPreviewImageLoad = (e: Event) => {
+  const img = e.target as HTMLImageElement;
+  if (img.naturalWidth && img.naturalHeight && previewCanvasContent.value) {
+    const ratio = `${img.naturalWidth} / ${img.naturalHeight}`;
+    previewCanvasContent.value.style.aspectRatio = ratio;
+    const rect = previewCanvasContent.value.getBoundingClientRect();
+    console.log(`[Preview] Image natural: ${img.naturalWidth}x${img.naturalHeight}, container: ${Math.round(rect.width)}x${Math.round(rect.height)}, aspect-ratio: ${ratio}`);
+  }
+};
 
 // SVG overlay mode — AI returns SVG string instead of HTML/CSS
 const liveSvgOverlay = ref<string>("");
@@ -434,6 +447,8 @@ function applyInteractionZoneDepth(
   rawTextLayers: any[],
   components: any[],
 ): void {
+  // Temporarily disabled — system not ready for intentional overlap
+  return;
   const charLayers = components.filter((c: any) => c.interaction_zone?.enabled);
   rawTextLayers.forEach((tl: any) => {
     const tLeft = (tl.position?.left || 0) / 10;
@@ -579,6 +594,7 @@ const handleSSEEvent = (event: string, data: any) => {
     case "background_ready":
       // Clean inpainted background — show on canvas
       currentPreviewUrl.value = `http://localhost:5001${data.previewUrl}`;
+      console.log(`[Preview] BG URL set to: ${data.previewUrl}`);
       addMessage("Clean background ready!", "success");
       break;
     case "debug_preview":
@@ -708,26 +724,25 @@ defineExpose({ connectSSE });
   flex: 1;
   min-width: 0;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
-  padding: 60px;
+  padding: 24px;
   background: #f0f2f5;
   position: relative;
+  overflow-y: auto;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .canvas-container {
   width: 100%;
   max-width: 600px;
-  max-height: 100%;
+  /* NO max-height — let image determine container height so % positions match editor */
   background: #fff;
   border: 1px solid var(--border);
   border-radius: 8px;
   position: relative;
   overflow: hidden;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.05);
-  display: flex;
-  flex-direction: column;
 }
 
 .canvas-label {
@@ -743,11 +758,10 @@ defineExpose({ connectSSE });
 
 .canvas-content {
   width: 100%;
-  height: 100%;
-  min-height: 400px;
   position: relative;
   overflow: hidden;
   container-type: inline-size;
+  line-height: 0; /* match editor: collapse whitespace below image */
 }
 
 .design-preview {
