@@ -261,6 +261,13 @@ async function main(): Promise<void> {
 
       newEntries.push({ filename, description, embedding });
 
+      // Save every 10 images to avoid losing progress on crash
+      if (newEntries.length % 10 === 0) {
+        const checkpoint = [...existingIndex, ...newEntries];
+        fs.writeFileSync(INDEX_PATH, JSON.stringify(checkpoint, null, 2), "utf-8");
+        console.log(`  💾 Checkpoint saved (${checkpoint.length} total entries)`);
+      }
+
       // Small delay between images to avoid rate limits
       if (i < newFiles.length - 1) {
         await sleep(500);
@@ -271,7 +278,7 @@ async function main(): Promise<void> {
     }
   }
 
-  // Merge and save
+  // Final save
   const finalIndex = [...existingIndex, ...newEntries];
   fs.writeFileSync(INDEX_PATH, JSON.stringify(finalIndex, null, 2), "utf-8");
 
