@@ -5,7 +5,7 @@ import path from "path";
 import sharp from "sharp";
 import { computeSafeZones, assignTextToZones } from "../utils/safeZones";
 import { buildSVG } from "../utils/svgBuilder";
-import { logEvent } from "../utils/ai-logger";
+import { logEvent, traceAI } from "../utils/ai-logger";
 
 export const processImage = async (req: Request, res: Response) => {
   try {
@@ -1286,6 +1286,43 @@ export const createCampaign = async (req: Request, res: Response) => {
           analysis.components = componentSuggestions;
         }
 
+        // Validate: check for remaining overlaps after plan
+        const overlapResults: string[] = [];
+        if (visualComponents.length > 1) {
+          for (let i = 0; i < visualComponents.length; i++) {
+            for (let j = i + 1; j < visualComponents.length; j++) {
+              const a = visualComponents[i].position;
+              const b = visualComponents[j].position;
+              const overlapX = Math.max(0, Math.min(a.left + a.width, b.left + b.width) - Math.max(a.left, b.left));
+              const overlapY = Math.max(0, Math.min(a.top + a.height, b.top + b.height) - Math.max(a.top, b.top));
+              if (overlapX > 0 && overlapY > 0) {
+                overlapResults.push(`"${visualComponents[i].label}" ↔ "${visualComponents[j].label}": ${overlapX}w × ${overlapY}h`);
+                console.warn(`[Plan] ⚠️ OVERLAP REMAINS: "${visualComponents[i].label}" and "${visualComponents[j].label}" overlap by ${overlapX}w × ${overlapY}h after plan`);
+              }
+            }
+          }
+        }
+
+        // Also validate text_zone vs components
+        if (layoutHint.text_zone) {
+          const tz = layoutHint.text_zone;
+          for (const comp of visualComponents) {
+            const cp = comp.position;
+            const overlapX = Math.max(0, Math.min(tz.left + tz.width, cp.left + cp.width) - Math.max(tz.left, cp.left));
+            const overlapY = Math.max(0, Math.min(tz.top + tz.height, cp.top + cp.height) - Math.max(tz.top, cp.top));
+            if (overlapX > 0 && overlapY > 0) {
+              overlapResults.push(`text_zone ↔ "${comp.label}": ${overlapX}w × ${overlapY}h`);
+              console.warn(`[Plan] ⚠️ TEXT-COMPONENT OVERLAP: text_zone overlaps "${comp.label}" by ${overlapX}w × ${overlapY}h`);
+            }
+          }
+        }
+
+        if (overlapResults.length > 0) {
+          console.warn(`[Plan] ⚠️ ${overlapResults.length} overlaps detected after plan`);
+        } else {
+          console.log(`[Plan] ✅ No overlaps — all elements have clear space`);
+        }
+
         sendSSE("progress", {
           step: "layout_strategy",
           message: `🎨 Layout strategy: "${layoutHint.layout_concept}"`,
@@ -1317,26 +1354,36 @@ export const createCampaign = async (req: Request, res: Response) => {
         canvasH = imgMeta.height || 1080;
 
         // Compute text-safe zone from component positions (normalized 0-1000 → canvas px)
+        // Helper: convert normalized 0-1000 rect to canvas px and CLAMP to canvas bounds
+        const normalizedToPixelsClamped = (norm: { left: number; top: number; width: number; height: number }) => {
+          let x = Math.round((norm.left / 1000) * canvasW);
+          let y = Math.round((norm.top / 1000) * canvasH);
+          let w = Math.round((norm.width / 1000) * canvasW);
+          let h = Math.round((norm.height / 1000) * canvasH);
+          // Clamp: zone must not extend past canvas
+          const EDGE_MARGIN = 20;
+          x = Math.max(EDGE_MARGIN, x);
+          y = Math.max(EDGE_MARGIN, y);
+          if (x + w > canvasW - EDGE_MARGIN) w = canvasW - EDGE_MARGIN - x;
+          if (y + h > canvasH - EDGE_MARGIN) h = canvasH - EDGE_MARGIN - y;
+          w = Math.max(w, 100); // minimum usable width
+          h = Math.max(h, 100);
+          return { x, y, w, h };
+        };
+
         const computeTextZone = (): { x: number; y: number; w: number; h: number } => {
           // Priority 1: Use the unified plan's text_zone (planned together with components)
           if (layoutHint?.text_zone && layoutHint.text_zone.width >= 200 && layoutHint.text_zone.height >= 200) {
-            console.log(`[TextZone] Using plan's unified text_zone: ${JSON.stringify(layoutHint.text_zone)}`);
-            return {
-              x: Math.round((layoutHint.text_zone.left / 1000) * canvasW),
-              y: Math.round((layoutHint.text_zone.top / 1000) * canvasH),
-              w: Math.round((layoutHint.text_zone.width / 1000) * canvasW),
-              h: Math.round((layoutHint.text_zone.height / 1000) * canvasH),
-            };
+            const zone = normalizedToPixelsClamped(layoutHint.text_zone);
+            console.log(`[TextZone] Using plan's unified text_zone: ${JSON.stringify(layoutHint.text_zone)} → clamped: ${JSON.stringify(zone)}`);
+            return zone;
           }
 
           // Priority 2: If art director specified a zone, use it
           if (artDirectorTextZone) {
-            return {
-              x: Math.round((artDirectorTextZone.left / 1000) * canvasW),
-              y: Math.round((artDirectorTextZone.top / 1000) * canvasH),
-              w: Math.round((artDirectorTextZone.width / 1000) * canvasW),
-              h: Math.round((artDirectorTextZone.height / 1000) * canvasH),
-            };
+            const zone = normalizedToPixelsClamped(artDirectorTextZone);
+            console.log(`[TextZone] Using artDirector zone → clamped: ${JSON.stringify(zone)}`);
+            return zone;
           }
 
           if (!fixedPositions?.length) {
@@ -1449,7 +1496,75 @@ export const createCampaign = async (req: Request, res: Response) => {
         };
 
         textZone = computeTextZone();
-        console.log(`[Pass2] Text zone: x=${textZone.x}, y=${textZone.y}, w=${textZone.w}, h=${textZone.h}`);
+        // Validate: zone must not exceed canvas
+        if (textZone.x + textZone.w > canvasW) {
+          console.warn(`[TextZone] RIGHT OVERFLOW DETECTED: x(${textZone.x}) + w(${textZone.w}) = ${textZone.x + textZone.w} > canvasW(${canvasW}). Clamping.`);
+          textZone.w = canvasW - textZone.x - 20;
+        }
+        if (textZone.y + textZone.h > canvasH) {
+          console.warn(`[TextZone] BOTTOM OVERFLOW DETECTED: y(${textZone.y}) + h(${textZone.h}) = ${textZone.y + textZone.h} > canvasH(${canvasH}). Clamping.`);
+          textZone.h = canvasH - textZone.y - 20;
+        }
+
+        // Validate: text zone must NOT overlap any component bounding box
+        // If overlap found, shrink the text zone to avoid the closest component
+        if (fixedPositions.length > 0) {
+          const zonePx = { ...textZone }; // already in px
+          for (const comp of fixedPositions) {
+            // Convert component position from normalized 0-1000 to px
+            const cx = Math.round((comp.left / 1000) * canvasW);
+            const cy = Math.round((comp.top / 1000) * canvasH);
+            const cw = Math.round((comp.width / 1000) * canvasW);
+            const ch = Math.round((comp.height / 1000) * canvasH);
+
+            // Check overlap (AABB intersection)
+            const overlapX = zonePx.x < cx + cw && zonePx.x + zonePx.w > cx;
+            const overlapY = zonePx.y < cy + ch && zonePx.y + zonePx.h > cy;
+
+            if (overlapX && overlapY) {
+              console.warn(`[TextZone] OVERLAP with "${comp.label}": zone(${zonePx.x}-${zonePx.x + zonePx.w}) vs comp(${cx}-${cx + cw})`);
+              // Determine which side has more space: clip from right or left
+              const spaceOnLeft = cx - zonePx.x; // space if we clip zone's right edge to component's left
+              const spaceOnRight = (zonePx.x + zonePx.w) - (cx + cw); // space if we clip zone's left edge to component's right
+
+              if (spaceOnLeft >= spaceOnRight && spaceOnLeft > 100) {
+                // Clip zone to LEFT of component
+                const oldW = zonePx.w;
+                zonePx.w = cx - zonePx.x - 20; // 20px gap
+                console.log(`[TextZone] Clipped RIGHT edge: w ${oldW} → ${zonePx.w} (left of ${comp.label})`);
+              } else if (spaceOnRight > 100) {
+                // Clip zone to RIGHT of component
+                const oldX = zonePx.x;
+                zonePx.x = cx + cw + 20; // 20px gap
+                zonePx.w = zonePx.w - (zonePx.x - oldX);
+                console.log(`[TextZone] Clipped LEFT edge: x ${oldX} → ${zonePx.x} (right of ${comp.label})`);
+              } else {
+                // Not enough horizontal space — try vertical clipping
+                const spaceAbove = cy - zonePx.y;
+                const spaceBelow = (zonePx.y + zonePx.h) - (cy + ch);
+                if (spaceAbove >= spaceBelow && spaceAbove > 100) {
+                  zonePx.h = cy - zonePx.y - 20;
+                  console.log(`[TextZone] Clipped BOTTOM edge: above ${comp.label}`);
+                } else if (spaceBelow > 100) {
+                  const oldY = zonePx.y;
+                  zonePx.y = cy + ch + 20;
+                  zonePx.h = zonePx.h - (zonePx.y - oldY);
+                  console.log(`[TextZone] Clipped TOP edge: below ${comp.label}`);
+                }
+              }
+            }
+          }
+          textZone = zonePx;
+        }
+
+        console.log(`[Pass2] Text zone (final): x=${textZone.x}, y=${textZone.y}, w=${textZone.w}, h=${textZone.h}, rightEdge=${textZone.x + textZone.w}, canvasW=${canvasW}`);
+        logEvent("Text Zone Computed", `Final text zone after clamping and overlap avoidance`, {
+          textZone,
+          canvasSize: { w: canvasW, h: canvasH },
+          componentPositions: fixedPositions,
+          planTextZone: layoutHint?.text_zone || "not provided",
+          planComponentLayout: layoutHint?.component_layout || "not provided",
+        });
 
         // Step A: AI provides creative intent (JSON, not SVG)
         const intent = await vertexService.suggestLayoutIntent(
@@ -1476,6 +1591,19 @@ export const createCampaign = async (req: Request, res: Response) => {
         analysis.campaign_vibe = intent.campaign_vibe || analysis.campaign_vibe;
 
         console.log(`[Pass2] SVG built: ${svgResult.blocks.length} blocks placed, ${svgOverlay.length} chars`);
+        logEvent("SVG Built", `Layout intent → SVG pipeline complete`, {
+          blockCount: svgResult.blocks.length,
+          blocks: svgResult.blocks.map(b => ({
+            role: b.role,
+            text: b.text.substring(0, 50),
+            x: b.x,
+            y: b.y,
+            fontSize: b.fontSize,
+            measuredWidth: b.measuredWidth,
+            lines: b.lines,
+          })),
+          textZone,
+        });
 
       } catch (pass2Err) {
         console.warn(
@@ -1537,7 +1665,7 @@ export const createCampaign = async (req: Request, res: Response) => {
     // ════════════════════════════════════════════════════════════════
     // Step 3: REFINEMENT LOOP — adjusts BOTH text AND component positions
     // ════════════════════════════════════════════════════════════════
-    const MAX_ITERATIONS = 3;
+    const MAX_ITERATIONS = 1;
     let currentIteration = 0;
     let lastCritique: any = { status: "FAIL" };
 
