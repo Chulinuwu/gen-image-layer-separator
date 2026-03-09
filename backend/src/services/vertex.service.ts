@@ -4830,6 +4830,8 @@ YOUR_IMPROVED_HTML_STRING_WITH_SINGLE_QUOTE_ATTRIBUTES
     flexTree: FlexNode;
     campaign_vibe: string;
     background_description: string;
+    layoutThought: string;
+    grouping: string;
   }> {
     // ── Image preprocessing ──
     let processingBuffer = imageBuffer;
@@ -4872,7 +4874,7 @@ THE LAST IMAGE is the actual background for this campaign. Analyze it:
 `
       : '';
 
-    const prompt = `You are a professional graphic designer creating an advertising campaign layout.
+    const prompt = `You are a master of 2D graphic design and visual composition, skilled at planning advertisement layouts.
 
 ${refSection}CAMPAIGN TEXT TO PLACE:
 ${targetText}
@@ -4881,7 +4883,34 @@ ${componentsList}
 
 CANVAS SIZE: ${canvasSize.w}px × ${canvasSize.h}px
 
-YOUR TASK: Output a flex tree JSON that describes the layout hierarchy.
+YOUR TASK: Plan and create a flex tree layout. You MUST follow this workflow in order:
+
+STEP 1 — DESIGN REASONING (mandatory):
+Write your design thinking inside <layout_thought>...</layout_thought> tags.
+You MUST cover:
+- Background analysis: describe what's in the image, where are open/calm areas vs busy areas
+- Visual hierarchy: which text is the hero element (biggest), which is supporting, which is fine print
+- Component placement strategy: where should each component go and why
+- Color strategy: what text colors will contrast well with the background
+- Composition style: what kind of layout will you use (NOT a boring 50/50 split)
+
+STEP 2 — ELEMENT GROUPING (mandatory):
+Write element groupings inside <grouping>...</grouping> tags as a JSON array.
+Group related elements that should be placed near each other:
+[
+  {"group_id": "G1", "children": ["headline", "subtitle"], "theme": "header block"},
+  {"group_id": "G2", "children": ["key_offer", "woman_component"], "theme": "hero section"},
+  {"group_id": "G3", "children": ["fine_print"], "theme": "legal footer"}
+]
+Use text line content or component labels as children identifiers.
+
+STEP 3 — FLEX TREE JSON:
+After your reasoning, output the final layout as JSON (no markdown fences):
+{
+  "flexTree": { ... },
+  "campaign_vibe": "brief mood description",
+  "background_description": "brief background description"
+}
 
 THE FLEX TREE FORMAT:
 A tree of nested containers (row/column) with leaf nodes (text or component).
@@ -4935,63 +4964,71 @@ BACKGROUND-AWARE DESIGN:
 9. Layout does NOT need to fill the entire canvas. Leave empty areas where the background is beautiful.
 
 CREATIVE LAYOUT GUIDANCE:
-10. DO NOT make a boring 50/50 split. Vary proportions: 65/35, 70/30, or asymmetric layouts.
-11. Sibling percentages do NOT need to sum to 100% — unused space = whitespace = good design.
-12. Use padding (20-60) on ROOT and containers. Use gap (16-40) between siblings.
-13. Mix row and column directions at different levels for dynamic layouts.
-14. Components can be placed alongside text (not just in a separate column). Be creative.
-15. Think like a magazine designer: hero element large, supporting text compact, background breathes.
-16. Choose text colors that contrast well with the background image.
-17. Use strokeColor for text over busy or colorful backgrounds to ensure readability.
-18. If reference images are provided, draw INSPIRATION from their composition and spacing style.
+10. Choose text colors that contrast well with the background image.
+11. Use strokeColor for text over busy or colorful backgrounds to ensure readability.
+12. If reference images are provided, study their composition and ADAPT their style.
 
-EXAMPLE LAYOUTS (for inspiration — DO NOT copy blindly, adapt to your content):
+⛔ FORBIDDEN PATTERNS — DO NOT DO THESE:
+- DO NOT split into "all text on left, all components on right" (or vice versa). This is boring.
+- DO NOT use a simple two-column 50/50 row split at root level.
+- DO NOT give every sibling the same percentage (e.g., all children at 33%).
+- DO NOT make every text block the same font size.
+- DO NOT fill the entire canvas — leave at least 15-25% as breathing whitespace.
 
-Example A — Text overlay on top half, components bottom-right:
+✅ REQUIRED CREATIVE PATTERNS — YOU MUST DO THESE:
+- MIX text and components in the SAME container. A component can sit between two text blocks.
+- Use ASYMMETRIC proportions: 70/30, 65/25 (leaving 10% whitespace), 40/35/15.
+- Root should use "column" direction with padding 30-60. Nest "row" containers inside for horizontal grouping.
+- Create a clear VISUAL HIERARCHY: one hero element (big number, key offer, or main component) gets 30-40% of canvas. Supporting text gets much less.
+- Place the KEY PROMOTIONAL NUMBER/PRICE as the LARGEST element — it should dominate visually.
+- Group related items: headline+subtitle together, offer+details together, component+caption together.
+- Fine print goes at very bottom, tiny.
+
+EXAMPLE LAYOUTS (study the STRUCTURE, adapt to your content):
+
+Example A — Hero offer with mixed content rows:
 {
-  "id": "root", "direction": "column", "padding": 40, "gap": 20,
+  "id": "root", "direction": "column", "padding": 40, "gap": 24,
   "children": [
-    { "id": "header", "direction": "column", "height": "35%", "gap": 8, "children": [
-      { "id": "h1", "type": "text", "text": "HEADLINE", "height": "60%", "style": {"fontSize":"xlarge","fontWeight":"900","color":"#FFFFFF","strokeColor":"#000","strokeWidth":3,"align":"left"} },
-      { "id": "h2", "type": "text", "text": "Subheadline", "height": "40%", "style": {"fontSize":"medium","fontWeight":"700","color":"#FFD700","align":"left"} }
+    { "id": "top-band", "direction": "row", "height": "18%", "gap": 16, "children": [
+      { "id": "headline", "type": "text", "text": "SUMMER SALE", "width": "55%", "style": {"fontSize":"large","fontWeight":"900","color":"#FFFFFF","strokeColor":"#000","strokeWidth":2,"align":"left"} },
+      { "id": "mascot", "type": "component", "label": "Mascot", "width": "25%" }
     ]},
-    { "id": "middle", "direction": "row", "height": "45%", "gap": 16, "children": [
-      { "id": "offer", "type": "text", "text": "GET FREE*", "width": "40%", "style": {"fontSize":"large","fontWeight":"900","color":"#FF0000","align":"center"} },
-      { "id": "person", "type": "component", "label": "Woman", "width": "60%" }
+    { "id": "hero-section", "direction": "row", "height": "35%", "gap": 20, "children": [
+      { "id": "big-number", "type": "text", "text": "50% OFF", "width": "45%", "style": {"fontSize":"xlarge","fontWeight":"900","color":"#FF0000","strokeColor":"#FFF","strokeWidth":3,"align":"center"} },
+      { "id": "person", "type": "component", "label": "Woman", "width": "45%" }
     ]},
-    { "id": "footer", "type": "text", "text": "Terms apply", "height": "10%", "style": {"fontSize":"xsmall","fontWeight":"400","color":"#CCCCCC","align":"left"} }
+    { "id": "details", "direction": "column", "height": "22%", "gap": 8, "children": [
+      { "id": "subtitle", "type": "text", "text": "Get rewards today", "height": "55%", "style": {"fontSize":"medium","fontWeight":"700","color":"#FFD700","align":"left"} },
+      { "id": "location", "type": "text", "text": "All branches", "height": "45%", "style": {"fontSize":"small","fontWeight":"400","color":"#FFFFFF","align":"left"} }
+    ]},
+    { "id": "fine", "type": "text", "text": "T&C apply", "height": "5%", "style": {"fontSize":"xsmall","fontWeight":"400","color":"#999","align":"left"} }
   ]
 }
 
-Example B — Components on left, stacked text on right:
+Example B — Vertical hero with side panel:
 {
-  "id": "root", "direction": "row", "padding": 50, "gap": 30,
+  "id": "root", "direction": "column", "padding": 50, "gap": 20,
   "children": [
-    { "id": "visual", "direction": "column", "width": "40%", "gap": 16, "children": [
-      { "id": "mascot", "type": "component", "label": "Mascot", "height": "50%" },
-      { "id": "promo", "type": "text", "text": "2x", "height": "50%", "style": {"fontSize":"xlarge","fontWeight":"900","color":"#FFD700","strokeColor":"#000","strokeWidth":4,"align":"center"} }
+    { "id": "hero", "type": "text", "text": "BIG DEAL", "height": "20%", "style": {"fontSize":"xlarge","fontWeight":"900","color":"#FFD700","strokeColor":"#000","strokeWidth":4,"align":"center"} },
+    { "id": "content", "direction": "row", "height": "50%", "gap": 24, "children": [
+      { "id": "left-stack", "direction": "column", "width": "55%", "gap": 12, "children": [
+        { "id": "offer", "type": "text", "text": "Free gift!", "height": "40%", "style": {"fontSize":"large","fontWeight":"900","color":"#FF0000","align":"left"} },
+        { "id": "desc", "type": "text", "text": "When you spend 500+", "height": "30%", "style": {"fontSize":"medium","fontWeight":"700","color":"#FFF","align":"left"} },
+        { "id": "mascot", "type": "component", "label": "Mascot", "height": "30%" }
+      ]},
+      { "id": "person", "type": "component", "label": "Woman", "width": "40%" }
     ]},
-    { "id": "info", "direction": "column", "width": "50%", "gap": 10, "children": [
-      { "id": "title", "type": "text", "text": "Join now", "height": "25%", "style": {"fontSize":"large","fontWeight":"900","color":"#FFFFFF","align":"left"} },
-      { "id": "desc", "type": "text", "text": "Details here", "height": "20%", "style": {"fontSize":"medium","fontWeight":"700","color":"#FFFFFF","align":"left"} },
-      { "id": "cta", "type": "text", "text": "Free ticket!", "height": "25%", "style": {"fontSize":"large","fontWeight":"900","color":"#FF0000","align":"left"} },
-      { "id": "fine", "type": "text", "text": "T&C apply", "height": "10%", "style": {"fontSize":"xsmall","fontWeight":"400","color":"#999","align":"left"} }
-    ]}
+    { "id": "fine", "type": "text", "text": "Terms apply", "height": "5%", "style": {"fontSize":"xsmall","fontWeight":"400","color":"#999","align":"left"} }
   ]
 }
 
-IMPORTANT: Notice how examples use varied proportions (40/50, 35/45/10), large padding (40-50), generous gaps (16-30), and DO NOT fill 100%. Adapt the layout to the background — if the BG has an interesting right side, put text on the left and vice versa.
-
-OUTPUT FORMAT — respond with ONLY this JSON (no markdown, no explanation):
-{
-  "flexTree": { ... your creative layout ... },
-  "campaign_vibe": "brief description of the visual mood/style",
-  "background_description": "brief description of what's in the background image"
-}`;
+KEY INSIGHT from examples: Components are MIXED with text nodes inside the same containers. The hero/promotional number is the LARGEST visual element. Root is always "column" with generous padding. Rows are used INSIDE to create horizontal groupings of text+component together.`;
 
     console.log(
       `[FlexLayout] Calling ${model} for flex tree layout (canvas: ${canvasSize.w}×${canvasSize.h}, components: ${componentLabels.length}, refImages: ${refImages?.length || 0})`,
     );
+    traceAI("Flex Layout Prompt", `Model: ${model}, canvas: ${canvasSize.w}×${canvasSize.h}, components: [${componentLabels.join(', ')}], refImages: ${refImages?.length || 0}, promptLength: ${prompt.length}`);
 
     // ── Build parts array ──
     const parts: any[] = [];
@@ -5021,15 +5058,46 @@ OUTPUT FORMAT — respond with ONLY this JSON (no markdown, no explanation):
     const raw = response.text ?? "";
     console.log(`[FlexLayout] Raw response length: ${raw.length} chars`);
 
+    // ── Extract CoT sections ──
+    const layoutThoughtMatch = raw.match(/<layout_thought>([\s\S]*?)<\/layout_thought>/);
+    const groupingMatch = raw.match(/<grouping>([\s\S]*?)<\/grouping>/);
+
+    const layoutThought = layoutThoughtMatch?.[1]?.trim() || "";
+    const groupingText = groupingMatch?.[1]?.trim() || "";
+
+    if (layoutThought) {
+      console.log(`[FlexLayout] Layout thought (${layoutThought.length} chars): "${layoutThought.substring(0, 200)}..."`);
+      traceAI("Flex Layout Thought", layoutThought.substring(0, 2000));
+    } else {
+      console.warn("[FlexLayout] No <layout_thought> found in response");
+    }
+
+    if (groupingText) {
+      console.log(`[FlexLayout] Grouping: ${groupingText.substring(0, 200)}`);
+      traceAI("Flex Layout Grouping", groupingText.substring(0, 1000));
+    } else {
+      console.warn("[FlexLayout] No <grouping> found in response");
+    }
+
     // ── Parse response ──
     try {
-      // Strip markdown code fences if present
-      const cleaned = raw
-        .replace(/^```(?:json)?\s*/i, "")
-        .replace(/\s*```$/i, "")
+      // Strip CoT sections and markdown fences, find the JSON object
+      let jsonStr = raw
+        .replace(/<layout_thought>[\s\S]*?<\/layout_thought>/g, "")
+        .replace(/<grouping>[\s\S]*?<\/grouping>/g, "")
+        .replace(/```(?:json)?\s*/gi, "")
+        .replace(/\s*```/gi, "")
         .trim();
 
-      const parsed = JSON.parse(cleaned);
+      // Find the JSON object
+      const jsonStart = jsonStr.indexOf("{");
+      const jsonEnd = jsonStr.lastIndexOf("}");
+      if (jsonStart === -1 || jsonEnd === -1) {
+        throw new Error("No JSON object found in response after stripping CoT sections");
+      }
+      jsonStr = jsonStr.substring(jsonStart, jsonEnd + 1);
+
+      const parsed = JSON.parse(jsonStr);
 
       if (!parsed.flexTree || typeof parsed.flexTree !== "object") {
         throw new Error("Parsed JSON has no flexTree object");
@@ -5046,12 +5114,15 @@ OUTPUT FORMAT — respond with ONLY this JSON (no markdown, no explanation):
       console.log(
         `[FlexLayout] Success — vibe: "${parsed.campaign_vibe}", warnings: ${warnings.length}`,
       );
+      traceAI("Flex Layout Response", `Vibe: "${parsed.campaign_vibe}", BG: "${parsed.background_description}", warnings: ${warnings.length}\nTree: ${JSON.stringify(parsed.flexTree, null, 2).substring(0, 1500)}`);
 
       return {
         flexTree: parsed.flexTree as FlexNode,
         campaign_vibe: parsed.campaign_vibe || "modern advertising",
         background_description:
           parsed.background_description || "campaign background",
+        layoutThought,
+        grouping: groupingText,
       };
     } catch (err) {
       console.error(
@@ -5134,6 +5205,8 @@ OUTPUT FORMAT — respond with ONLY this JSON (no markdown, no explanation):
         },
         campaign_vibe: "default",
         background_description: "campaign background",
+        layoutThought: "",
+        grouping: "",
       };
     }
   }

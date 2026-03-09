@@ -1573,20 +1573,38 @@ export const createCampaign = async (req: Request, res: Response) => {
 
         // ── Reference Image Lookup ──
         let refImageBuffers: Buffer[] = [];
+        console.log(`[Pass2] Starting reference image lookup...`);
+        logEvent("Reference Image Lookup", "Starting reference image search");
         try {
-          const { embedding } = await vertexService.describeAndEmbed(imageBuffer, mimeType);
+          console.log(`[Pass2] Calling describeAndEmbed (imageBuffer size: ${imageBuffer.length}, mimeType: ${mimeType})`);
+          const { description, embedding } = await vertexService.describeAndEmbed(imageBuffer, mimeType);
+          console.log(`[Pass2] Image described: "${description.substring(0, 100)}..." | embedding dims: ${embedding.length}`);
+          logEvent("Reference Image Lookup", `Image described for similarity search`, {
+            description: description.substring(0, 200),
+            embeddingDims: embedding.length,
+          });
           const refs = findSimilarRefs(embedding, 3);
+          console.log(`[Pass2] findSimilarRefs returned ${refs.length} results`);
           if (refs.length > 0) {
-            console.log(`[Pass2] Found ${refs.length} reference ads: ${refs.map(r => `${r.filename} (${r.score.toFixed(3)})`).join(', ')}`);
+            console.log(`[Pass2] Top reference ads: ${refs.map(r => `${r.filename} (${r.score.toFixed(3)})`).join(', ')}`);
+            logEvent("Reference Image Lookup", `Found ${refs.length} similar reference ads`, {
+              refs: refs.map(r => ({ filename: r.filename, score: r.score.toFixed(3), description: r.description.substring(0, 100) })),
+            });
             refImageBuffers = refs.map(r => fs.readFileSync(r.filepath));
             sendSSE("debug", {
               step: "ref_images",
               message: `Found ${refs.length} similar reference ads`,
               refs: refs.map(r => ({ filename: r.filename, score: r.score.toFixed(3), description: r.description })),
             });
+          } else {
+            logEvent("Reference Image Lookup", "No similar reference images found (index may be empty)");
           }
         } catch (err: any) {
-          console.warn(`[Pass2] Reference image search failed: ${err.message}`);
+          console.error(`[Pass2] ❌ Reference image search FAILED:`, err.message);
+          console.error(`[Pass2] Full error:`, err.stack || err);
+          logEvent("Reference Image Lookup", `❌ FAILED: ${err.message}`, {
+            stack: (err.stack || "").substring(0, 300),
+          });
         }
 
         // ── Flex Tree Pipeline ──
@@ -1602,6 +1620,13 @@ export const createCampaign = async (req: Request, res: Response) => {
 
         console.log(`[Pass2] Flex layout: vibe="${flexResult.campaign_vibe}", tree received`);
         console.log(`[Pass2] Flex tree JSON:\n${JSON.stringify(flexResult.flexTree, null, 2)}`);
+
+        if (flexResult.layoutThought) {
+          logEvent("Layout Design Reasoning", flexResult.layoutThought.substring(0, 1500));
+        }
+        if (flexResult.grouping) {
+          logEvent("Layout Element Grouping", flexResult.grouping.substring(0, 500));
+        }
 
         // Compute bounding boxes from flex tree
         const flexBoxes = computeFlexLayout(flexResult.flexTree, canvasW, canvasH);
@@ -1644,6 +1669,8 @@ export const createCampaign = async (req: Request, res: Response) => {
           step: "flex_layout",
           message: "Flex tree computed",
           flexTree: flexResult.flexTree,
+          layoutThought: flexResult.layoutThought?.substring(0, 1500) || "",
+          grouping: flexResult.grouping?.substring(0, 500) || "",
           boxes: flexBoxes.map(b => ({ id: b.id, type: b.type, x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.w), h: Math.round(b.h) })),
         });
         logEvent("Flex SVG Built", `Flex tree → SVG pipeline complete`, {
