@@ -5,6 +5,8 @@ import path from "path";
 import sharp from "sharp";
 import { computeSafeZones, assignTextToZones } from "../utils/safeZones";
 import { buildSVG } from "../utils/svgBuilder";
+import { computeFlexLayout } from '../utils/flexLayout';
+import { buildFlexSVG } from '../utils/svgBuilder';
 import { logEvent, traceAI } from "../utils/ai-logger";
 
 export const processImage = async (req: Request, res: Response) => {
@@ -1568,44 +1570,64 @@ export const createCampaign = async (req: Request, res: Response) => {
           planComponentLayout: layoutHint?.component_layout || "not provided",
         });
 
-        // Step A: AI provides creative intent (JSON, not SVG)
-        const intent = await vertexService.suggestLayoutIntent(
+        // ── Flex Tree Pipeline ──
+        const componentLabels = visualComponents.map((c) => c.label);
+        const flexResult = await vertexService.suggestFlexLayout(
           imageBuffer,
           mimeType,
           targetText,
-          textZone,
+          componentLabels,
           { w: canvasW, h: canvasH },
-          layoutHint,
         );
 
-        console.log(`[Pass2] Layout intent: ${intent.blocks.length} blocks, vibe="${intent.campaign_vibe}"`);
+        console.log(`[Pass2] Flex layout: vibe="${flexResult.campaign_vibe}", tree received`);
 
-        // Step B: Server builds measured SVG from intent
-        const svgResult = buildSVG({
-          blocks: intent.blocks,
-          textZone,
-          canvasSize: { w: canvasW, h: canvasH },
+        // Compute bounding boxes from flex tree
+        const flexBoxes = computeFlexLayout(flexResult.flexTree, canvasW, canvasH);
+        console.log(`[Pass2] Flex layout computed: ${flexBoxes.length} boxes`);
+
+        // Build component images map (label → imageUrl)
+        const componentImages = new Map<string, string>();
+        for (const vc of visualComponents) {
+          componentImages.set(vc.label, vc.imageUrl);
+        }
+
+        // Build single SVG from flex boxes
+        const svgResult = buildFlexSVG({
+          boxes: flexBoxes,
+          canvasW,
+          canvasH,
+          componentImages,
         });
 
         svgOverlay = svgResult.svg;
         analysis.svg_overlay = svgOverlay;
-        analysis.background_description = intent.background_description || analysis.background_description;
-        analysis.campaign_vibe = intent.campaign_vibe || analysis.campaign_vibe;
+        (analysis as any).flexTree = flexResult.flexTree;
+        analysis.background_description = flexResult.background_description || analysis.background_description;
+        analysis.campaign_vibe = flexResult.campaign_vibe || analysis.campaign_vibe;
 
-        console.log(`[Pass2] SVG built: ${svgResult.blocks.length} blocks placed, ${svgOverlay.length} chars`);
-        logEvent("SVG Built", `Layout intent → SVG pipeline complete`, {
-          blockCount: svgResult.blocks.length,
-          blocks: svgResult.blocks.map(b => ({
-            role: b.role,
-            text: b.text.substring(0, 50),
+        console.log(`[Pass2] Flex SVG built: ${svgResult.boxes.length} boxes, ${svgOverlay.length} chars`);
+        logEvent("Flex SVG Built", `Flex tree → SVG pipeline complete`, {
+          boxCount: svgResult.boxes.length,
+          boxes: svgResult.boxes.map(b => ({
+            id: b.id,
+            type: b.type,
             x: b.x,
             y: b.y,
-            fontSize: b.fontSize,
-            measuredWidth: b.measuredWidth,
-            lines: b.lines,
+            w: b.w,
+            h: b.h,
           })),
-          textZone,
         });
+
+        // LEGACY: replaced by flex tree pipeline
+        // const intent = await vertexService.suggestLayoutIntent(
+        //   imageBuffer, mimeType, targetText, textZone,
+        //   { w: canvasW, h: canvasH }, layoutHint,
+        // );
+        // const svgResult = buildSVG({
+        //   blocks: intent.blocks, textZone,
+        //   canvasSize: { w: canvasW, h: canvasH },
+        // });
 
       } catch (pass2Err) {
         console.warn(
@@ -2063,32 +2085,52 @@ export const createCampaign = async (req: Request, res: Response) => {
             : '');
           const refinedTargetText = `${targetText}\n\n[REFINEMENT FEEDBACK — address these issues]:\n${critiqueFeedback}`;
 
-          const refinedIntent = await vertexService.suggestLayoutIntent(
+          // ── Flex Tree Refinement Pipeline ──
+          const refinedComponentLabels = visualComponents.map((c) => c.label);
+          const refinedFlexResult = await vertexService.suggestFlexLayout(
             imageBuffer,
             mimeType,
             refinedTargetText,
-            textZone,
+            refinedComponentLabels,
             { w: canvasW, h: canvasH },
-            layoutHint,
           );
 
-          const refinedSvg = buildSVG({
-            blocks: refinedIntent.blocks,
-            textZone,
-            canvasSize: { w: canvasW, h: canvasH },
+          const refinedFlexBoxes = computeFlexLayout(refinedFlexResult.flexTree, canvasW, canvasH);
+
+          const refinedComponentImages = new Map<string, string>();
+          for (const vc of visualComponents) {
+            refinedComponentImages.set(vc.label, vc.imageUrl);
+          }
+
+          const refinedSvg = buildFlexSVG({
+            boxes: refinedFlexBoxes,
+            canvasW,
+            canvasH,
+            componentImages: refinedComponentImages,
           });
 
           if (refinedSvg.svg && refinedSvg.svg.length > 50) {
             svgOverlay = refinedSvg.svg;
             analysis.svg_overlay = svgOverlay;
-            console.log(`[Refine] Intent refined: ${refinedSvg.blocks.length} blocks`);
+            (analysis as any).flexTree = refinedFlexResult.flexTree;
+            console.log(`[Refine] Flex refined: ${refinedSvg.boxes.length} boxes`);
           } else {
             console.warn("[Refine] Refined SVG too short — keeping previous");
             sendSSE("refine_rejected", {
               iteration: currentIteration,
-              message: "⚠️ Refinement returned empty overlay — keeping previous layout.",
+              message: "Refinement returned empty overlay — keeping previous layout.",
             });
           }
+
+          // LEGACY: replaced by flex tree pipeline
+          // const refinedIntent = await vertexService.suggestLayoutIntent(
+          //   imageBuffer, mimeType, refinedTargetText, textZone,
+          //   { w: canvasW, h: canvasH }, layoutHint,
+          // );
+          // const refinedSvg = buildSVG({
+          //   blocks: refinedIntent.blocks, textZone,
+          //   canvasSize: { w: canvasW, h: canvasH },
+          // });
         } catch (refineErr) {
           console.warn("[Refine] Refinement failed, keeping current overlay:", refineErr);
         }
@@ -2124,6 +2166,7 @@ export const createCampaign = async (req: Request, res: Response) => {
         generatedBackgroundImageUrl,
         campaignVibe: analysis.campaign_vibe || "",
         svg_overlay: svgOverlay, // SVG overlay — main output
+        flexTree: (analysis as any).flexTree || null, // flex tree for client-side re-layout
         textLayers: [], // backward compat: empty in SVG mode
         visualComponents,
         stackImageUrls: stackImageUrls || [],
