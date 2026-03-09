@@ -4877,8 +4877,8 @@ CONTAINER NODE:
   "children": [ ... ],             // array of child nodes
   "height": "40%",                 // percentage of parent's main axis (for column parent)
   "width": "60%",                  // percentage of parent's main axis (for row parent)
-  "gap": 8,                        // optional px gap between children (default 8)
-  "padding": 10                    // optional px inset from edges (default 0)
+  "gap": 16,                       // px gap between children (default 8, use 16-40 for breathing room)
+  "padding": 30                    // px inset from edges (default 0, use 20-50 for margins)
 }
 
 TEXT LEAF NODE:
@@ -4905,22 +4905,30 @@ COMPONENT LEAF NODE (die-cut image):
   "height": "50%"                  // percentage along parent's main axis
 }
 
-LAYOUT RULES:
+LAYOUT DESIGN PRINCIPLES:
 1. Every line of the campaign text MUST appear as a text leaf node.
 2. Every available component MUST appear exactly once as a component leaf.
-3. Maximum 2 levels of nesting (root container → child containers → leaves).
+3. Use 2-3 levels of nesting for interesting composition (root → sections → subsections → leaves).
 4. Promotional numbers/prices should use fontSize "xlarge" or "large" and fontWeight "900".
 5. Fine print / legal text should use fontSize "xsmall" or "small" and fontWeight "400".
-6. When both components and text exist, prefer placing them in separate columns (row at root with a text column and a component column).
-7. Percentage sizes of siblings should sum to approximately 100%.
-8. Choose text colors that contrast well with the background image.
-9. Use strokeColor for text over busy or colorful backgrounds to ensure readability.
+
+CREATIVE LAYOUT GUIDANCE:
+6. DO NOT make a boring 50/50 split. Vary proportions: 65/35, 70/30, or asymmetric layouts.
+7. Sibling percentages do NOT need to sum to 100% — leaving unused space creates whitespace and breathing room.
+8. Use padding (20-50) on the ROOT node to create margins. Use gap (16-40) between siblings.
+9. Mix row and column directions at different levels for dynamic layouts.
+10. Components can be placed alongside text (not just in a separate column). Be creative.
+11. Think like a magazine designer: hero element large, supporting text compact, whitespace is valuable.
+12. Choose text colors that contrast well with the background image.
+13. Use strokeColor for text over busy or colorful backgrounds to ensure readability.
 
 OUTPUT FORMAT — respond with ONLY this JSON (no markdown, no explanation):
 {
   "flexTree": {
     "id": "root",
     "direction": "row",
+    "padding": 30,
+    "gap": 20,
     "children": [ ... ]
   },
   "campaign_vibe": "brief description of the visual mood/style",
@@ -5044,6 +5052,8 @@ OUTPUT FORMAT — respond with ONLY this JSON (no markdown, no explanation):
         flexTree: {
           id: "root",
           direction: "row",
+          padding: 30,
+          gap: 20,
           children:
             rootChildren.length > 0
               ? rootChildren
