@@ -91,6 +91,13 @@ def compute_flex_layout(root: FlexNode | dict, canvas_w: float, canvas_h: float)
         root = dict_to_flex_node(root)
     results: list[LayoutBox] = []
     _layout_node(root, 0, 0, canvas_w, canvas_h, results)
+    for box in results:
+        box.x = max(0, min(box.x, canvas_w))
+        box.y = max(0, min(box.y, canvas_h))
+        if box.x + box.w > canvas_w:
+            box.w = max(0, canvas_w - box.x)
+        if box.y + box.h > canvas_h:
+            box.h = max(0, canvas_h - box.y)
     return results
 
 

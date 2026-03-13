@@ -270,7 +270,7 @@ INSTRUCTIONS:
 - Result MUST be a CLEAN empty background plate of the original scene.
 - Do NOT add new elements.""",
                 aspect_ratio="3:4",
-                input_images=[{"buffer": image_buffer, "mimeType": mime_type}],
+                input_images=[{"buffer": image_buffer, "mime_type": mime_type}],
             )
             if bg_resp.get("buffer"):
                 generated_bg_url = _save_upload(bg_resp["buffer"], "bg-inpaint")
@@ -341,11 +341,11 @@ async def generate_and_separate(
     if images:
         for f in images:
             buf = await _read_upload(f)
-            input_images.append({"buffer": buf, "mimeType": f.content_type or "image/png"})
+            input_images.append({"buffer": buf, "mime_type": f.content_type or "image/png"})
     elif body and isinstance(body.get("images"), list):
         for b64 in body["images"]:
             buf, mime = _decode_base64_image(b64)
-            input_images.append({"buffer": buf, "mimeType": mime})
+            input_images.append({"buffer": buf, "mime_type": mime})
 
     result = await vertex_service.generate_image(
         prompt=prompt,
@@ -607,8 +607,8 @@ async def _step_diecut_and_inpaint(
                 for i, r in enumerate(diecut_results)
             ]
             stroke_bboxes = await vertex_service.extract_component_stroke_bboxes(diecut_with_pos)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[SafeZone] Stroke bbox extraction failed: {e}")
 
     except Exception as err:
         print(f"[Build-Up] Die-cut failed: {err}")
@@ -798,13 +798,13 @@ async def _step_refinement_loop(
             steps = critique.get("actionable_steps", [])
             if steps:
                 feedback += "\nActionable steps: " + "; ".join(steps)
-            refined_text = f"{target_text}\n\n[REFINEMENT FEEDBACK]:\n{feedback}"
 
             component_labels = [c["label"] for c in visual_components]
             refined_flex = await vertex_service.suggest_flex_layout(
-                image_bytes, mime, refined_text, component_labels,
+                image_bytes, mime, target_text, component_labels,
                 {"w": canvas_w, "h": canvas_h},
                 ref_image_buffers, footer_text or None,
+                refinement_feedback=feedback,
             )
 
             refined_boxes = compute_flex_layout(refined_flex["flexTree"], canvas_w, canvas_h)

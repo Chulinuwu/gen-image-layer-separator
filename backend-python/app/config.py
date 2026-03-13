@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     rmbg_model_size: int = 1024
     retry_count: int = 3
     retry_delay: float = 2.0
-    refinement_max_iterations: int = 1
+    refinement_max_iterations: int = 3
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

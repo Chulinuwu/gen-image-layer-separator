@@ -96,3 +96,33 @@ class TestFuzzyMatchLabel:
         warnings = svc._validate_flex_tree(tree, labels)
         assert not warnings
         assert tree["label"] == "Woman with smartphone and water gun"
+
+    def test_validate_tree_warns_on_overflow_percentages(self):
+        svc = VertexService.__new__(VertexService)
+        tree = {
+            "id": "root", "direction": "column", "children": [
+                {"id": "t1", "type": "text", "text": "A", "height": "60%"},
+                {"id": "t2", "type": "text", "text": "B", "height": "60%"},
+            ]
+        }
+        warnings = svc._validate_flex_tree(tree, [])
+        assert any("120%" in w for w in warnings)
+
+
+# --- Canvas clamping ---
+
+class TestCanvasClamping:
+    def test_boxes_clamped_to_canvas(self):
+        from app.utils.flex_layout import compute_flex_layout
+        tree = {
+            "id": "root", "direction": "column", "padding": 0, "children": [
+                {"id": "t1", "type": "text", "text": "A", "height": "80%"},
+                {"id": "t2", "type": "text", "text": "B", "height": "80%"},
+            ]
+        }
+        boxes = compute_flex_layout(tree, 100, 100)
+        for box in boxes:
+            assert box.x >= 0
+            assert box.y >= 0
+            assert box.x + box.w <= 100
+            assert box.y + box.h <= 100

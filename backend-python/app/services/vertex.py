@@ -202,6 +202,7 @@ class VertexService:
                 "top_p": 0.95,
                 "response_modalities": ["TEXT", "IMAGE"],
                 "safety_settings": SAFETY_OFF,
+                "image_config": {"aspect_ratio": aspect_ratio, "image_size": resolution},
             }
             stream = await self._generate_content_stream(target_model, parts, config)
             generated_buffer = None
@@ -679,13 +680,13 @@ Return as STRICT JSON:
                 pred = pred.squeeze(0)
 
             mask = (pred.numpy() * 255).astype(np.uint8)
-            mask_img = Image.fromarray(mask, mode="L").resize((MODEL_SIZE, MODEL_SIZE), Image.LANCZOS)
+            mask_img = Image.fromarray(mask, mode="L").resize((orig_w, orig_h), Image.LANCZOS)
 
-            # Apply mask to resized original
-            rgba = resized.copy().convert("RGBA")
+            # Apply mask to original resolution image
+            rgba = img.copy().convert("RGBA")
             rgba.putalpha(mask_img)
 
-            print(f"[{get_settings().rmbg_model_name}] Done ({MODEL_SIZE}x{MODEL_SIZE})")
+            print(f"[{get_settings().rmbg_model_name}] Done ({orig_w}x{orig_h})")
             return _img_to_bytes(rgba, "PNG")
         except Exception as e:
             print(f"[{get_settings().rmbg_model_name}] Runtime failure: {e}")
@@ -1279,8 +1280,18 @@ Return as STRICT JSON:
             children = node.get("children", [])
             if not children:
                 warnings.append(f"{path}: container has no children")
+            is_row = node.get("direction") == "row"
+            pct_sum = 0.0
             for i, child in enumerate(children):
+                val = child.get("width" if is_row else "height", "")
+                if isinstance(val, str) and val.strip().endswith("%"):
+                    try:
+                        pct_sum += float(val.strip()[:-1])
+                    except ValueError:
+                        pass
                 warnings.extend(self._validate_flex_tree(child, component_labels, f"{path}.children[{i}]"))
+            if pct_sum > 105:
+                warnings.append(f"{path}: children percentages sum to {pct_sum:.0f}% (> 100%), will overflow")
         else:
             if node.get("type") == "component":
                 if not node.get("label"):
@@ -1305,6 +1316,7 @@ Return as STRICT JSON:
         canvas_size: dict,
         ref_images: list[bytes] | None = None,
         footer_text: str | None = None,
+        refinement_feedback: str | None = None,
     ) -> dict:
         proc_buf, proc_mime = _resize_for_processing(image_buffer)
         model = self._text_model_best()
@@ -1321,6 +1333,13 @@ Return as STRICT JSON:
             f'FOOTER TEXT (MUST be at bottom): "{footer_text}"\n' if footer_text else ""
         )
 
+        feedback_section = ""
+        if refinement_feedback:
+            feedback_section = f"""
+[ART DIRECTOR FEEDBACK — DO NOT render as text content, use this to improve layout]:
+{refinement_feedback}
+"""
+
         prompt = f"""You are a master of 2D graphic design and visual composition.
 
 {ref_section}CAMPAIGN TEXT:
@@ -1329,7 +1348,7 @@ Return as STRICT JSON:
 {components_list}
 {footer_section}
 CANVAS: {canvas_size["w"]}x{canvas_size["h"]}px
-
+{feedback_section}
 STEP 1 — DESIGN REASONING in <layout_thought>...</layout_thought>
 STEP 2 — ELEMENT GROUPING in <grouping>...</grouping>
 STEP 3 — FLEX TREE JSON:
@@ -1342,9 +1361,13 @@ Component leaf: {{"id":"...", "type":"component", "label":"must match available 
 
 RULES:
 - Every text line MUST appear as a text leaf. Every component MUST appear exactly once.
-- Root is always "column" with padding. Use "row" inside for horizontal groupings.
+- Root MUST be "column" with padding >= 30px. Use "row" inside for horizontal groupings.
+- Children height/width percentages within any container MUST sum to <= 100%.
 - Hero/promo number = LARGEST element (fontSize "xlarge", fontWeight "900").
-- Group related elements together. Use strokeColor for readability on busy backgrounds."""
+- Group related elements together.
+- ALL text leaves MUST have strokeColor + strokeWidth >= 2 for readability on busy backgrounds.
+- Text color MUST contrast with the background image — avoid colors that blend into the photo.
+- Components should have reasonable sizing — not too small (< 15%) or too large (> 70%)."""
 
         parts = []
         if ref_images:
