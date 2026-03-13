@@ -127,7 +127,10 @@ class VertexService:
         }
         if not creds_info["client_email"] or not creds_info["private_key"]:
             raise ValueError("Missing required Google Cloud credentials for Vertex AI.")
-        creds = service_account.Credentials.from_service_account_info(creds_info)
+        creds = service_account.Credentials.from_service_account_info(
+            creds_info,
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
         client = genai.Client(
             vertexai=True,
             project=s.google_service_account_project_id,
