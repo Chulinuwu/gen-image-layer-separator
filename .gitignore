@@ -5,6 +5,9 @@ docs/paper-en.tex
 docs/diagrams.md
 .omc
 
+# Secrets
+.env
+
 # Python
 __pycache__/
 *.pyc
