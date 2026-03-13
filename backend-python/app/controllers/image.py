@@ -1,0 +1,1090 @@
+from __future__ import annotations
+
+import asyncio
+import base64
+import json
+import re
+import time
+from io import BytesIO
+from pathlib import Path
+
+from fastapi import Request, UploadFile
+from fastapi.responses import JSONResponse, Response, StreamingResponse
+from PIL import Image
+
+from app.services.vertex import vertex_service
+from app.utils.ai_logger import log_event, trace_ai
+from app.utils.flex_layout import compute_flex_layout
+from app.utils.ref_image_search import find_similar_refs
+from app.utils.safe_zones import BBox, compute_safe_zones
+from app.utils.svg_builder import build_flex_svg
+
+UPLOAD_DIR = Path(__file__).parent.parent.parent / "uploads"
+UPLOAD_DIR.mkdir(exist_ok=True)
+
+CHARACTER_KEYWORDS = [
+    "woman", "man", "girl", "boy", "mascot",
+    "character", "person", "figure", "human",
+]
+PROP_KEYWORDS = [
+    "phone", "smartphone", "mobile", "tablet",
+    "gun", "pistol", "weapon", "rifle", "water gun", "squirt",
+    "bag", "purse", "handbag", "backpack",
+    "bottle", "cup", "mug", "drink",
+    "hat", "cap", "helmet", "glasses", "sunglasses",
+    "umbrella", "fan", "flag",
+]
+GRAPHICAL_KEYWORDS = [
+    "pattern", "hexagon", "geometric", "background", "texture",
+    "gradient", "border", "decoration", "ornament", "abstract",
+    "shape", "wave", "frame", "watermark",
+]
+
+PROMO_RE = re.compile(
+    r"^[\d๐-๙%+×\s]{1,6}$|^[\d๐-๙.]+\s*(ต่อ|เท่า|ครั้ง|คืน|%|×)\s*$"
+)
+
+
+def _save_upload(data: bytes, prefix: str = "file", ext: str = ".png") -> str:
+    filename = f"{prefix}-{int(time.time() * 1000)}{ext}"
+    (UPLOAD_DIR / filename).write_bytes(data)
+    return f"/uploads/{filename}"
+
+
+async def _read_upload(file: UploadFile) -> bytes:
+    return await file.read()
+
+
+def _decode_base64_image(b64: str) -> tuple[bytes, str]:
+    match = re.match(r"^data:(image/\w+);base64,", b64)
+    mime = match.group(1) if match else "image/png"
+    clean = re.sub(r"^data:image/\w+;base64,", "", b64)
+    return base64.b64decode(clean), mime
+
+
+def _compute_iou(a_pos: dict, b_pos: dict) -> float:
+    x_a = max(a_pos.get("left", 0), b_pos.get("left", 0))
+    y_a = max(a_pos.get("top", 0), b_pos.get("top", 0))
+    x_b = min(
+        a_pos.get("left", 0) + a_pos.get("width", 0),
+        b_pos.get("left", 0) + b_pos.get("width", 0),
+    )
+    y_b = min(
+        a_pos.get("top", 0) + a_pos.get("height", 0),
+        b_pos.get("top", 0) + b_pos.get("height", 0),
+    )
+    if x_b <= x_a or y_b <= y_a:
+        return 0
+    inter = (x_b - x_a) * (y_b - y_a)
+    a_area = a_pos.get("width", 0) * a_pos.get("height", 0)
+    b_area = b_pos.get("width", 0) * b_pos.get("height", 0)
+    union = a_area + b_area - inter
+    return inter / union if union > 0 else 0
+
+
+def _dedup_components(components: list[dict]) -> list[dict]:
+    filtered = [
+        c for c in components
+        if not (
+            any(kw in c.get("label", "").lower() for kw in GRAPHICAL_KEYWORDS)
+            and not any(kw in c.get("label", "").lower() for kw in CHARACTER_KEYWORDS)
+        )
+    ]
+
+    has_char = any(
+        any(kw in c.get("label", "").lower() for kw in CHARACTER_KEYWORDS)
+        for c in filtered
+    )
+    if has_char:
+        filtered = [
+            c for c in filtered
+            if not (
+                any(kw in c.get("label", "").lower() for kw in PROP_KEYWORDS)
+                and not any(kw in c.get("label", "").lower() for kw in CHARACTER_KEYWORDS)
+            )
+        ]
+
+    deduped: list[dict] = []
+    for comp in filtered:
+        pos = comp.get("position", {})
+        comp_area = pos.get("width", 0) * pos.get("height", 0)
+        is_dup = False
+        for kept in deduped:
+            if _compute_iou(kept.get("position", {}), pos) > 0.7:
+                is_dup = True
+                break
+            k_pos = kept.get("position", {})
+            k_area = k_pos.get("width", 0) * k_pos.get("height", 0)
+            if k_area == 0 or comp_area == 0:
+                continue
+            x_a = max(pos.get("left", 0), k_pos.get("left", 0))
+            y_a = max(pos.get("top", 0), k_pos.get("top", 0))
+            x_b = min(
+                pos.get("left", 0) + pos.get("width", 0),
+                k_pos.get("left", 0) + k_pos.get("width", 0),
+            )
+            y_b = min(
+                pos.get("top", 0) + pos.get("height", 0),
+                k_pos.get("top", 0) + k_pos.get("height", 0),
+            )
+            if x_b > x_a and y_b > y_a:
+                inter = (x_b - x_a) * (y_b - y_a)
+                smaller = min(comp_area, k_area)
+                if inter / smaller > 0.6:
+                    is_dup = True
+                    break
+        if not is_dup:
+            deduped.append(comp)
+
+    return deduped
+
+
+def _clamp_to_safe_zone(pos: dict) -> dict:
+    if not pos:
+        return pos
+    pad = 50
+    max_dim = 1000 - pad * 2
+    w = min(pos.get("width", 300), max_dim)
+    h = min(pos.get("height", 400), max_dim)
+    left = max(pad, min(pos.get("left", pad), 1000 - pad - w))
+    top = max(pad, min(pos.get("top", pad), 1000 - pad - h))
+    return {**pos, "top": top, "left": left, "width": w, "height": h}
+
+
+def _enforce_design_rules(suggestions: list[dict]) -> list[dict]:
+    if not suggestions:
+        return suggestions
+    max_font = max(
+        (s.get("font_size_normalized", 0) or s.get("style", {}).get("font_size_normalized", 0))
+        for s in suggestions
+    )
+    result = []
+    for s in suggestions:
+        part = (s.get("part") or "").strip()
+        fs = s.get("font_size_normalized", 0) or s.get("style", {}).get("font_size_normalized", 0)
+        if PROMO_RE.match(part) and fs < max_font * 0.8 and max_font > 0:
+            s = {**s, "font_size_normalized": 160}
+        result.append(s)
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────
+# Endpoint handlers
+# ─────────────────────────────────────────────────────────────────
+
+
+async def process_image(
+    request: Request,
+    image: UploadFile,
+    background: UploadFile | None,
+    hint_text: str,
+    mode: str,
+):
+    image_buffer = await _read_upload(image)
+    mime_type = image.content_type or "image/png"
+
+    background_buffer: bytes | None = None
+    if background and background.size:
+        background_buffer = await _read_upload(background)
+
+    # Step 1: Analyze + separate in parallel
+    tasks = [vertex_service.analyze_components(image_buffer, mime_type, background_buffer)]
+    if mode != "only_bg_comp":
+        tasks.append(vertex_service.separate_layers(image_buffer, mime_type, background_buffer, hint_text))
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    analysis_data = results[0] if not isinstance(results[0], Exception) else {"components": []}
+    if isinstance(results[0], Exception):
+        print(f"Worker (Analyze) failed: {results[0]}")
+
+    layers_data: dict = {"layers": []}
+    if mode != "only_bg_comp" and len(results) > 1:
+        if not isinstance(results[1], Exception):
+            layers_data = results[1]
+        else:
+            print(f"Worker (Text) failed: {results[1]}")
+
+    # Step 1.5: Inpaint background if not provided
+    generated_bg_url: str | None = None
+    if not background_buffer and (
+        analysis_data.get("components")
+        or analysis_data.get("background_description")
+        or layers_data.get("layers")
+    ):
+        try:
+            components_desc = "\n".join(
+                f'- COMPONENT: "{c["label"]}" at [top: {c["position"]["top"]}, left: {c["position"]["left"]}, '
+                f'width: {c["position"]["width"]}, height: {c["position"]["height"]}]'
+                for c in (analysis_data.get("components") or [])
+            )
+            text_desc = "\n".join(
+                f'- TEXT: "{t["content"]}" at [top: {t["position"]["top"]}, left: {t["position"]["left"]}, '
+                f'width: {t["position"]["width"]}, height: {t["position"]["height"]}]'
+                for t in (layers_data.get("layers") or [])
+            )
+            bg_resp = await vertex_service.generate_image(
+                prompt=f"""Act as a professional image INPAINTER.
+TASK: Remove all identified foreground components, characters, and ALL text from the provided image to create a clean background plate.
+
+ELEMENTS TO REMOVE (Coordinates 0-1000):
+{components_desc}
+{text_desc}
+
+INSTRUCTIONS:
+- Delete the listed components and text, then seamlessly fill/reconstruct the background behind them.
+- Match the exact atmosphere, textures, and lighting of the reference.
+- Result MUST be a CLEAN empty background plate of the original scene.
+- Do NOT add new elements.""",
+                aspect_ratio="3:4",
+                input_images=[{"buffer": image_buffer, "mimeType": mime_type}],
+            )
+            if bg_resp.get("buffer"):
+                generated_bg_url = _save_upload(bg_resp["buffer"], "bg-inpaint")
+        except Exception as err:
+            print(f"Background inpainting failed: {err}")
+
+    # Step 2: Die-cut components
+    raw_components = analysis_data.get("components") or []
+    components = _dedup_components(raw_components)
+    visual_components: list[dict] = []
+    stack_image_urls: list[str] = []
+
+    if components:
+        diecut_result = await vertex_service.generate_diecut_components(
+            image_buffer, mime_type, components
+        )
+        diecut_results = diecut_result["results"]
+        grid_images = diecut_result.get("gridImages") or []
+
+        for idx, img in enumerate(grid_images):
+            stack_image_urls.append(_save_upload(img, f"stack-{idx}"))
+
+        for i, res in enumerate(diecut_results):
+            url = _save_upload(res["buffer"], f"component-{i}")
+            comp = components[i] if i < len(components) else {}
+            pos = comp.get("suggested_position") or comp.get("position") or {
+                "top": 0, "left": 0, "width": 200, "height": 200
+            }
+            visual_components.append({
+                "label": res["label"],
+                "imageUrl": url,
+                "position": pos,
+                "z_index": comp.get("z_index", 15),
+                "interaction_zone": comp.get("interaction_zone"),
+            })
+
+    return JSONResponse({
+        "success": True,
+        "data": {
+            "original": f"/uploads/{image.filename}",
+            "backgroundDescription": (
+                analysis_data.get("background_description")
+                or layers_data.get("background_description")
+                or ""
+            ),
+            "generatedBackgroundImageUrl": generated_bg_url,
+            "textLayers": layers_data.get("layers", []),
+            "visualComponents": visual_components,
+            "stackImageUrls": stack_image_urls,
+        },
+    })
+
+
+async def generate_and_separate(
+    request: Request,
+    prompt: str | None,
+    aspect_ratio: str,
+    resolution: str | None,
+    images: list[UploadFile],
+    body: dict | None,
+):
+    if not prompt and body:
+        prompt = body.get("prompt")
+    if not prompt:
+        return JSONResponse({"error": "Prompt is required"}, status_code=400)
+
+    input_images: list[dict] = []
+    if images:
+        for f in images:
+            buf = await _read_upload(f)
+            input_images.append({"buffer": buf, "mimeType": f.content_type or "image/png"})
+    elif body and isinstance(body.get("images"), list):
+        for b64 in body["images"]:
+            buf, mime = _decode_base64_image(b64)
+            input_images.append({"buffer": buf, "mimeType": mime})
+
+    result = await vertex_service.generate_image(
+        prompt=prompt,
+        aspect_ratio=aspect_ratio or "3:4",
+        resolution=resolution,
+        input_images=input_images if input_images else None,
+    )
+
+    if not result.get("buffer"):
+        return JSONResponse(
+            {"success": False, "message": "Failed to generate image buffer", "text": result.get("text")},
+            status_code=500,
+        )
+
+    url = _save_upload(result["buffer"], "generated")
+    return JSONResponse({
+        "success": True,
+        "data": {
+            "imageUrl": url,
+            "text": result.get("text"),
+            "prompt": result.get("prompt"),
+            "layers": [],
+        },
+    })
+
+
+async def suggest_campaign(
+    request: Request,
+    image: UploadFile | None,
+    text: str | None,
+    body: dict | None,
+):
+    if image and image.size:
+        image_buffer = await _read_upload(image)
+        mime_type = image.content_type or "image/png"
+    elif body and body.get("image"):
+        image_buffer, mime_type = _decode_base64_image(body["image"])
+    else:
+        return JSONResponse({"error": "Image (file or base64) and text are required"}, status_code=400)
+
+    if not text and body:
+        text = body.get("text")
+    if not text:
+        return JSONResponse({"error": "Text is required for campaign analysis"}, status_code=400)
+
+    analysis = await vertex_service.suggest_campaign_layout(image_buffer, mime_type, text)
+    return JSONResponse({"success": True, "data": analysis})
+
+
+async def render_campaign(
+    request: Request,
+    image: UploadFile | None,
+    background: UploadFile | None,
+    rendered_image: UploadFile | None,
+    suggestions_raw: str | None,
+    mode: str,
+    body: dict | None,
+):
+    # Parse suggestions
+    if not suggestions_raw and body:
+        suggestions_raw = body.get("suggestions") or (body.get("data", {}) or {}).get("suggestions")
+
+    if not suggestions_raw:
+        return JSONResponse({
+            "error": "suggestions are required.",
+            "hint": "In form-data, use key 'suggestions'. Or send JSON body with a 'suggestions' array.",
+        }, status_code=400)
+
+    try:
+        suggestions = json.loads(suggestions_raw) if isinstance(suggestions_raw, str) else suggestions_raw
+        if isinstance(suggestions, dict):
+            suggestions = (
+                suggestions.get("data", {}).get("suggestions")
+                or suggestions.get("suggestions")
+                or suggestions
+            )
+    except (json.JSONDecodeError, TypeError):
+        return JSONResponse({"error": "Invalid suggestions JSON format"}, status_code=400)
+
+    if not isinstance(suggestions, list):
+        return JSONResponse({
+            "error": "suggestions must be an array (or a response object containing a suggestions array)"
+        }, status_code=400)
+
+    # Get image buffer
+    image_buffer: bytes = b""
+    mime_type = "image/png"
+    background_buffer: bytes | None = None
+
+    if mode == "pre-rendered" or (rendered_image and rendered_image.size):
+        image_buffer = b""
+    elif image and image.size:
+        image_buffer = await _read_upload(image)
+        mime_type = image.content_type or "image/png"
+        if background and background.size:
+            background_buffer = await _read_upload(background)
+    elif body and body.get("image"):
+        image_buffer, mime_type = _decode_base64_image(body["image"])
+    else:
+        return JSONResponse({"error": "Image and suggestions are required"}, status_code=400)
+
+    # Render based on mode
+    if mode == "pre-rendered" and rendered_image and rendered_image.size:
+        buf = await _read_upload(rendered_image)
+        result = {"buffer": buf, "text": "Client-side render saved", "prompt": "none"}
+    elif mode == "simple":
+        buf = await vertex_service.render_simple_composite(
+            background_buffer or image_buffer, suggestions
+        )
+        result = {"buffer": buf, "text": "Simple render completed", "prompt": "none"}
+    else:
+        result = await vertex_service.render_campaign_image(
+            image_buffer, mime_type, suggestions, background_buffer
+        )
+
+    if result.get("buffer"):
+        url = _save_upload(result["buffer"], "rendered")
+        return JSONResponse({
+            "success": True,
+            "data": {"imageUrl": url, "text": result.get("text"), "prompt": result.get("prompt")},
+        })
+    return JSONResponse({"error": "Failed to render image"}, status_code=500)
+
+
+async def export_svg_handler(
+    request: Request,
+    background: UploadFile | None,
+    svg_string: str | None,
+    mode: str,
+    include_background: str,
+):
+    if not svg_string or not isinstance(svg_string, str):
+        body = await request.json()
+        svg_string = body.get("svgString")
+        mode = body.get("mode", mode)
+        include_background = body.get("includeBackground", include_background)
+
+    if not svg_string:
+        return JSONResponse({"error": "svgString is required"}, status_code=400)
+    if mode not in ("embed-fonts", "paths"):
+        return JSONResponse({"error": "mode must be 'embed-fonts' or 'paths'"}, status_code=400)
+
+    bg_buffer: bytes | None = None
+    if include_background in ("true", True) and background and background.size:
+        bg_buffer = await _read_upload(background)
+
+    processed = await vertex_service.export_svg(svg_string, bg_buffer, mode)
+    return Response(
+        content=processed,
+        media_type="image/svg+xml",
+        headers={"Content-Disposition": f'attachment; filename="ad-layout-{mode}.svg"'},
+    )
+
+
+# ─────────────────────────────────────────────────────────────────
+# create_campaign SSE pipeline — decomposed into helper functions
+# ─────────────────────────────────────────────────────────────────
+
+
+async def _step_rmbg_prescan(
+    image_bytes: bytes,
+    send_sse,
+) -> tuple[bytes | None, list[dict]]:
+    send_sse("progress", {"step": "rmbg_analysis", "message": "Running background removal to detect subject positions..."})
+    try:
+        result = await vertex_service.run_rmbg_and_get_bboxes(image_bytes)
+        masked_buf = result.get("maskedBuffer")
+        bboxes = result.get("bboxes", [])
+        no_go = [
+            {
+                "label": b["label"],
+                "top": b["top"], "left": b["left"],
+                "width": b["width"], "height": b["height"],
+                "area": {"top": b["top"], "left": b["left"], "width": b["width"], "height": b["height"]},
+            }
+            for b in bboxes
+        ]
+        return masked_buf, no_go
+    except Exception as e:
+        print(f"[Pipeline] RMBG pre-scan failed: {e}")
+        return None, []
+
+
+async def _step_component_placement(
+    image_bytes: bytes,
+    mime: str,
+    text: str,
+    no_go_zones: list[dict],
+    send_sse,
+) -> dict:
+    send_sse("progress", {"step": "initial_analysis", "message": "AI art director is composing component placement..."})
+    analysis = await vertex_service.suggest_campaign_layout(
+        image_bytes, mime, text, "only_bg_comp", no_go_zones
+    )
+    log_event("Component Placement", "Initial art director placement", analysis)
+    return analysis
+
+
+async def _step_diecut_and_inpaint(
+    image_bytes: bytes,
+    mime: str,
+    component_suggestions: list[dict],
+    precomputed_masked: bytes | None,
+    analysis: dict,
+    upload_dir: Path,
+    ref_image_url: str,
+    send_sse,
+) -> tuple[list[dict], str | None, list[str], list[dict]]:
+    visual_components: list[dict] = []
+    generated_bg_url: str | None = None
+    stack_urls: list[str] = []
+    stroke_bboxes: list[dict] = []
+    full_mask: bytes | None = None
+
+    if not component_suggestions:
+        return visual_components, generated_bg_url, stack_urls, stroke_bboxes
+
+    # Die-cut
+    try:
+        send_sse("progress", {
+            "step": "diecut_generation",
+            "message": f"Generating {len(component_suggestions)} die-cut components...",
+        })
+        diecut_result = await vertex_service.generate_diecut_components(
+            image_bytes, mime, component_suggestions, precomputed_masked
+        )
+        diecut_results = diecut_result["results"]
+        grid_images = diecut_result.get("gridImages") or []
+        full_mask = diecut_result.get("maskedFullImageBuffer")
+
+        for idx, img in enumerate(grid_images):
+            stack_urls.append(_save_upload(img, f"stack-{idx}"))
+
+        for i, res in enumerate(diecut_results):
+            url = _save_upload(res["buffer"], f"component-{i}")
+            matched = component_suggestions[i] if i < len(component_suggestions) else {}
+            raw_pos = matched.get("suggested_position") or matched.get("position") or {
+                "top": 50, "left": 50, "width": 300, "height": 400
+            }
+            pos = _clamp_to_safe_zone(raw_pos)
+            visual_components.append({
+                "label": res["label"],
+                "imageUrl": url,
+                "position": pos,
+                "z_index": matched.get("z_index", 15),
+                "interaction_zone": matched.get("interaction_zone"),
+            })
+
+        send_sse("progress", {
+            "step": "diecut_complete",
+            "message": f"✅ {len(visual_components)} components ready!",
+        })
+
+        # Stroke bboxes for safe zones
+        try:
+            diecut_with_pos = [
+                {"label": r["label"], "buffer": r["buffer"],
+                 "position": component_suggestions[i].get("position") if i < len(component_suggestions) else None}
+                for i, r in enumerate(diecut_results)
+            ]
+            stroke_bboxes = await vertex_service.extract_component_stroke_bboxes(diecut_with_pos)
+        except Exception:
+            pass
+
+    except Exception as err:
+        print(f"[Build-Up] Die-cut failed: {err}")
+        send_sse("progress", {"step": "diecut_error", "message": "⚠️ Die-cut generation failed."})
+
+    # Inpaint background
+    try:
+        send_sse("progress", {"step": "inpaint_background", "message": "AI is cleaning the background..."})
+
+        bg_result: bytes | None = None
+        current_source = image_bytes
+
+        if full_mask:
+            inpaint_res = await vertex_service.inpaint_background(
+                current_source, full_mask, analysis,
+                lambda b64: send_sse("inpaint_mask", {"imageBase64": b64}),
+            )
+            if inpaint_res.get("buffer"):
+                bg_result = inpaint_res["buffer"]
+                iter_url = _save_upload(bg_result, "bg-inpaint-iter1")
+                send_sse("inpaint_iteration", {
+                    "iteration": 1, "totalIterations": 1,
+                    "previewUrl": iter_url,
+                })
+
+        if bg_result:
+            generated_bg_url = _save_upload(bg_result, "bg-inpaint")
+            send_sse("background_ready", {"previewUrl": generated_bg_url, "message": "Background cleaned!"})
+        else:
+            send_sse("background_ready", {
+                "previewUrl": ref_image_url,
+                "message": "⚠️ Background inpainting could not complete. Using original image.",
+            })
+    except Exception as err:
+        print(f"[Build-Up] BG inpaint failed: {err}")
+        send_sse("background_ready", {
+            "previewUrl": ref_image_url,
+            "message": "⚠️ Background cleaning failed. Using original image.",
+        })
+
+    send_sse("progress", {
+        "step": "assets_ready",
+        "message": f"Assets: BG {'✅' if generated_bg_url else '❌'} | Components: {len(visual_components)}",
+    })
+
+    return visual_components, generated_bg_url, stack_urls, stroke_bboxes
+
+
+async def _step_flex_layout(
+    image_bytes: bytes,
+    mime: str,
+    target_text: str,
+    visual_components: list[dict],
+    canvas_w: int,
+    canvas_h: int,
+    ref_image_buffers: list[bytes],
+    footer_text: str | None,
+    generated_bg_url: str | None,
+    ref_image_url: str,
+    origin: str,
+    send_sse,
+) -> tuple[str, dict | None]:
+    component_labels = [c["label"] for c in visual_components]
+    flex_result = await vertex_service.suggest_flex_layout(
+        image_bytes, mime, target_text, component_labels,
+        {"w": canvas_w, "h": canvas_h},
+        ref_image_buffers, footer_text or None,
+    )
+
+    if flex_result.get("layoutThought"):
+        log_event("Layout Design Reasoning", flex_result["layoutThought"][:1500])
+
+    flex_boxes = compute_flex_layout(flex_result["flexTree"], canvas_w, canvas_h)
+
+    component_images = {}
+    for vc in visual_components:
+        if vc.get("imageUrl"):
+            component_images[vc["label"]] = f"{origin}{vc['imageUrl']}"
+
+    svg_bg_url = (
+        f"{origin}{generated_bg_url}" if generated_bg_url
+        else f"{origin}{ref_image_url}" if ref_image_url
+        else None
+    )
+
+    svg_result = build_flex_svg(
+        boxes=flex_boxes,
+        canvas_w=canvas_w,
+        canvas_h=canvas_h,
+        bg_image_url=svg_bg_url,
+        component_images=component_images,
+    )
+
+    send_sse("debug", {
+        "step": "flex_layout",
+        "message": "Flex tree computed",
+        "flexTree": flex_result["flexTree"],
+        "boxes": [{"id": b.id, "type": b.type, "x": round(b.x), "y": round(b.y), "w": round(b.w), "h": round(b.h)} for b in flex_boxes],
+    })
+
+    return svg_result["svg"], flex_result
+
+
+async def _step_refinement_loop(
+    image_bytes: bytes,
+    mime: str,
+    target_text: str,
+    svg_overlay: str,
+    visual_components: list[dict],
+    component_suggestions: list[dict],
+    analysis: dict,
+    canvas_w: int,
+    canvas_h: int,
+    ref_image_buffers: list[bytes],
+    footer_text: str | None,
+    generated_bg_url: str | None,
+    ref_image_url: str,
+    origin: str,
+    mode: str,
+    send_sse,
+    max_iter: int = 3,
+) -> tuple[str, dict]:
+    current_svg = svg_overlay
+    last_critique: dict = {"status": "FAIL"}
+    iteration = 0
+
+    if mode == "only_bg_comp":
+        send_sse("progress", {"step": "refinement_skipped", "message": "Refinement skipped (Component Only Mode)."})
+        return current_svg, {"status": "PASS", "feedback": "Skipped"}
+
+    while iteration < max_iter and last_critique.get("status") != "PASS":
+        iteration += 1
+        send_sse("iteration_start", {
+            "iteration": iteration, "maxIterations": max_iter,
+            "message": f"Iteration {iteration}/{max_iter}: Generating preview...",
+        })
+
+        # Generate preview by compositing SVG onto base
+        try:
+            base_img = Image.open(BytesIO(image_bytes)).convert("RGBA")
+            preview_buf = BytesIO()
+            base_img.save(preview_buf, format="PNG")
+            preview_bytes = preview_buf.getvalue()
+        except Exception:
+            preview_bytes = image_bytes
+
+        preview_url = _save_upload(preview_bytes, f"preview-iter{iteration}")
+        send_sse("debug_preview", {
+            "iteration": iteration, "previewUrl": preview_url,
+            "message": "Preview generated, checking for overlaps...",
+        })
+
+        # AI critique
+        critique = await vertex_service.critique_layout(
+            image_bytes, preview_bytes, mime, target_text, False
+        )
+        last_critique = critique
+
+        send_sse("critique_complete", {
+            "iteration": iteration,
+            "status": critique.get("status"),
+            "confidence": critique.get("confidence"),
+            "feedback": critique.get("feedback"),
+            "actionableSteps": critique.get("actionable_steps", []),
+            "message": (
+                f"✅ Layout approved! (confidence: {int((critique.get('confidence', 0.5)) * 100)}%)"
+                if critique.get("status") == "PASS"
+                else f"❌ Issues found: {critique.get('feedback')}"
+            ),
+        })
+
+        confidence = critique.get("confidence", 0.5)
+        if critique.get("status") == "PASS":
+            send_sse("progress", {"step": "refinement_complete", "message": "Layout approved!"})
+            break
+
+        if iteration >= max_iter:
+            send_sse("progress", {"step": "max_iterations_reached", "message": "⚠️ Max iterations reached."})
+            break
+
+        # Refine
+        send_sse("refining", {"iteration": iteration, "message": "Refining SVG layout based on feedback..."})
+
+        try:
+            feedback = critique.get("feedback", "")
+            steps = critique.get("actionable_steps", [])
+            if steps:
+                feedback += "\nActionable steps: " + "; ".join(steps)
+            refined_text = f"{target_text}\n\n[REFINEMENT FEEDBACK]:\n{feedback}"
+
+            component_labels = [c["label"] for c in visual_components]
+            refined_flex = await vertex_service.suggest_flex_layout(
+                image_bytes, mime, refined_text, component_labels,
+                {"w": canvas_w, "h": canvas_h},
+                ref_image_buffers, footer_text or None,
+            )
+
+            refined_boxes = compute_flex_layout(refined_flex["flexTree"], canvas_w, canvas_h)
+
+            comp_imgs = {}
+            for vc in visual_components:
+                if vc.get("imageUrl"):
+                    comp_imgs[vc["label"]] = f"{origin}{vc['imageUrl']}"
+
+            svg_bg = (
+                f"{origin}{generated_bg_url}" if generated_bg_url
+                else f"{origin}{ref_image_url}" if ref_image_url
+                else None
+            )
+
+            refined_svg_result = build_flex_svg(
+                boxes=refined_boxes, canvas_w=canvas_w, canvas_h=canvas_h,
+                bg_image_url=svg_bg, component_images=comp_imgs,
+            )
+
+            if refined_svg_result["svg"] and len(refined_svg_result["svg"]) > 50:
+                current_svg = refined_svg_result["svg"]
+                analysis["svg_overlay"] = current_svg
+                analysis["flexTree"] = refined_flex["flexTree"]
+            else:
+                send_sse("refine_rejected", {
+                    "iteration": iteration,
+                    "message": "Refinement returned empty overlay — keeping previous layout.",
+                })
+        except Exception as e:
+            print(f"[Refine] Refinement failed: {e}")
+
+        send_sse("iteration_end", {
+            "iteration": iteration,
+            "message": f"SVG layout refined (iteration {iteration}).",
+            "svg_overlay": current_svg,
+            "componentCount": len(component_suggestions),
+            "components": component_suggestions,
+            "visualComponents": visual_components,
+            "flexTree": analysis.get("flexTree"),
+            "canvasSize": {"w": canvas_w, "h": canvas_h},
+        })
+
+    analysis["critique_iterations"] = iteration
+    analysis["final_critique_status"] = last_critique.get("status")
+    analysis["final_critique_feedback"] = last_critique.get("feedback")
+    return current_svg, last_critique
+
+
+async def create_campaign(
+    request: Request,
+    image: UploadFile | None,
+    background: UploadFile | None,
+    text: str | None,
+    mode: str,
+    no_go_zones_raw: str | None,
+    body: dict | None,
+):
+    async def event_generator():
+        events: list[str] = []
+
+        def send_sse(event: str, data: dict):
+            events.append(f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n")
+
+        try:
+            # Parse inputs
+            if body and body.get("image"):
+                image_buffer, mime_type = _decode_base64_image(body["image"])
+                target_text = body.get("text") or text
+                nonlocal mode, no_go_zones_raw
+                mode = body.get("mode", mode or "")
+                no_go_zones_raw = body.get("noGoZones", no_go_zones_raw)
+            elif image and image.size:
+                image_buffer = await _read_upload(image)
+                mime_type = image.content_type or "image/png"
+                target_text = text
+            else:
+                send_sse("error", {"error": "Reference image is required"})
+                for e in events:
+                    yield e
+                return
+
+            if not target_text:
+                send_sse("error", {"error": "Text brief is required"})
+                for e in events:
+                    yield e
+                return
+
+            background_buffer: bytes | None = None
+            if background and background.size:
+                background_buffer = await _read_upload(background)
+
+            # Parse no-go zones
+            parsed_no_go: list[dict] = []
+            if no_go_zones_raw:
+                try:
+                    parsed_no_go = json.loads(no_go_zones_raw) if isinstance(no_go_zones_raw, str) else no_go_zones_raw
+                except Exception:
+                    pass
+
+            # Save reference image
+            ref_url = _save_upload(image_buffer, "ref")
+
+            # Flush initial events
+            for e in events:
+                yield e
+            events.clear()
+
+            # Step 1A: RMBG prescan
+            masked_buf, rmbg_no_go = await _step_rmbg_prescan(image_buffer, send_sse)
+            parsed_no_go = rmbg_no_go + parsed_no_go
+            for e in events:
+                yield e
+            events.clear()
+
+            # Step 1B: Component placement
+            comp_analysis = await _step_component_placement(
+                image_buffer, mime_type, target_text, parsed_no_go, send_sse
+            )
+            component_suggestions = _dedup_components(comp_analysis.get("components", []))
+            analysis = {**comp_analysis, "suggestions": [], "components": component_suggestions}
+
+            for e in events:
+                yield e
+            events.clear()
+
+            # Step 1.5 + 2: Die-cut + inpaint
+            visual_components, generated_bg_url, stack_urls, stroke_bboxes = await _step_diecut_and_inpaint(
+                image_buffer, mime_type, component_suggestions,
+                masked_buf, analysis, UPLOAD_DIR, ref_url, send_sse,
+            )
+            for e in events:
+                yield e
+            events.clear()
+
+            # Get canvas dimensions
+            img = Image.open(BytesIO(image_buffer))
+            canvas_w, canvas_h = img.size
+
+            # Get origin for absolute URLs
+            origin = f"{request.url.scheme}://{request.headers.get('host', 'localhost:5001')}"
+
+            svg_overlay = ""
+            flex_tree = None
+
+            if mode != "only_bg_comp":
+                # Plan layout strategy
+                send_sse("progress", {"step": "text_layout", "message": "AI is planning layout strategy..."})
+
+                current_positions = [
+                    {"label": c["label"], **c["position"]}
+                    for c in visual_components
+                ]
+                try:
+                    layout_hint = await vertex_service.plan_layout_strategy(
+                        image_buffer, mime_type, target_text,
+                        [c["label"] for c in visual_components],
+                        current_positions,
+                    )
+                    # Apply plan's component positions
+                    if layout_hint.get("component_layout"):
+                        for planned in layout_hint["component_layout"]:
+                            comp = next((c for c in visual_components if c["label"] == planned["label"]), None)
+                            if comp:
+                                comp["position"] = {
+                                    **comp["position"],
+                                    "top": planned["top"], "left": planned["left"],
+                                    "width": planned["width"], "height": planned["height"],
+                                }
+
+                    send_sse("progress", {
+                        "step": "layout_strategy",
+                        "message": f'🎨 Layout strategy: "{layout_hint.get("layout_concept", "")}"',
+                    })
+                except Exception as e:
+                    print(f"[Pass2] Plan phase failed: {e}")
+
+                for e in events:
+                    yield e
+                events.clear()
+
+                # Reference image lookup
+                ref_image_buffers: list[bytes] = []
+                try:
+                    desc_result = await vertex_service.describe_and_embed(image_buffer, mime_type)
+                    refs = find_similar_refs(desc_result["embedding"], 3)
+                    if refs:
+                        ref_image_buffers = [Path(r["filepath"]).read_bytes() for r in refs]
+                        send_sse("debug", {
+                            "step": "ref_images",
+                            "message": f"Found {len(refs)} similar reference ads",
+                        })
+                except Exception as e:
+                    print(f"[Pass2] Reference image search failed: {e}")
+
+                # Footer text
+                footer_path = Path(__file__).parent.parent.parent / "assets" / "Ref_Footer" / "footer.txt"
+                footer_text = ""
+                try:
+                    if footer_path.exists():
+                        footer_text = footer_path.read_text().strip()
+                except Exception:
+                    pass
+
+                send_sse("progress", {"step": "text_layout", "message": "AI is generating layout intent..."})
+                for e in events:
+                    yield e
+                events.clear()
+
+                # Flex tree pipeline
+                try:
+                    svg_overlay, flex_result = await _step_flex_layout(
+                        image_bytes=image_buffer, mime=mime_type,
+                        target_text=target_text,
+                        visual_components=visual_components,
+                        canvas_w=canvas_w, canvas_h=canvas_h,
+                        ref_image_buffers=ref_image_buffers,
+                        footer_text=footer_text or None,
+                        generated_bg_url=generated_bg_url,
+                        ref_image_url=ref_url,
+                        origin=origin,
+                        send_sse=send_sse,
+                    )
+                    analysis["svg_overlay"] = svg_overlay
+                    flex_tree = flex_result.get("flexTree")
+                    analysis["flexTree"] = flex_tree
+                    analysis["background_description"] = flex_result.get("background_description") or analysis.get("background_description")
+                    analysis["campaign_vibe"] = flex_result.get("campaign_vibe") or analysis.get("campaign_vibe")
+                except Exception as e:
+                    print(f"[Pass2] Layout intent pipeline failed: {e}")
+
+                for e in events:
+                    yield e
+                events.clear()
+
+                send_sse("progress", {
+                    "step": "initial_analysis_complete",
+                    "message": f"SVG layout ready. Components: {len(visual_components)}",
+                    "componentCount": len(visual_components),
+                })
+
+            # Send initial layout
+            send_sse("iteration_end", {
+                "iteration": 0,
+                "message": "Initial layout mapped to canvas.",
+                "svg_overlay": svg_overlay,
+                "componentCount": len(component_suggestions),
+                "components": component_suggestions,
+                "visualComponents": visual_components,
+                "flexTree": flex_tree,
+                "canvasSize": {"w": canvas_w, "h": canvas_h},
+            })
+            for e in events:
+                yield e
+            events.clear()
+
+            # Refinement loop
+            try:
+                svg_overlay, last_critique = await _step_refinement_loop(
+                    image_bytes=image_buffer, mime=mime_type,
+                    target_text=target_text,
+                    svg_overlay=svg_overlay,
+                    visual_components=visual_components,
+                    component_suggestions=component_suggestions,
+                    analysis=analysis,
+                    canvas_w=canvas_w, canvas_h=canvas_h,
+                    ref_image_buffers=ref_image_buffers if mode != "only_bg_comp" else [],
+                    footer_text=footer_text if mode != "only_bg_comp" else None,
+                    generated_bg_url=generated_bg_url,
+                    ref_image_url=ref_url,
+                    origin=origin,
+                    mode=mode or "",
+                    send_sse=send_sse,
+                )
+            except Exception as e:
+                send_sse("error", {
+                    "step": "refinement_loop",
+                    "message": "Feedback loop failed, continuing with initial analysis",
+                    "error": str(e),
+                })
+
+            for e in events:
+                yield e
+            events.clear()
+
+            # Final result
+            send_sse("done", {
+                "success": True,
+                "data": {
+                    "referenceImage": ref_url,
+                    "backgroundDescription": analysis.get("background_description", ""),
+                    "generatedBackgroundImageUrl": generated_bg_url,
+                    "campaignVibe": analysis.get("campaign_vibe", ""),
+                    "svg_overlay": svg_overlay,
+                    "flexTree": flex_tree,
+                    "canvasSize": {"w": canvas_w, "h": canvas_h},
+                    "textLayers": [],
+                    "visualComponents": visual_components,
+                    "stackImageUrls": stack_urls,
+                    "critiqueIterations": analysis.get("critique_iterations"),
+                    "finalCritiqueStatus": analysis.get("final_critique_status"),
+                    "finalCritiqueFeedback": analysis.get("final_critique_feedback"),
+                },
+            })
+            for e in events:
+                yield e
+
+        except Exception as error:
+            send_sse("error", {"error": str(error)})
+            for e in events:
+                yield e
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )

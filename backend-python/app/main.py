@@ -1,3 +1,4 @@
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,8 +35,12 @@ app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
 
 @app.middleware("http")
-async def add_upload_headers(request: Request, call_next):
+async def log_requests(request: Request, call_next):
+    start = time.time()
+    print(f"[{datetime.now().isoformat()}] -> {request.method} {request.url.path}")
     response = await call_next(request)
+    duration = int((time.time() - start) * 1000)
+    print(f"[{datetime.now().isoformat()}] <- {request.method} {request.url.path} - {response.status_code} ({duration}ms)")
     if request.url.path.startswith("/uploads/"):
         response.headers["Content-Disposition"] = "attachment"
     return response
