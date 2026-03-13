@@ -4,3 +4,11 @@ docs/Advertise.pdf
 docs/paper-en.tex
 docs/diagrams.md
 .omc
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+*.egg
