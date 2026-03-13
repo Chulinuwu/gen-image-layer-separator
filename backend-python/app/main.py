@@ -15,8 +15,9 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 async def lifespan(app: FastAPI):
     from app.services.vertex import vertex_service
     try:
-        await vertex_service.warmup_rmbg2()
-        print("\n[ML] RMBG-2.0 system is ready and idle.")
+        from app.config import get_settings
+        await vertex_service.warmup_bg_model()
+        print(f"\n[ML] {get_settings().rmbg_model_name} system is ready and idle.")
     except Exception as e:
         print(f"\n[ML] Warmup failed: {e}")
     yield

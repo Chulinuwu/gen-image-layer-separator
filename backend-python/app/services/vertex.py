@@ -18,11 +18,11 @@ from app.utils.ai_logger import trace_ai
 from app.utils.flex_layout import FlexNode
 
 # ---------------------------------------------------------------------------
-# RMBG-2.0 model singleton
+# RMBG model singleton
 # ---------------------------------------------------------------------------
-_rmbg2_model = None
-_rmbg2_processor = None
-_rmbg2_loading: asyncio.Lock | None = None
+_bg_model = None
+_bg_processor = None
+_bg_loading: asyncio.Lock | None = None
 
 SAFETY_OFF = [
     genai_types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="OFF"),
@@ -83,7 +83,12 @@ def _repair_json(raw: str) -> dict:
 # ---------------------------------------------------------------------------
 # Retry helper (module-level for testability)
 # ---------------------------------------------------------------------------
-async def with_retry(operation, retries: int = 3, delay: float = 2.0):
+async def with_retry(operation, retries: int | None = None, delay: float | None = None):
+    s = get_settings()
+    if retries is None:
+        retries = s.retry_count
+    if delay is None:
+        delay = s.retry_delay
     try:
         return await operation()
     except Exception as e:
@@ -137,7 +142,7 @@ class VertexService:
             location=s.google_cloud_location,
             credentials=creds,
         )
-        print(f"✅ Google GenAI client initialized (Vertex AI, location={s.google_cloud_location})")
+        print(f"Google GenAI client initialized (Vertex AI, location={s.google_cloud_location})")
         return client
 
     # ── helpers ──────────────────────────────────────────────────────────
@@ -368,7 +373,7 @@ Respond with ONLY this JSON:
                 f"width={z['width']}, height={z['height']} (area={z.get('area',0)})"
                 for i, z in enumerate(safe_zones[:6])
             )
-            safe_inst = f"\n✅ VERIFIED SAFE PLACEMENT ZONES:\n{zone_list}\n"
+            safe_inst = f"\nVERIFIED SAFE PLACEMENT ZONES:\n{zone_list}\n"
 
         fixed_comp_note = ""
         if fixed_component_positions:
@@ -620,25 +625,38 @@ Return as STRICT JSON:
 
     # ── Background Removal ──────────────────────────────────────────────
 
-    async def _remove_bg_rmbg2(self, image_buffer: bytes) -> bytes | None:
-        global _rmbg2_model, _rmbg2_processor, _rmbg2_loading
+    async def _remove_bg_ml(self, image_buffer: bytes) -> bytes | None:
+        global _bg_model, _bg_processor, _bg_loading
         try:
-            if _rmbg2_model is None or _rmbg2_processor is None:
-                if _rmbg2_loading is None:
-                    _rmbg2_loading = asyncio.Lock()
-                async with _rmbg2_loading:
-                    if _rmbg2_model is None:
-                        print("[RMBG-2.0] Initializing model & processor...")
+            if _bg_model is None or _bg_processor is None:
+                if _bg_loading is None:
+                    _bg_loading = asyncio.Lock()
+                async with _bg_loading:
+                    if _bg_model is None:
+                        import warnings
                         import torch
-                        from transformers import AutoModelForImageSegmentation, AutoProcessor
-                        _rmbg2_processor = AutoProcessor.from_pretrained("briaai/RMBG-2.0", trust_remote_code=True)
-                        _rmbg2_model = AutoModelForImageSegmentation.from_pretrained(
-                            "briaai/RMBG-2.0", trust_remote_code=True
-                        )
-                        _rmbg2_model.eval()
-                        print("[RMBG-2.0] Model ready ✅")
+                        from transformers import AutoImageProcessor, AutoModelForImageSegmentation
+                        s = get_settings()
+                        model_name = s.rmbg_model_name
+                        token = s.hf_token or None
+                        import logging
+                        print(f"[{model_name}] Initializing model & processor...")
+                        _tf_logger = logging.getLogger("transformers")
+                        _prev_level = _tf_logger.level
+                        _tf_logger.setLevel(logging.ERROR)
+                        with warnings.catch_warnings():
+                            warnings.filterwarnings("ignore", category=FutureWarning)
+                            _bg_processor = AutoImageProcessor.from_pretrained(
+                                model_name, trust_remote_code=True, token=token,
+                            )
+                            _bg_model = AutoModelForImageSegmentation.from_pretrained(
+                                model_name, trust_remote_code=True, token=token
+                            )
+                        _tf_logger.setLevel(_prev_level)
+                        _bg_model.eval()
+                        print(f"[{model_name}] Model ready")
 
-            if not _rmbg2_model or not _rmbg2_processor:
+            if not _bg_model or not _bg_processor:
                 return None
 
             import torch
@@ -649,12 +667,12 @@ Return as STRICT JSON:
             orig_w, orig_h = img.size
             resized = img.resize((MODEL_SIZE, MODEL_SIZE), Image.LANCZOS)
 
-            inputs = _rmbg2_processor(resized, return_tensors="pt")
+            inputs = _bg_processor(resized, return_tensors="pt")
             with torch.no_grad():
-                output = _rmbg2_model(**inputs)
+                output = _bg_model(inputs["pixel_values"])
 
             # Get the prediction mask
-            pred = output[0].sigmoid().cpu()
+            pred = output[-1].sigmoid().cpu()
             if pred.ndim == 4:
                 pred = pred.squeeze(0).squeeze(0)
             elif pred.ndim == 3:
@@ -667,10 +685,21 @@ Return as STRICT JSON:
             rgba = resized.copy().convert("RGBA")
             rgba.putalpha(mask_img)
 
-            print(f"[RMBG-2.0] ✅ Done ({MODEL_SIZE}x{MODEL_SIZE})")
+            print(f"[{get_settings().rmbg_model_name}] Done ({MODEL_SIZE}x{MODEL_SIZE})")
             return _img_to_bytes(rgba, "PNG")
         except Exception as e:
-            print(f"[RMBG-2.0] Runtime failure: {e}")
+            print(f"[{get_settings().rmbg_model_name}] Runtime failure: {e}")
+            print("[BG-Removal] Falling back to rembg...")
+            return await self._remove_bg_rembg(image_buffer)
+
+    async def _remove_bg_rembg(self, image_buffer: bytes) -> bytes | None:
+        try:
+            from rembg import remove
+            result = remove(image_buffer)
+            print("[rembg] Background removed successfully")
+            return result
+        except (Exception, SystemExit) as e:
+            print(f"[rembg] Fallback also failed: {e}")
             return None
 
     async def _remove_bg_full_image(self, image_buffer: bytes) -> bytes | None:
@@ -692,13 +721,13 @@ Return as STRICT JSON:
             print(f"[Diecut/FullML] Full-image removal failed: {e}")
             return None
 
-    async def warmup_rmbg2(self) -> None:
+    async def warmup_bg_model(self) -> None:
         try:
-            print("[RMBG-2.0] Warming up model (256x256)...")
+            print(f"[{get_settings().rmbg_model_name}] Warming up model (256x256)...")
             dummy = Image.new("RGB", (256, 256), (255, 255, 255))
-            await self._remove_bg_rmbg2(_img_to_bytes(dummy, "PNG"))
+            await self._remove_bg_ml(_img_to_bytes(dummy, "PNG"))
         except Exception as e:
-            print(f"[RMBG-2.0] Warmup skip/fail: {e}")
+            print(f"[{get_settings().rmbg_model_name}] Warmup skip/fail: {e}")
 
     # ── Die-cut Generation ──────────────────────────────────────────────
 
@@ -769,7 +798,7 @@ Return as STRICT JSON:
                 return None
 
             cropped = Image.fromarray(out[min_y:max_y+1, min_x:max_x+1])
-            print(f'[FloodFill] ✅ "{label}": {len(queue)} px → {max_x-min_x+1}x{max_y-min_y+1}')
+            print(f'[FloodFill] "{label}": {len(queue)} px → {max_x-min_x+1}x{max_y-min_y+1}')
             return _img_to_bytes(cropped, "PNG")
         except Exception as e:
             print(f'[FloodFill] Error for "{label}": {e}')
@@ -814,7 +843,7 @@ Return as STRICT JSON:
             cropped = img.crop((crop_left, crop_top, crop_left + crop_w, crop_top + crop_h))
             cropped_buf = _img_to_bytes(cropped.convert("RGBA"), "PNG")
 
-            result_buf = await self._remove_bg_rmbg2(cropped_buf)
+            result_buf = await self._remove_bg_ml(cropped_buf)
             if not result_buf:
                 from rembg import remove
                 result_buf = remove(cropped_buf)
@@ -927,6 +956,7 @@ Return as STRICT JSON:
         image_buffer: bytes,
         mime_type: str,
         components: list[dict],
+        precomputed_masked: bytes | None = None,
     ) -> dict:
         if not components:
             return {"results": [], "grid_images": [], "masked_full_buffer": None}
@@ -937,8 +967,8 @@ Return as STRICT JSON:
             for c in components
         )
 
-        masked_full = None
-        if has_valid:
+        masked_full = precomputed_masked
+        if masked_full is None and has_valid:
             print("[Diecut] Running bg removal on full source image...")
             masked_full = await self._remove_bg_full_image(image_buffer)
 
@@ -1038,19 +1068,20 @@ Return as STRICT JSON:
             if response.generated_images and response.generated_images[0].image:
                 img_bytes = response.generated_images[0].image.image_bytes
                 if img_bytes:
-                    print("[Inpaint] ✅ Successfully inpainted background")
+                    print("[Inpaint] Successfully inpainted background")
                     return {"buffer": img_bytes if isinstance(img_bytes, bytes) else base64.b64decode(img_bytes)}
             return {"buffer": None}
         except Exception as e:
             print(f"[Inpaint] Error: {e}")
             return {"buffer": None}
 
-    # ── RMBG + Bboxes ──────────────────────────────────────────────────
+    # ── Background Removal + Bboxes ─────────────────────────────────────
 
     async def run_rmbg_and_get_bboxes(self, image_buffer: bytes) -> dict:
         try:
             import numpy as np
-            masked = await self._remove_bg_rmbg2(image_buffer)
+            from scipy import ndimage
+            masked = await self._remove_bg_ml(image_buffer)
             if not masked:
                 return {"masked_buffer": None, "bboxes": []}
 
@@ -1062,17 +1093,42 @@ Return as STRICT JSON:
             if not fg.any():
                 return {"masked_buffer": masked, "bboxes": []}
 
-            ys, xs = np.where(fg)
-            bbox = {
-                "label": "Detected Subject",
-                "top": round(int(ys.min()) / h * 1000),
-                "left": round(int(xs.min()) / w * 1000),
-                "width": round(int(xs.max() - xs.min()) / w * 1000),
-                "height": round(int(ys.max() - ys.min()) / h * 1000),
-            }
-            return {"masked_buffer": masked, "bboxes": [bbox]}
+            # Erode to separate touching subjects, then connected component analysis
+            eroded = ndimage.binary_erosion(fg, iterations=max(3, min(w, h) // 100))
+            labeled, num_features = ndimage.label(eroded if eroded.any() else fg)
+            bboxes = []
+            min_area_ratio = 0.005  # ignore tiny fragments (<0.5% of image)
+            for i in range(1, num_features + 1):
+                component_mask = labeled == i
+                ys, xs = np.where(component_mask)
+                bw = int(xs.max() - xs.min())
+                bh = int(ys.max() - ys.min())
+                area_ratio = (bw * bh) / (w * h)
+                if area_ratio < min_area_ratio:
+                    continue
+                bboxes.append({
+                    "label": f"Subject {len(bboxes) + 1}",
+                    "top": round(int(ys.min()) / h * 1000),
+                    "left": round(int(xs.min()) / w * 1000),
+                    "width": round(bw / w * 1000),
+                    "height": round(bh / h * 1000),
+                })
+
+            if not bboxes:
+                # fallback: single bbox over all foreground
+                ys, xs = np.where(fg)
+                bboxes.append({
+                    "label": "Detected Subject",
+                    "top": round(int(ys.min()) / h * 1000),
+                    "left": round(int(xs.min()) / w * 1000),
+                    "width": round(int(xs.max() - xs.min()) / w * 1000),
+                    "height": round(int(ys.max() - ys.min()) / h * 1000),
+                })
+
+            print(f"[RMBG] Detected {len(bboxes)} subject(s) via connected components")
+            return {"masked_buffer": masked, "bboxes": bboxes}
         except Exception as e:
-            print(f"[RMBG-2.0] Bbox detection failed: {e}")
+            print(f"[{get_settings().rmbg_model_name}] Bbox detection failed: {e}")
             return {"masked_buffer": None, "bboxes": []}
 
     async def extract_component_stroke_bboxes(self, components: list[dict]) -> list[dict]:
@@ -1188,6 +1244,30 @@ Return as STRICT JSON:
 
     # ── Flex Layout ─────────────────────────────────────────────────────
 
+    @staticmethod
+    def _fuzzy_match_label(ai_label: str, available: list[str]) -> str | None:
+        if not available:
+            return None
+        ai_lower = ai_label.lower()
+        # exact case-insensitive
+        for lbl in available:
+            if lbl.lower() == ai_lower:
+                return lbl
+        # token overlap — split both into words, score by intersection
+        ai_tokens = set(re.split(r"[\s_\-]+", ai_lower))
+        best, best_score = None, 0
+        for lbl in available:
+            lbl_tokens = set(re.split(r"[\s_\-]+", lbl.lower()))
+            overlap = len(ai_tokens & lbl_tokens)
+            if overlap > best_score:
+                best, best_score = lbl, overlap
+        # also check substring containment
+        if best_score == 0:
+            for lbl in available:
+                if ai_lower in lbl.lower() or lbl.lower() in ai_lower:
+                    return lbl
+        return best if best_score > 0 else None
+
     def _validate_flex_tree(self, node: dict, component_labels: list[str], path: str = "root") -> list[str]:
         warnings = []
         if not node.get("id"):
@@ -1206,7 +1286,12 @@ Return as STRICT JSON:
                 if not node.get("label"):
                     warnings.append(f"{path}: component missing label")
                 elif node["label"] not in component_labels:
-                    warnings.append(f'{path}: label "{node["label"]}" not in {component_labels}')
+                    matched = self._fuzzy_match_label(node["label"], component_labels)
+                    if matched:
+                        print(f'[FlexLayout] Auto-fixed label: "{node["label"]}" → "{matched}"')
+                        node["label"] = matched
+                    else:
+                        warnings.append(f'{path}: label "{node["label"]}" not in {component_labels}')
             elif node.get("type") == "text" and not node.get("text"):
                 warnings.append(f"{path}: text leaf missing text")
         return warnings

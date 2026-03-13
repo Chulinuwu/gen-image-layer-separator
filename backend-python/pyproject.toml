@@ -11,11 +11,16 @@ dependencies = [
     "google-genai>=1.10.0",
     "Pillow>=11.0.0",
     "fonttools>=4.55.0",
-    "transformers>=4.47.0",
+    "transformers>=4.47.0,<5",
     "torch>=2.5.0",
+    "torchvision>=0.20.0",
+    "kornia>=0.8.0",
+    "timm>=1.0.0",
     "numpy>=2.1.0",
     "aiofiles>=24.1.0",
     "rembg>=2.0.0",
+    "onnxruntime>=1.19.0",
+    "cairosvg>=2.9.0",
 ]
 
 [project.optional-dependencies]

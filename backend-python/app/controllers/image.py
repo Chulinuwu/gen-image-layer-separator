@@ -17,7 +17,7 @@ from app.utils.ai_logger import log_event, trace_ai
 from app.utils.flex_layout import compute_flex_layout
 from app.utils.ref_image_search import find_similar_refs
 from app.utils.safe_zones import BBox, compute_safe_zones
-from app.utils.svg_builder import build_flex_svg
+from app.utils.svg_builder import FlexSVGInput, build_flex_svg
 
 UPLOAD_DIR = Path(__file__).parent.parent.parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -38,11 +38,32 @@ GRAPHICAL_KEYWORDS = [
     "pattern", "hexagon", "geometric", "background", "texture",
     "gradient", "border", "decoration", "ornament", "abstract",
     "shape", "wave", "frame", "watermark",
+    "building", "fountain", "scenery", "sky", "landscape", "architecture",
+    "color bar", "decorative bar", "strip", "decorative banner",
+    "floor", "wall", "ceiling", "road", "street",
 ]
+KEEP_KEYWORDS = [
+    "offer", "promo", "deal", "free", "discount", "coupon",
+    "logo", "brand", "product", "package", "bottle", "can",
+]
+MAX_COMPONENT_AREA_RATIO = 0.4
 
 PROMO_RE = re.compile(
     r"^[\d๐-๙%+×\s]{1,6}$|^[\d๐-๙.]+\s*(ต่อ|เท่า|ครั้ง|คืน|%|×)\s*$"
 )
+
+
+def _composite_svg_onto_image(base_bytes: bytes, svg_str: str, width: int, height: int) -> bytes:
+    if not svg_str or len(svg_str) < 50:
+        return base_bytes
+    import cairosvg
+    svg_png = cairosvg.svg2png(bytestring=svg_str.encode("utf-8"), output_width=width, output_height=height)
+    base = Image.open(BytesIO(base_bytes)).convert("RGBA").resize((width, height), Image.LANCZOS)
+    overlay = Image.open(BytesIO(svg_png)).convert("RGBA")
+    composite = Image.alpha_composite(base, overlay)
+    buf = BytesIO()
+    composite.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def _save_upload(data: bytes, prefix: str = "file", ext: str = ".png") -> str:
@@ -83,13 +104,25 @@ def _compute_iou(a_pos: dict, b_pos: dict) -> float:
 
 
 def _dedup_components(components: list[dict]) -> list[dict]:
-    filtered = [
-        c for c in components
-        if not (
-            any(kw in c.get("label", "").lower() for kw in GRAPHICAL_KEYWORDS)
-            and not any(kw in c.get("label", "").lower() for kw in CHARACTER_KEYWORDS)
+    canvas_area = 1000 * 1000
+    filtered = []
+    for c in components:
+        lbl = c.get("label", "").lower()
+        is_kept = any(kw in lbl for kw in KEEP_KEYWORDS)
+        is_graphical = (
+            not is_kept
+            and any(kw in lbl for kw in GRAPHICAL_KEYWORDS)
+            and not any(kw in lbl for kw in CHARACTER_KEYWORDS)
         )
-    ]
+        if is_graphical:
+            print(f"[Dedup] Filtered graphical: \"{c.get('label')}\"")
+            continue
+        pos = c.get("position", {})
+        area = pos.get("width", 0) * pos.get("height", 0)
+        if area > canvas_area * MAX_COMPONENT_AREA_RATIO:
+            print(f"[Dedup] Filtered oversized ({area}/{canvas_area}={area/canvas_area:.0%}): \"{c.get('label')}\"")
+            continue
+        filtered.append(c)
 
     has_char = any(
         any(kw in c.get("label", "").lower() for kw in CHARACTER_KEYWORDS)
@@ -255,7 +288,7 @@ INSTRUCTIONS:
             image_buffer, mime_type, components
         )
         diecut_results = diecut_result["results"]
-        grid_images = diecut_result.get("gridImages") or []
+        grid_images = diecut_result.get("grid_images") or []
 
         for idx, img in enumerate(grid_images):
             stack_image_urls.append(_save_upload(img, f"stack-{idx}"))
@@ -479,7 +512,7 @@ async def _step_rmbg_prescan(
     send_sse("progress", {"step": "rmbg_analysis", "message": "Running background removal to detect subject positions..."})
     try:
         result = await vertex_service.run_rmbg_and_get_bboxes(image_bytes)
-        masked_buf = result.get("maskedBuffer")
+        masked_buf = result.get("masked_buffer")
         bboxes = result.get("bboxes", [])
         no_go = [
             {
@@ -540,8 +573,8 @@ async def _step_diecut_and_inpaint(
             image_bytes, mime, component_suggestions, precomputed_masked
         )
         diecut_results = diecut_result["results"]
-        grid_images = diecut_result.get("gridImages") or []
-        full_mask = diecut_result.get("maskedFullImageBuffer")
+        grid_images = diecut_result.get("grid_images") or []
+        full_mask = diecut_result.get("masked_full_buffer")
 
         for idx, img in enumerate(grid_images):
             stack_urls.append(_save_upload(img, f"stack-{idx}"))
@@ -563,7 +596,7 @@ async def _step_diecut_and_inpaint(
 
         send_sse("progress", {
             "step": "diecut_complete",
-            "message": f"✅ {len(visual_components)} components ready!",
+            "message": f" {len(visual_components)} components ready!",
         })
 
         # Stroke bboxes for safe zones
@@ -618,7 +651,7 @@ async def _step_diecut_and_inpaint(
 
     send_sse("progress", {
         "step": "assets_ready",
-        "message": f"Assets: BG {'✅' if generated_bg_url else '❌'} | Components: {len(visual_components)}",
+        "message": f"Assets: BG {'' if generated_bg_url else '❌'} | Components: {len(visual_components)}",
     })
 
     return visual_components, generated_bg_url, stack_urls, stroke_bboxes
@@ -661,13 +694,13 @@ async def _step_flex_layout(
         else None
     )
 
-    svg_result = build_flex_svg(
+    svg_result = build_flex_svg(FlexSVGInput(
         boxes=flex_boxes,
         canvas_w=canvas_w,
         canvas_h=canvas_h,
         bg_image_url=svg_bg_url,
         component_images=component_images,
-    )
+    ))
 
     send_sse("debug", {
         "step": "flex_layout",
@@ -676,7 +709,7 @@ async def _step_flex_layout(
         "boxes": [{"id": b.id, "type": b.type, "x": round(b.x), "y": round(b.y), "w": round(b.w), "h": round(b.h)} for b in flex_boxes],
     })
 
-    return svg_result["svg"], flex_result
+    return svg_result.svg, flex_result
 
 
 async def _step_refinement_loop(
@@ -696,8 +729,11 @@ async def _step_refinement_loop(
     origin: str,
     mode: str,
     send_sse,
-    max_iter: int = 3,
+    max_iter: int | None = None,
 ) -> tuple[str, dict]:
+    if max_iter is None:
+        from app.config import get_settings
+        max_iter = get_settings().refinement_max_iterations
     current_svg = svg_overlay
     last_critique: dict = {"status": "FAIL"}
     iteration = 0
@@ -713,13 +749,11 @@ async def _step_refinement_loop(
             "message": f"Iteration {iteration}/{max_iter}: Generating preview...",
         })
 
-        # Generate preview by compositing SVG onto base
+        # Generate preview by compositing SVG onto base (like TS Sharp.composite)
         try:
-            base_img = Image.open(BytesIO(image_bytes)).convert("RGBA")
-            preview_buf = BytesIO()
-            base_img.save(preview_buf, format="PNG")
-            preview_bytes = preview_buf.getvalue()
-        except Exception:
+            preview_bytes = _composite_svg_onto_image(image_bytes, current_svg, canvas_w, canvas_h)
+        except Exception as e:
+            print(f"[Preview] SVG composite failed, using base image: {e}")
             preview_bytes = image_bytes
 
         preview_url = _save_upload(preview_bytes, f"preview-iter{iteration}")
@@ -741,7 +775,7 @@ async def _step_refinement_loop(
             "feedback": critique.get("feedback"),
             "actionableSteps": critique.get("actionable_steps", []),
             "message": (
-                f"✅ Layout approved! (confidence: {int((critique.get('confidence', 0.5)) * 100)}%)"
+                f" Layout approved! (confidence: {int((critique.get('confidence', 0.5)) * 100)}%)"
                 if critique.get("status") == "PASS"
                 else f"❌ Issues found: {critique.get('feedback')}"
             ),
@@ -786,13 +820,13 @@ async def _step_refinement_loop(
                 else None
             )
 
-            refined_svg_result = build_flex_svg(
+            refined_svg_result = build_flex_svg(FlexSVGInput(
                 boxes=refined_boxes, canvas_w=canvas_w, canvas_h=canvas_h,
                 bg_image_url=svg_bg, component_images=comp_imgs,
-            )
+            ))
 
-            if refined_svg_result["svg"] and len(refined_svg_result["svg"]) > 50:
-                current_svg = refined_svg_result["svg"]
+            if refined_svg_result.svg and len(refined_svg_result.svg) > 50:
+                current_svg = refined_svg_result.svg
                 analysis["svg_overlay"] = current_svg
                 analysis["flexTree"] = refined_flex["flexTree"]
             else:
@@ -890,7 +924,34 @@ async def create_campaign(
             comp_analysis = await _step_component_placement(
                 image_buffer, mime_type, target_text, parsed_no_go, send_sse
             )
-            component_suggestions = _dedup_components(comp_analysis.get("components", []))
+            ai_components = _dedup_components(comp_analysis.get("components", []))
+
+            # RMBG bboxes are the primary source of foreground subjects —
+            # always include them as components, merge with AI suggestions
+            rmbg_components = [
+                {
+                    "label": ng.get("label", f"Subject {i+1}"),
+                    "description": "Detected subject from background removal",
+                    "position": {"top": ng["top"], "left": ng["left"], "width": ng["width"], "height": ng["height"]},
+                    "suggested_position": {"top": ng["top"], "left": ng["left"], "width": ng["width"], "height": ng["height"]},
+                    "z_index": 15,
+                }
+                for i, ng in enumerate(rmbg_no_go)
+            ]
+
+            # Merge: RMBG subjects first (reliable), then AI components that don't overlap
+            component_suggestions = list(rmbg_components)
+            for ai_comp in ai_components:
+                ai_pos = ai_comp.get("position", {})
+                is_dup = any(
+                    _compute_iou(rc.get("position", {}), ai_pos) > 0.3
+                    for rc in component_suggestions
+                )
+                if not is_dup:
+                    component_suggestions.append(ai_comp)
+
+            if rmbg_components:
+                print(f"[Pipeline] Components: {len(rmbg_components)} from RMBG + {len(component_suggestions) - len(rmbg_components)} from AI = {len(component_suggestions)} total")
             analysis = {**comp_analysis, "suggestions": [], "components": component_suggestions}
 
             for e in events:
@@ -917,20 +978,35 @@ async def create_campaign(
             flex_tree = None
 
             if mode != "only_bg_comp":
-                # Plan layout strategy
+                # Plan layout strategy + reference image lookup in PARALLEL
                 send_sse("progress", {"step": "text_layout", "message": "AI is planning layout strategy..."})
 
                 current_positions = [
                     {"label": c["label"], **c["position"]}
                     for c in visual_components
                 ]
-                try:
-                    layout_hint = await vertex_service.plan_layout_strategy(
+
+                async def _plan_task():
+                    return await vertex_service.plan_layout_strategy(
                         image_buffer, mime_type, target_text,
                         [c["label"] for c in visual_components],
                         current_positions,
                     )
-                    # Apply plan's component positions
+
+                async def _ref_task():
+                    desc_result = await vertex_service.describe_and_embed(image_buffer, mime_type)
+                    return find_similar_refs(desc_result["embedding"], 3)
+
+                plan_result, ref_result = await asyncio.gather(
+                    _plan_task(), _ref_task(), return_exceptions=True,
+                )
+
+                # Apply plan results
+                ref_image_buffers: list[bytes] = []
+                if isinstance(plan_result, Exception):
+                    print(f"[Pass2] Plan phase failed: {plan_result}")
+                else:
+                    layout_hint = plan_result
                     if layout_hint.get("component_layout"):
                         for planned in layout_hint["component_layout"]:
                             comp = next((c for c in visual_components if c["label"] == planned["label"]), None)
@@ -940,31 +1016,20 @@ async def create_campaign(
                                     "top": planned["top"], "left": planned["left"],
                                     "width": planned["width"], "height": planned["height"],
                                 }
-
                     send_sse("progress", {
                         "step": "layout_strategy",
-                        "message": f'🎨 Layout strategy: "{layout_hint.get("layout_concept", "")}"',
+                        "message": f'Layout strategy: "{layout_hint.get("layout_concept", "")}"',
                     })
-                except Exception as e:
-                    print(f"[Pass2] Plan phase failed: {e}")
 
-                for e in events:
-                    yield e
-                events.clear()
-
-                # Reference image lookup
-                ref_image_buffers: list[bytes] = []
-                try:
-                    desc_result = await vertex_service.describe_and_embed(image_buffer, mime_type)
-                    refs = find_similar_refs(desc_result["embedding"], 3)
-                    if refs:
-                        ref_image_buffers = [Path(r["filepath"]).read_bytes() for r in refs]
-                        send_sse("debug", {
-                            "step": "ref_images",
-                            "message": f"Found {len(refs)} similar reference ads",
-                        })
-                except Exception as e:
-                    print(f"[Pass2] Reference image search failed: {e}")
+                # Apply ref results
+                if isinstance(ref_result, Exception):
+                    print(f"[Pass2] Reference image search failed: {ref_result}")
+                elif ref_result:
+                    ref_image_buffers = [Path(r["filepath"]).read_bytes() for r in ref_result]
+                    send_sse("debug", {
+                        "step": "ref_images",
+                        "message": f"Found {len(ref_result)} similar reference ads",
+                    })
 
                 # Footer text
                 footer_path = Path(__file__).parent.parent.parent / "assets" / "Ref_Footer" / "footer.txt"

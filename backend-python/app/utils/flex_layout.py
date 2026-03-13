@@ -56,7 +56,39 @@ def _parse_pct(value: str | None) -> float:
         return float("nan")
 
 
-def compute_flex_layout(root: FlexNode, canvas_w: float, canvas_h: float) -> list[LayoutBox]:
+def _safe_int(val) -> int | None:
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return int(val)
+    return None
+
+
+def dict_to_flex_node(d: dict) -> FlexNode:
+    style = None
+    if d.get("style") and isinstance(d["style"], dict):
+        style = FlexNodeStyle(**{k: v for k, v in d["style"].items() if k in FlexNodeStyle.__dataclass_fields__})
+    children = None
+    if isinstance(d.get("children"), list):
+        children = [dict_to_flex_node(c) for c in d["children"]]
+    return FlexNode(
+        id=d.get("id", ""),
+        direction=d.get("direction"),
+        children=children,
+        type=d.get("type"),
+        text=d.get("text"),
+        label=d.get("label"),
+        width=d.get("width"),
+        height=d.get("height"),
+        style=style,
+        gap=_safe_int(d.get("gap")),
+        padding=_safe_int(d.get("padding")),
+    )
+
+
+def compute_flex_layout(root: FlexNode | dict, canvas_w: float, canvas_h: float) -> list[LayoutBox]:
+    if isinstance(root, dict):
+        root = dict_to_flex_node(root)
     results: list[LayoutBox] = []
     _layout_node(root, 0, 0, canvas_w, canvas_h, results)
     return results

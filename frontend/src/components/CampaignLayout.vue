@@ -96,7 +96,7 @@ const createCampaign = async () => {
 const handleComplete = (data: any) => {
   analysis.value = data;
   loading.value = false;
-  progressMessage.value = `✅ Done! ${data.textLayers?.length || 0} text layers found.`;
+  progressMessage.value = `Done! ${data.textLayers?.length || 0} text layers found.`;
 
   // Emit the full data so App.vue can pass to LayerEditor
   emit("created", data);
@@ -104,7 +104,7 @@ const handleComplete = (data: any) => {
 
 const handleRefinementError = (message: string) => {
   loading.value = false;
-  progressMessage.value = `❌ Error: ${message}`;
+  progressMessage.value = `Error: ${message}`;
 };
 
 const goToEditor = () => {

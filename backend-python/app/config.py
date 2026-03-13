@@ -1,3 +1,6 @@
+import os
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
@@ -21,13 +24,17 @@ class Settings(BaseSettings):
     gemini_diecut_endpoint: str = "gemini-3-pro-image-preview"
     gemini_embedding_endpoint: str = "gemini-embedding-001"
 
+    # ML Models
+    rmbg_model_name: str = "briaai/RMBG-2.0"
+    hf_token: str = ""
+
     # Processing
     image_max_width: int = 1500
     image_quality: int = 90
     rmbg_model_size: int = 1024
     retry_count: int = 3
     retry_delay: float = 2.0
-    refinement_max_iterations: int = 3
+    refinement_max_iterations: int = 1
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

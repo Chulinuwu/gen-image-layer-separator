@@ -1,6 +1,6 @@
 import pytest
 
-from app.services.vertex import with_retry
+from app.services.vertex import VertexService, with_retry
 
 
 call_count = 0
@@ -56,3 +56,43 @@ async def test_with_retry_exhausts_retries():
 
     with pytest.raises(Exception, match="429"):
         await with_retry(always_429, retries=2, delay=0.01)
+
+
+# --- Fuzzy label matching ---
+
+class TestFuzzyMatchLabel:
+    def test_exact_match(self):
+        labels = ["Woman with smartphone", "Product bottle"]
+        assert VertexService._fuzzy_match_label("Woman with smartphone", labels) == "Woman with smartphone"
+
+    def test_case_insensitive(self):
+        labels = ["Woman with smartphone", "Product bottle"]
+        assert VertexService._fuzzy_match_label("woman with smartphone", labels) == "Woman with smartphone"
+
+    def test_token_overlap(self):
+        labels = ["Woman with smartphone and water gun", "Product bottle"]
+        assert VertexService._fuzzy_match_label("woman_smartphone", labels) == "Woman with smartphone and water gun"
+
+    def test_substring_match(self):
+        labels = ["Woman with smartphone and water gun", "Product bottle"]
+        assert VertexService._fuzzy_match_label("bottle", labels) == "Product bottle"
+
+    def test_ai_shorthand(self):
+        labels = ["Woman with smartphone and water gun", "Singha water bottle"]
+        result = VertexService._fuzzy_match_label("woman_component", labels)
+        assert result == "Woman with smartphone and water gun"
+
+    def test_no_match_returns_none(self):
+        labels = ["Woman with smartphone"]
+        assert VertexService._fuzzy_match_label("completely_unrelated_xyz", labels) is None
+
+    def test_empty_labels(self):
+        assert VertexService._fuzzy_match_label("anything", []) is None
+
+    def test_validate_tree_auto_fixes_label(self):
+        svc = VertexService.__new__(VertexService)
+        tree = {"id": "c1", "type": "component", "label": "woman_smartphone"}
+        labels = ["Woman with smartphone and water gun", "Product bottle"]
+        warnings = svc._validate_flex_tree(tree, labels)
+        assert not warnings
+        assert tree["label"] == "Woman with smartphone and water gun"
