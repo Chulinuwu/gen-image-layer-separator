@@ -644,7 +644,7 @@ Return as STRICT JSON:
             import torch
             import numpy as np
 
-            MODEL_SIZE = 1024
+            MODEL_SIZE = get_settings().rmbg_model_size
             img = _open_image(image_buffer).convert("RGB")
             orig_w, orig_h = img.size
             resized = img.resize((MODEL_SIZE, MODEL_SIZE), Image.LANCZOS)
@@ -677,7 +677,7 @@ Return as STRICT JSON:
         try:
             img = _open_image(image_buffer)
             w, h = img.size
-            max_dim = 1500
+            max_dim = get_settings().image_max_width
             if w > max_dim or h > max_dim:
                 ratio = min(max_dim / w, max_dim / h)
                 img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
@@ -841,7 +841,7 @@ Return as STRICT JSON:
         self, image_buffer: bytes, mime_type: str, component: dict
     ) -> bytes | None:
         s = get_settings()
-        model = s.gemini_image_endpoint_2 or s.gemini_image_endpoint or "gemini-3-pro-image-preview"
+        model = s.gemini_diecut_endpoint or s.gemini_image_endpoint_2 or s.gemini_image_endpoint
         label_lower = component.get("label", "").lower()
         CHARACTER_KW = ["woman", "man", "girl", "boy", "mascot", "character", "person", "figure", "human"]
         is_char = any(kw in label_lower for kw in CHARACTER_KW)
@@ -1356,7 +1356,7 @@ RULES:
         description = (desc_resp.text or "").strip() or "Generic advertisement background"
 
         embed_resp = await with_retry(lambda: self.client.aio.models.embed_content(
-            model="gemini-embedding-001",
+            model=get_settings().gemini_embedding_endpoint,
             contents=description,
             config={"task_type": "RETRIEVAL_QUERY", "output_dimensionality": 1536},
         ))
