@@ -16,6 +16,24 @@ from google.oauth2 import service_account
 from app.config import get_settings
 from app.utils.ai_logger import trace_ai
 from app.utils.flex_layout import FlexNode
+from app.constants.pipeline import (
+    PROCESSING_MAX_W, PROCESSING_QUALITY, STRATEGY_RESIZE_W, STRATEGY_RESIZE_QUALITY,
+    RMBG_MODEL_SIZE, FULL_BG_MAX_DIM,
+    DIECUT_CHAR_PAD, DIECUT_DEFAULT_PAD, DIECUT_MIN_DIM, DIECUT_MIN_OPAQUE_RATIO,
+    DIECUT_API_SLEEP_S, WHITE_BG_THRESHOLD, ALPHA_EROSION_ITERATIONS, CROP_ALPHA_CUTOFF,
+    QUALITY_ALPHA_CUTOFF, GRID_THUMBNAIL_SIZE, GRID_MAX_COLS,
+    FLOOD_FILL_ALPHA_THRESH, INPAINT_FG_ALPHA_THRESH, INPAINT_MASK_DILATION,
+    BBOX_ALPHA_THRESH, STROKE_BBOX_ALPHA_THRESH, CHARACTER_KEYWORDS, NO_TEXT_PREFIX,
+)
+from app.constants.models import SAFETY_OFF, get_text_model, get_text_model_best
+from app.prompts.campaign_layout import build_campaign_layout_prompt
+from app.prompts.flex_layout import build_flex_layout_prompt
+from app.prompts.critique import build_critique_prompt
+from app.prompts.diecut import build_diecut_prompt
+from app.prompts.layout_strategy import build_layout_strategy_prompt
+from app.prompts.render_campaign import build_render_prompt
+from app.prompts.separate_layers import build_separate_layers_prompt, build_analyze_components_prompt
+from app.prompts.describe import DESCRIBE_PROMPT
 
 # ---------------------------------------------------------------------------
 # RMBG-2.0 model singleton
@@ -23,13 +41,6 @@ from app.utils.flex_layout import FlexNode
 _rmbg2_model = None
 _rmbg2_processor = None
 _rmbg2_loading: asyncio.Lock | None = None
-
-SAFETY_OFF = [
-    genai_types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="OFF"),
-    genai_types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="OFF"),
-    genai_types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="OFF"),
-    genai_types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="OFF"),
-]
 
 
 def _img_to_bytes(img: Image.Image, fmt: str = "PNG", **kwargs) -> bytes:
@@ -42,7 +53,7 @@ def _open_image(data: bytes) -> Image.Image:
     return Image.open(BytesIO(data))
 
 
-def _resize_for_processing(data: bytes, max_w: int = 1500, quality: int = 90) -> tuple[bytes, str]:
+def _resize_for_processing(data: bytes, max_w: int = PROCESSING_MAX_W, quality: int = PROCESSING_QUALITY) -> tuple[bytes, str]:
     img = _open_image(data)
     w, h = img.size
     if w > max_w:
@@ -143,12 +154,10 @@ class VertexService:
     # ── helpers ──────────────────────────────────────────────────────────
 
     def _text_model(self) -> str:
-        s = get_settings()
-        return s.gemini_model_endpoint_2 or s.gemini_model_endpoint or "gemini-3-flash-preview"
+        return get_text_model()
 
     def _text_model_best(self) -> str:
-        s = get_settings()
-        return s.gemini_text_endpoint or s.gemini_model_endpoint or "gemini-2.5-flash"
+        return get_text_model_best()
 
     async def _generate_content(self, model: str, parts: list, config: dict | None = None):
         return await with_retry(lambda: self.client.aio.models.generate_content(
@@ -233,37 +242,10 @@ class VertexService:
         suggestions: list[dict],
         background_buffer: bytes | None = None,
     ) -> dict:
-        text_desc = "\n".join(
-            f'LINE {i+1}: "{s.get("part", "")}"\n'
-            f'       - Style: {s.get("style", {}).get("font_family", "")}, '
-            f'{s.get("style", {}).get("font_weight", "")}, Color {s.get("style", {}).get("color_hex", "")}\n'
-            f'       - Container: {s.get("visual_container", "none")}\n'
-            f'       - Size: {s.get("style", {}).get("font_size_normalized", 40)}\n'
-            f'       - Position: {s.get("position", {}).get("explanation", "")}'
-            for i, s in enumerate(suggestions)
-        )
         input_images = [{"buffer": image_buffer, "mime_type": mime_type}]
         if background_buffer:
             input_images.append({"buffer": background_buffer, "mime_type": mime_type})
-        base_inst = (
-            "USE THE SECOND IMAGE AS YOUR CLEAN BACKGROUND CANVAS. Do NOT leave any ghosting of original text."
-            if background_buffer else "Use the provided image as background."
-        )
-        prompt = f"""Create a high-quality, professional advertisement.
-REFERENCE IMAGE 1: Desired layout, quality, and graphic style.
-{"REFERENCE IMAGE 2: Clean background canvas to work on." if background_buffer else ""}
-
-TASK:
-1. {base_inst}
-2. There are EXACTLY {len(suggestions)} text elements. Each one MUST appear on its OWN VISUAL LINE:
-{text_desc}
-
-CRITICAL DESIGN INSTRUCTIONS:
-- Each LINE above is a SEPARATE visual line. Do NOT combine any two LINEs into one horizontal string.
-- MATCH THE TEXT LAYOUT from Reference Image 1 exactly.
-- If a 'Container' like 'yellow_ribbon' or 'red_banner' is mentioned, RECREATE that graphic element professionally.
-- Text must be crisp, perfectly spelled, and high-contrast.
-- Final result must look like a single, cohesive, high-end production."""
+        prompt = build_render_prompt(suggestions, bool(background_buffer))
         return await self.generate_image(prompt=prompt, input_images=input_images)
 
     # ── Layout Planning ─────────────────────────────────────────────────
@@ -276,7 +258,7 @@ CRITICAL DESIGN INSTRUCTIONS:
         component_labels: list[str],
         component_positions: list[dict] | None = None,
     ) -> dict:
-        proc_buf, proc_mime = _resize_for_processing(image_buffer, 800, 80)
+        proc_buf, proc_mime = _resize_for_processing(image_buffer, STRATEGY_RESIZE_W, STRATEGY_RESIZE_QUALITY)
         model = self._text_model()
         components_available = ", ".join(component_labels) if component_labels else "none detected yet"
 
@@ -294,31 +276,10 @@ CRITICAL DESIGN INSTRUCTIONS:
         total_comp_area = sum(c.get("width", 0) * c.get("height", 0) for c in (component_positions or []))
         comp_pct = round(total_comp_area / (1000 * 1000) * 100)
 
-        prompt = f"""You are a senior Thai advertising Art Director at a top Bangkok agency.
-Look at this campaign image and text brief. Output a UNIFIED LAYOUT STRATEGY in JSON only.
-CRITICAL: Plan WHERE COMPONENTS GO and WHERE TEXT GOES **together** as ONE layout.
-{comp_pos_block}
-TEXT SPACE ANALYSIS:
-- Text items: {len(text_lines)} lines
-- Contains promotional number: {"YES" if has_promo else "NO"}
-- Estimated text zone height: ~{est_text_h} units
-- Component area: {comp_pct}%
-
-TEXT BRIEF:
-\"\"\"{target_text}\"\"\"
-
-VISUAL COMPONENTS: {components_available}
-
-Respond with ONLY this JSON:
-{{
-  "layout_concept": "one short phrase",
-  "dominant_element": "the SINGLE most important text/number",
-  "text_zone": {{"top": 0, "left": 0, "width": 0, "height": 0}},
-  "component_layout": [{{"label": "name", "top": 0, "left": 0, "width": 0, "height": 0}}],
-  "recommended_text_zone": "left | right | bottom | full",
-  "composition_notes": "1-2 sentence design decision",
-  "text_hierarchy": ["ordered text parts"]
-}}"""
+        prompt = build_layout_strategy_prompt(
+            target_text, comp_pos_block, components_available,
+            len(text_lines), has_promo, est_text_h, comp_pct,
+        )
 
         try:
             response = await self._generate_content(model, [_inline_data(proc_buf, proc_mime), {"text": prompt}], {"temperature": 0.7})
@@ -400,34 +361,7 @@ Respond with ONLY this JSON:
 
         is_comp_only = mode == "only_bg_comp"
 
-        prompt = f"""Act as a professional graphic designer.
-Use 0-1000 normalized coordinates.
-
-AD BRIEF:
-\"\"\"{target_text}\"\"\"
-{fixed_comp_note}{safe_inst or no_go_inst}{hint_block}
-
-TASKS:
-{"1. COMPONENT COMPOSITION: Detect visual components that ACTUALLY EXIST in the provided image. CRITICAL: Only list components you can visually SEE in the image pixels. Do NOT hallucinate components mentioned in the ad brief text that are not visible in the image. If the brief mentions a logo, phone mockup, or other element that is NOT visible in the image, do NOT include it in components. Components array must ONLY contain elements you can point to in the image." if is_comp_only else "1. PLACEMENT STRATEGY + TEXT EXTRACTION + COMPONENT COMPOSITION. CRITICAL: components array must ONLY contain elements visually present in the image, NOT elements mentioned in the brief text."}
-
-Return as STRICT JSON:
-{{
-  "background_description": "...",
-  "campaign_vibe": "...",
-  "composition_text_zone": {{"top": 0, "left": 0, "width": 400, "height": 1000}},
-  "spatial_analysis": {{"safe_zone": "LEFT|CENTER|RIGHT", "blocked_zones": [], "strategy": "..."}},
-  "no_go_zones": [{{"priority": "HIGH", "label": "...", "area": {{"top": 0, "left": 0, "width": 0, "height": 0}}, "reason": "..."}}],
-  "suggestions": [{{"part": "text", "preferred_zone": "zone-label", "position": {{"top": 0, "left": 0, "width": 0, "height": 0}},
-    "style": {{"font_family": "Kanit", "font_weight": "bold", "color_hex": "#FFF", "font_size_normalized": 40,
-      "text_align": "left", "shadow": "strong", "stroke_hex": "#000", "stroke_width": 4}},
-    "hierarchy": "Headline|Body|FinePrint"}}],
-  "components": [{{"label": "...", "description": "...", "position": {{"top": 0, "left": 0, "width": 0, "height": 0}},
-    "suggested_position": {{"top": 0, "left": 0, "width": 0, "height": 0}}, "z_index": 15,
-    "interaction_zone": {{"enabled": false}}}}]
-}}
-
-FONT RULES: font_family MUST be "Kanit" for ALL elements. font_weight: headline="800", body="600", fineprint="400", promo="900".
-STROKE+SHADOW MANDATORY on all text. visual_container always "none"."""
+        prompt = build_campaign_layout_prompt(target_text, fixed_comp_note, safe_inst, no_go_inst, hint_block, is_comp_only)
 
         config = {"temperature": 1, "top_p": 0.95, "safety_settings": SAFETY_OFF}
         try:
@@ -539,15 +473,7 @@ STROKE+SHADOW MANDATORY on all text. visual_container always "none"."""
         style_only: bool = False,
     ) -> dict:
         model = self._text_model()
-        prompt = f"""You are the STRICTEST ART DIRECTOR in the advertising industry.
-IMAGE 1: ORIGINAL reference. IMAGE 2: PREVIEW with text overlays.
-AD BRIEF: "{target_text}"
-
-CRITIQUE CRITERIA: Check text overlap with faces, readability, contrast, composition.
-{"Focus ONLY on visual style — positions verified by code." if style_only else "Check positions AND style."}
-
-Return as STRICT JSON:
-{{"status": "PASS" | "FAIL", "confidence": 0.0-1.0, "feedback": "...", "actionable_steps": ["fix 1", "fix 2"]}}"""
+        prompt = build_critique_prompt(target_text, style_only)
 
         try:
             parts = [
@@ -586,12 +512,7 @@ Return as STRICT JSON:
             comparison = "TWO images provided: 1) composite, 2) original background. Identify ONLY added text."
         hint = f'HINT: User used this text: "{hint_text}"' if hint_text else ""
 
-        prompt = f"""{comparison} {hint}
-Analyze the image(s) and identify all individual text layers.
-Return as STRICT JSON:
-{{"layers": [{{"type": "text", "content": "...", "position": {{"top": 0, "left": 0, "width": 0, "height": 0}},
-  "style": {{"font_family": "Kanit", "font_weight": "bold", "color_hex": "#FFF", "font_size_normalized": 40}}}}],
- "background": {{"description": "..."}}}}"""
+        prompt = build_separate_layers_prompt(comparison, hint)
 
         try:
             parts.append({"text": prompt})
@@ -613,16 +534,7 @@ Return as STRICT JSON:
         if background_buffer:
             parts.append(_inline_data(background_buffer, mime_type))
 
-        prompt = """Analyze the image and identify all NON-TEXT visual components overlaid on the background.
-Include: ribbons, banners, stickers, mascots, characters, logos, icons, person cutouts.
-EXCLUDE: text, background scene itself.
-
-GROUPING: If a person holds an object, it's ONE component (not separate).
-
-Return as STRICT JSON:
-{"components": [{"label": "short label", "description": "detailed visual description",
-  "position": {"top": 0, "left": 0, "width": 0, "height": 0, "rotation": 0},
-  "z_index": 15, "interaction_zone": {"enabled": false}}]}"""
+        prompt = build_analyze_components_prompt()
 
         try:
             parts.append({"text": prompt})
@@ -659,10 +571,9 @@ Return as STRICT JSON:
             import torch
             import numpy as np
 
-            MODEL_SIZE = 1024
             img = _open_image(image_buffer).convert("RGB")
             orig_w, orig_h = img.size
-            resized = img.resize((MODEL_SIZE, MODEL_SIZE), Image.LANCZOS)
+            resized = img.resize((RMBG_MODEL_SIZE, RMBG_MODEL_SIZE), Image.LANCZOS)
 
             inputs = _rmbg2_processor(resized, return_tensors="pt")
             with torch.no_grad():
@@ -676,13 +587,13 @@ Return as STRICT JSON:
                 pred = pred.squeeze(0)
 
             mask = (pred.numpy() * 255).astype(np.uint8)
-            mask_img = Image.fromarray(mask, mode="L").resize((MODEL_SIZE, MODEL_SIZE), Image.LANCZOS)
+            mask_img = Image.fromarray(mask, mode="L").resize((RMBG_MODEL_SIZE, RMBG_MODEL_SIZE), Image.LANCZOS)
 
             # Apply mask to resized original
             rgba = resized.copy().convert("RGBA")
             rgba.putalpha(mask_img)
 
-            print(f"[RMBG-2.0] ✅ Done ({MODEL_SIZE}x{MODEL_SIZE})")
+            print(f"[RMBG-2.0] ✅ Done ({RMBG_MODEL_SIZE}x{RMBG_MODEL_SIZE})")
             return _img_to_bytes(rgba, "PNG")
         except Exception as e:
             print(f"[RMBG-2.0] Runtime failure: {e}")
@@ -692,9 +603,8 @@ Return as STRICT JSON:
         try:
             img = _open_image(image_buffer)
             w, h = img.size
-            max_dim = 1500
-            if w > max_dim or h > max_dim:
-                ratio = min(max_dim / w, max_dim / h)
+            if w > FULL_BG_MAX_DIM or h > FULL_BG_MAX_DIM:
+                ratio = min(FULL_BG_MAX_DIM / w, FULL_BG_MAX_DIM / h)
                 img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
             png_buf = _img_to_bytes(img.convert("RGBA"), "PNG")
 
@@ -732,7 +642,7 @@ Return as STRICT JSON:
 
             pixels = np.array(masked_img)
             alpha = pixels[:, :, 3]
-            THRESH = 10
+            THRESH = FLOOD_FILL_ALPHA_THRESH
 
             visited = np.zeros((mh, mw), dtype=bool)
             queue = []
@@ -794,9 +704,8 @@ Return as STRICT JSON:
         self, image_buffer: bytes, position: dict, label: str = "", masked_full: bytes | None = None
     ) -> bytes | None:
         try:
-            CHARACTER_KW = ["woman", "man", "girl", "boy", "mascot", "character", "person", "figure", "human", "chibi"]
-            is_char = any(kw in label.lower() for kw in CHARACTER_KW)
-            PAD = 0.1 if is_char else 0.04
+            is_char = any(kw in label.lower() for kw in CHARACTER_KEYWORDS)
+            PAD = DIECUT_CHAR_PAD if is_char else DIECUT_DEFAULT_PAD
 
             img = _open_image(image_buffer)
             orig_w, orig_h = img.size
@@ -840,7 +749,7 @@ Return as STRICT JSON:
             result_img = _open_image(result_buf).convert("RGBA")
             import numpy as np
             arr = np.array(result_img)
-            arr[:, :, 3] = np.where(arr[:, :, 3] < 25, 0, arr[:, :, 3])
+            arr[:, :, 3] = np.where(arr[:, :, 3] < CROP_ALPHA_CUTOFF, 0, arr[:, :, 3])
             result_img = Image.fromarray(arr)
 
             if not is_char:
@@ -858,15 +767,9 @@ Return as STRICT JSON:
         s = get_settings()
         model = s.gemini_image_endpoint_2 or s.gemini_image_endpoint or "gemini-3-pro-image-preview"
         label_lower = component.get("label", "").lower()
-        CHARACTER_KW = ["woman", "man", "girl", "boy", "mascot", "character", "person", "figure", "human"]
-        is_char = any(kw in label_lower for kw in CHARACTER_KW)
+        is_char = any(kw in label_lower for kw in CHARACTER_KEYWORDS)
 
-        prompt = (
-            f'Recreate "{component["label"]}" as a HIGH-RESOLUTION CUTOUT on PURE WHITE BACKGROUND. '
-            f'{component.get("description", "")} '
-            f'{"FULL BODY from head to toes. No cropping." if is_char else "OBJECT ONLY, no hands/arms holding it."} '
-            f'No text, no borders, no shadows. Centered with generous padding.'
-        )
+        prompt = build_diecut_prompt(component["label"], component.get("description", ""), is_char)
         parts = [_inline_data(image_buffer, mime_type), {"text": prompt}]
         config = {
             "temperature": 1,
@@ -890,7 +793,7 @@ Return as STRICT JSON:
         img = _open_image(img_buf).convert("RGBA")
         arr = np.array(img)
         w, h = img.size
-        WHITE_THRESH = 250
+        WHITE_THRESH = WHITE_BG_THRESHOLD
 
         bg = np.zeros((h, w), dtype=bool)
         queue = []
@@ -922,8 +825,8 @@ Return as STRICT JSON:
 
         arr[bg, 3] = 0
 
-        # Alpha erosion (2 iterations)
-        for _ in range(2):
+        # Alpha erosion
+        for _ in range(ALPHA_EROSION_ITERATIONS):
             alpha_copy = arr[:, :, 3].copy()
             for y in range(1, h - 1):
                 for x in range(1, w - 1):
@@ -938,7 +841,7 @@ Return as STRICT JSON:
         return _img_to_bytes(result, "PNG")
 
     @staticmethod
-    def _diecut_quality_ok(buf: bytes, label: str, min_dim: int = 40, min_opaque_ratio: float = 0.05) -> bool:
+    def _diecut_quality_ok(buf: bytes, label: str, min_dim: int = DIECUT_MIN_DIM, min_opaque_ratio: float = DIECUT_MIN_OPAQUE_RATIO) -> bool:
         try:
             import numpy as np
             img = _open_image(buf).convert("RGBA")
@@ -947,7 +850,7 @@ Return as STRICT JSON:
                 print(f'[Diecut QA] "{label}" too small: {w}x{h}')
                 return False
             alpha = np.array(img)[:, :, 3]
-            opaque_ratio = (alpha > 20).sum() / alpha.size
+            opaque_ratio = (alpha > QUALITY_ALPHA_CUTOFF).sum() / alpha.size
             if opaque_ratio < min_opaque_ratio:
                 print(f'[Diecut QA] "{label}" nearly transparent: {opaque_ratio:.1%} opaque')
                 return False
@@ -985,7 +888,7 @@ Return as STRICT JSON:
                 if not buf:
                     buf = await self._generate_single_diecut(image_buffer, mime_type, comp)
                     if i < len(components) - 1:
-                        await asyncio.sleep(3)
+                        await asyncio.sleep(DIECUT_API_SLEEP_S)
                 if buf and self._diecut_quality_ok(buf, comp.get("label", "")):
                     all_results.append({"label": comp.get("label", ""), "buffer": buf})
                 elif buf:
@@ -997,8 +900,8 @@ Return as STRICT JSON:
         grid_images = []
         if all_results:
             try:
-                THUMB = 256
-                cols = min(3, len(all_results))
+                THUMB = GRID_THUMBNAIL_SIZE
+                cols = min(GRID_MAX_COLS, len(all_results))
                 rows = -(-len(all_results) // cols)
                 grid = Image.new("RGBA", (cols * THUMB, rows * THUMB), (255, 255, 255, 255))
                 for idx, r in enumerate(all_results):
@@ -1030,7 +933,7 @@ Return as STRICT JSON:
             # Binarize alpha → B&W inpaint mask
             bw = np.zeros((mh, mw, 4), dtype=np.uint8)
             bw[:, :, 3] = 255
-            fg = arr[:, :, 3] > 30
+            fg = arr[:, :, 3] > INPAINT_FG_ALPHA_THRESH
             bw[fg, 0] = 255
             bw[fg, 1] = 255
             bw[fg, 2] = 255
@@ -1050,7 +953,7 @@ Return as STRICT JSON:
                 reference_image=genai_types.Image(image_bytes=mask_png, mime_type="image/png"),
                 config=genai_types.MaskReferenceConfig(
                     mask_mode="MASK_MODE_USER_PROVIDED",
-                    mask_dilation=0.03,
+                    mask_dilation=INPAINT_MASK_DILATION,
                 ),
             )
             raw_ref = genai_types.RawReferenceImage(
@@ -1093,7 +996,7 @@ Return as STRICT JSON:
             arr = np.array(img)
             w, h = img.size
             alpha = arr[:, :, 3]
-            fg = alpha > 50
+            fg = alpha > BBOX_ALPHA_THRESH
             if not fg.any():
                 return {"masked_buffer": masked, "bboxes": []}
 
@@ -1121,7 +1024,7 @@ Return as STRICT JSON:
                 arr = np.array(img)
                 w, h = img.size
                 alpha = arr[:, :, 3]
-                fg = alpha > 30
+                fg = alpha > STROKE_BBOX_ALPHA_THRESH
                 if not fg.any():
                     continue
                 ys, xs = np.where(fg)
@@ -1285,32 +1188,7 @@ Return as STRICT JSON:
             f'FOOTER TEXT (MUST be at bottom): "{footer_text}"\n' if footer_text else ""
         )
 
-        prompt = f"""You are a master of 2D graphic design and visual composition.
-
-{ref_section}CAMPAIGN TEXT:
-{target_text}
-
-{components_list}
-{footer_section}
-CANVAS: {canvas_size["w"]}x{canvas_size["h"]}px
-
-STEP 1 — DESIGN REASONING in <layout_thought>...</layout_thought>
-STEP 2 — ELEMENT GROUPING in <grouping>...</grouping>
-STEP 3 — FLEX TREE JSON:
-{{"flexTree": {{...}}, "campaign_vibe": "...", "background_description": "..."}}
-
-FLEX TREE FORMAT:
-Container: {{"id":"...", "direction":"row|column", "children":[...], "height":"40%", "width":"60%", "gap":16, "padding":20}}
-Text leaf: {{"id":"...", "type":"text", "text":"...", "height":"30%", "style":{{"fontSize":"xlarge|large|medium|small|xsmall", "fontWeight":"900|700|400", "color":"#FFD700", "strokeColor":"#000", "strokeWidth":2, "align":"center|left|right", "backgroundColor":"#4B0082"}}}}
-Component leaf: {{"id":"...", "type":"component", "label":"must match available labels", "height":"50%"}}
-
-RULES:
-- Every text line MUST appear as a text leaf.
-- ONLY create component leaves for labels listed in "Available die-cut components" above. If none are listed, use ZERO component nodes.
-- Do NOT invent component nodes for elements mentioned in the brief text (logos, mockups, etc.) unless they appear in the available components list.
-- Root is always "column" with padding. Use "row" inside for horizontal groupings.
-- Hero/promo number = LARGEST element (fontSize "xlarge", fontWeight "900").
-- Group related elements together. Use strokeColor for readability on busy backgrounds."""
+        prompt = build_flex_layout_prompt(target_text, components_list, ref_section, footer_section, canvas_size)
 
         parts = []
         if ref_images:
@@ -1398,13 +1276,13 @@ RULES:
     # ── Describe & Embed ────────────────────────────────────────────────
 
     async def describe_and_embed(self, image_buffer: bytes, mime_type: str) -> dict:
-        proc_buf, proc_mime = _resize_for_processing(image_buffer, 800, 80)
+        proc_buf, proc_mime = _resize_for_processing(image_buffer, STRATEGY_RESIZE_W, STRATEGY_RESIZE_QUALITY)
         model = self._text_model_best()
 
         desc_resp = await self._generate_content(
             model,
             [_inline_data(proc_buf, proc_mime),
-             {"text": "Describe this image for ad-layout similarity matching in 2-3 sentences. Cover: layout areas, dominant colors, visual style, mood."}],
+             {"text": DESCRIBE_PROMPT}],
             {"temperature": 0.3},
         )
         description = (desc_resp.text or "").strip() or "Generic advertisement background"

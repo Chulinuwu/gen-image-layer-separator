@@ -12,6 +12,10 @@ from fastapi import Request, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from PIL import Image
 
+from app.constants.pipeline import (
+    CHARACTER_KEYWORDS, PROP_KEYWORDS, GRAPHICAL_KEYWORDS,
+    FG_DETECT_ALPHA_THRESH, FG_DETECT_RATIO_THRESH, PROMO_RE_PATTERN,
+)
 from app.services.vertex import vertex_service
 from app.utils.ai_logger import log_event, trace_ai
 from app.utils.flex_layout import compute_flex_layout
@@ -22,27 +26,7 @@ from app.utils.svg_builder import build_flex_svg, FlexSVGInput
 UPLOAD_DIR = Path(__file__).parent.parent.parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-CHARACTER_KEYWORDS = [
-    "woman", "man", "girl", "boy", "mascot",
-    "character", "person", "figure", "human",
-]
-PROP_KEYWORDS = [
-    "phone", "smartphone", "mobile", "tablet",
-    "gun", "pistol", "weapon", "rifle", "water gun", "squirt",
-    "bag", "purse", "handbag", "backpack",
-    "bottle", "cup", "mug", "drink",
-    "hat", "cap", "helmet", "glasses", "sunglasses",
-    "umbrella", "fan", "flag",
-]
-GRAPHICAL_KEYWORDS = [
-    "pattern", "hexagon", "geometric", "background", "texture",
-    "gradient", "border", "decoration", "ornament", "abstract",
-    "shape", "wave", "frame", "watermark",
-]
-
-PROMO_RE = re.compile(
-    r"^[\d๐-๙%+×\s]{1,6}$|^[\d๐-๙.]+\s*(ต่อ|เท่า|ครั้ง|คืน|%|×)\s*$"
-)
+PROMO_RE = re.compile(PROMO_RE_PATTERN)
 
 
 def _save_upload(data: bytes, prefix: str = "file", ext: str = ".png") -> str:
@@ -474,14 +458,14 @@ async def export_svg_handler(
 # ─────────────────────────────────────────────────────────────────
 
 
-def _has_extractable_foreground(masked_buf: bytes | None, threshold: float = 0.05) -> bool:
+def _has_extractable_foreground(masked_buf: bytes | None, threshold: float = FG_DETECT_RATIO_THRESH) -> bool:
     if not masked_buf:
         return False
     try:
         import numpy as np
         img = Image.open(BytesIO(masked_buf)).convert("RGBA")
         alpha = np.array(img)[:, :, 3]
-        opaque_ratio = (alpha > 20).sum() / alpha.size
+        opaque_ratio = (alpha > FG_DETECT_ALPHA_THRESH).sum() / alpha.size
         print(f"[RMBG Gate] Foreground opaque ratio: {opaque_ratio:.1%} (threshold: {threshold:.0%})")
         return opaque_ratio >= threshold
     except Exception:
