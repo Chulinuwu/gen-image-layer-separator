@@ -1246,6 +1246,19 @@ Return as STRICT JSON:
                 warnings.append(f"{path}: text leaf missing text")
         return warnings
 
+    def _strip_component_nodes(self, node: dict) -> None:
+        children = node.get("children")
+        if not isinstance(children, list):
+            return
+        filtered = []
+        for child in children:
+            if child.get("type") == "component":
+                print(f'[FlexLayout] Stripped hallucinated component node: "{child.get("label", child.get("id", "?"))}"')
+                continue
+            self._strip_component_nodes(child)
+            filtered.append(child)
+        node["children"] = filtered
+
     async def suggest_flex_layout(
         self,
         image_buffer: bytes,
@@ -1260,7 +1273,8 @@ Return as STRICT JSON:
         model = self._text_model_best()
         components_list = (
             "Available die-cut components:\n" + "\n".join(f'  - "{l}"' for l in component_labels)
-            if component_labels else "No die-cut components available."
+            if component_labels
+            else "No die-cut components available. CRITICAL: Do NOT create any component nodes in the flex tree. ALL elements must be type \"text\". Even if the brief mentions logos, phone mockups, or other visual elements — they do not exist as die-cut images so you MUST NOT include them as component leaves."
         )
         ref_section = (
             f"REFERENCE IMAGES:\nThe first {len(ref_images)} images are examples of well-designed layouts.\n"
@@ -1291,7 +1305,9 @@ Text leaf: {{"id":"...", "type":"text", "text":"...", "height":"30%", "style":{{
 Component leaf: {{"id":"...", "type":"component", "label":"must match available labels", "height":"50%"}}
 
 RULES:
-- Every text line MUST appear as a text leaf. Every component MUST appear exactly once.
+- Every text line MUST appear as a text leaf.
+- ONLY create component leaves for labels listed in "Available die-cut components" above. If none are listed, use ZERO component nodes.
+- Do NOT invent component nodes for elements mentioned in the brief text (logos, mockups, etc.) unless they appear in the available components list.
 - Root is always "column" with padding. Use "row" inside for horizontal groupings.
 - Hero/promo number = LARGEST element (fontSize "xlarge", fontWeight "900").
 - Group related elements together. Use strokeColor for readability on busy backgrounds."""
@@ -1332,6 +1348,9 @@ RULES:
 
             if not isinstance(parsed.get("flexTree"), dict):
                 raise ValueError("No flexTree object")
+
+            if not component_labels:
+                self._strip_component_nodes(parsed["flexTree"])
 
             warnings = self._validate_flex_tree(parsed["flexTree"], component_labels)
             if warnings:
