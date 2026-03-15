@@ -196,8 +196,14 @@ class VertexService:
                 "temperature": 1,
                 "top_p": 0.95,
                 "response_modalities": ["TEXT", "IMAGE"],
+                "image_config": {
+                    "aspect_ratio": aspect_ratio,
+                    "image_size": resolution,
+                },
                 "safety_settings": SAFETY_OFF,
             }
+
+            print(f"[GenAI] Image generation config: aspect_ratio={aspect_ratio}, image_size={resolution}, model={target_model}")
             stream = await self._generate_content_stream(target_model, parts, config)
             generated_buffer = None
             response_text = ""

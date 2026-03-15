@@ -304,6 +304,8 @@ async def generate_and_separate(
     if not prompt:
         return JSONResponse({"error": "Prompt is required"}, status_code=400)
 
+    print(f"[Backend Controller] Received request: prompt='{prompt[:50]}...', aspect_ratio={aspect_ratio}, resolution={resolution}, hasImages={len(images) > 0}")
+
     input_images: list[dict] = []
     if images:
         for f in images:

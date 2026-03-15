@@ -2,6 +2,7 @@
 import { ref } from "vue";
 
 const prompt = ref("An office group photo of people looking stressed");
+const aspectRatio = ref("4:3");
 const loading = ref(false);
 const result = ref<any>(null);
 const error = ref("");
@@ -13,9 +14,17 @@ const generateImage = async () => {
   error.value = "";
   result.value = null;
 
+  console.log("[Frontend] Generating image with aspect_ratio:", aspectRatio.value);
+
   try {
     const formData = new FormData();
     formData.append("prompt", prompt.value);
+    formData.append("aspect_ratio", aspectRatio.value);
+
+    console.log("[Frontend] FormData contents:", {
+      prompt: prompt.value,
+      aspect_ratio: aspectRatio.value
+    });
 
     const response = await fetch("http://localhost:5001/api/image/generate", {
       method: "POST",
@@ -51,6 +60,22 @@ const goToCampaign = () => {
         rows="3"
         placeholder="Describe the scene..."
       ></textarea>
+    </div>
+
+    <div class="mb-4">
+      <label class="label">Aspect Ratio</label>
+      <select v-model="aspectRatio" class="select-input">
+        <option value="1:1">1:1 (Square)</option>
+        <option value="4:3">4:3 (Standard)</option>
+        <option value="3:4">3:4 (Portrait)</option>
+        <option value="16:9">16:9 (Widescreen)</option>
+        <option value="9:16">9:16 (Vertical)</option>
+        <option value="21:9">21:9 (Ultra Wide)</option>
+        <option value="3:2">3:2 (Photo)</option>
+        <option value="2:3">2:3 (Portrait Photo)</option>
+        <option value="5:4">5:4 (Classic)</option>
+        <option value="4:5">4:5 (Instagram)</option>
+      </select>
     </div>
 
     <button :disabled="loading" @click="generateImage">
@@ -130,5 +155,21 @@ const goToCampaign = () => {
   color: var(--secondary);
   text-decoration: underline;
   font-size: 0.9rem;
+}
+
+.select-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.95rem;
+  background-color: white;
+  cursor: pointer;
+}
+
+.select-input:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 </style>
