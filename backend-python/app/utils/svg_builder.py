@@ -1,10 +1,23 @@
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass, field
 from html import escape as html_escape
+from pathlib import Path
 
 from app.utils.flex_layout import LayoutBox, FlexNodeStyle
 from app.utils.text_measure import measure_text, wrap_text, auto_fit_font_size
+
+
+def _kanit_font_style() -> str:
+    font_dir = Path(__file__).parent.parent.parent / "assets" / "fonts"
+    style = ""
+    for weight, filename in [("400", "Kanit-Regular.ttf"), ("700", "Kanit-Bold.ttf"), ("900", "Kanit-Black.ttf")]:
+        font_path = font_dir / filename
+        if font_path.exists():
+            b64 = base64.b64encode(font_path.read_bytes()).decode()
+            style += f"@font-face{{font-family:'Kanit';font-weight:{weight};src:url('data:font/ttf;base64,{b64}') format('truetype');}}"
+    return style
 
 # ── Interfaces ──
 
@@ -285,7 +298,10 @@ def build_flex_svg(input: FlexSVGInput) -> FlexSVGResult:
             f'  <image href="{_escape_xml(input.bg_image_url)}" x="0" y="0" width="{cw}" height="{ch}" preserveAspectRatio="xMidYMid slice" />'
         )
 
+    font_css = _kanit_font_style()
     svg_lines.append("  <defs>")
+    if font_css:
+        svg_lines.append(f"    <style>{font_css}</style>")
 
     all_text_elements: list[str] = []
     clip_idx = 0

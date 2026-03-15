@@ -16,6 +16,7 @@ dependencies = [
     "numpy>=2.1.0",
     "aiofiles>=24.1.0",
     "rembg>=2.0.0",
+    "cairosvg>=2.7.0",
 ]
 
 [project.optional-dependencies]

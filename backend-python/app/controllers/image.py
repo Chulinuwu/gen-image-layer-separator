@@ -17,7 +17,7 @@ from app.utils.ai_logger import log_event, trace_ai
 from app.utils.flex_layout import compute_flex_layout
 from app.utils.ref_image_search import find_similar_refs
 from app.utils.safe_zones import BBox, compute_safe_zones
-from app.utils.svg_builder import build_flex_svg
+from app.utils.svg_builder import build_flex_svg, FlexSVGInput
 
 UPLOAD_DIR = Path(__file__).parent.parent.parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -474,6 +474,20 @@ async def export_svg_handler(
 # ─────────────────────────────────────────────────────────────────
 
 
+def _has_extractable_foreground(masked_buf: bytes | None, threshold: float = 0.05) -> bool:
+    if not masked_buf:
+        return False
+    try:
+        import numpy as np
+        img = Image.open(BytesIO(masked_buf)).convert("RGBA")
+        alpha = np.array(img)[:, :, 3]
+        opaque_ratio = (alpha > 20).sum() / alpha.size
+        print(f"[RMBG Gate] Foreground opaque ratio: {opaque_ratio:.1%} (threshold: {threshold:.0%})")
+        return opaque_ratio >= threshold
+    except Exception:
+        return False
+
+
 async def _step_rmbg_prescan(
     image_bytes: bytes,
     send_sse,
@@ -539,7 +553,7 @@ async def _step_diecut_and_inpaint(
             "message": f"Generating {len(component_suggestions)} die-cut components...",
         })
         diecut_result = await vertex_service.generate_diecut_components(
-            image_bytes, mime, component_suggestions, precomputed_masked
+            image_bytes, mime, component_suggestions,
         )
         diecut_results = diecut_result["results"]
         grid_images = diecut_result.get("gridImages") or []
@@ -663,13 +677,13 @@ async def _step_flex_layout(
         else None
     )
 
-    svg_result = build_flex_svg(
+    svg_result = build_flex_svg(FlexSVGInput(
         boxes=flex_boxes,
         canvas_w=canvas_w,
         canvas_h=canvas_h,
         bg_image_url=svg_bg_url,
         component_images=component_images,
-    )
+    ))
 
     send_sse("debug", {
         "step": "flex_layout",
@@ -678,7 +692,7 @@ async def _step_flex_layout(
         "boxes": [{"id": b.id, "type": b.type, "x": round(b.x), "y": round(b.y), "w": round(b.w), "h": round(b.h)} for b in flex_boxes],
     })
 
-    return svg_result["svg"], flex_result
+    return svg_result.svg, flex_result
 
 
 async def _step_refinement_loop(
@@ -698,7 +712,7 @@ async def _step_refinement_loop(
     origin: str,
     mode: str,
     send_sse,
-    max_iter: int = 3,
+    max_iter: int = 1,
 ) -> tuple[str, dict]:
     current_svg = svg_overlay
     last_critique: dict = {"status": "FAIL"}
@@ -718,6 +732,18 @@ async def _step_refinement_loop(
         # Generate preview by compositing SVG onto base
         try:
             base_img = Image.open(BytesIO(image_bytes)).convert("RGBA")
+            if current_svg and len(current_svg) > 50:
+                try:
+                    import cairosvg
+                    svg_png = cairosvg.svg2png(
+                        bytestring=current_svg.encode("utf-8"),
+                        output_width=base_img.width,
+                        output_height=base_img.height,
+                    )
+                    svg_layer = Image.open(BytesIO(svg_png)).convert("RGBA")
+                    base_img = Image.alpha_composite(base_img, svg_layer)
+                except ImportError:
+                    pass
             preview_buf = BytesIO()
             base_img.save(preview_buf, format="PNG")
             preview_bytes = preview_buf.getvalue()
@@ -788,13 +814,13 @@ async def _step_refinement_loop(
                 else None
             )
 
-            refined_svg_result = build_flex_svg(
+            refined_svg_result = build_flex_svg(FlexSVGInput(
                 boxes=refined_boxes, canvas_w=canvas_w, canvas_h=canvas_h,
                 bg_image_url=svg_bg, component_images=comp_imgs,
-            )
+            ))
 
-            if refined_svg_result["svg"] and len(refined_svg_result["svg"]) > 50:
-                current_svg = refined_svg_result["svg"]
+            if refined_svg_result.svg and len(refined_svg_result.svg) > 50:
+                current_svg = refined_svg_result.svg
                 analysis["svg_overlay"] = current_svg
                 analysis["flexTree"] = refined_flex["flexTree"]
             else:
@@ -884,15 +910,24 @@ async def create_campaign(
             # Step 1A: RMBG prescan
             masked_buf, rmbg_no_go = await _step_rmbg_prescan(image_buffer, send_sse)
             parsed_no_go = rmbg_no_go + parsed_no_go
+            has_foreground = _has_extractable_foreground(masked_buf)
             for e in events:
                 yield e
             events.clear()
 
-            # Step 1B: Component placement
-            comp_analysis = await _step_component_placement(
-                image_buffer, mime_type, target_text, parsed_no_go, send_sse
-            )
-            component_suggestions = _dedup_components(comp_analysis.get("components", []))
+            # Step 1B: Component placement (skip if no extractable foreground)
+            if has_foreground:
+                comp_analysis = await _step_component_placement(
+                    image_buffer, mime_type, target_text, parsed_no_go, send_sse
+                )
+                component_suggestions = _dedup_components(comp_analysis.get("components", []))
+            else:
+                print("[Pipeline] No extractable foreground — skipping component detection & die-cut")
+                send_sse("progress", {"step": "component_skip", "message": "Background-only image detected — skipping component extraction."})
+                comp_analysis = await _step_component_placement(
+                    image_buffer, mime_type, target_text, parsed_no_go, send_sse
+                )
+                component_suggestions = []
             analysis = {**comp_analysis, "suggestions": [], "components": component_suggestions}
 
             for e in events:
@@ -1058,6 +1093,27 @@ async def create_campaign(
                 yield e
             events.clear()
 
+            # Extract text layers from flex tree for frontend
+            text_layers = []
+            if flex_tree:
+                def _extract_text_nodes(node):
+                    if not isinstance(node, dict):
+                        return
+                    if node.get("type") == "text" and node.get("text"):
+                        text_layers.append({
+                            "text": node["text"],
+                            "position": {
+                                "top": node.get("top", 0),
+                                "left": node.get("left", 0),
+                                "width": node.get("width", 0),
+                                "height": node.get("height", 0),
+                            },
+                            "style": node.get("style", {}),
+                        })
+                    for child in node.get("children", []):
+                        _extract_text_nodes(child)
+                _extract_text_nodes(flex_tree)
+
             # Final result
             send_sse("done", {
                 "success": True,
@@ -1069,7 +1125,7 @@ async def create_campaign(
                     "svg_overlay": svg_overlay,
                     "flexTree": flex_tree,
                     "canvasSize": {"w": canvas_w, "h": canvas_h},
-                    "textLayers": [],
+                    "textLayers": text_layers,
                     "visualComponents": visual_components,
                     "stackImageUrls": stack_urls,
                     "critiqueIterations": analysis.get("critique_iterations"),

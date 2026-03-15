@@ -408,7 +408,7 @@ AD BRIEF:
 {fixed_comp_note}{safe_inst or no_go_inst}{hint_block}
 
 TASKS:
-{"1. COMPONENT COMPOSITION: Detect and place all visual components." if is_comp_only else "1. PLACEMENT STRATEGY + TEXT EXTRACTION + COMPONENT COMPOSITION"}
+{"1. COMPONENT COMPOSITION: Detect visual components that ACTUALLY EXIST in the provided image. CRITICAL: Only list components you can visually SEE in the image pixels. Do NOT hallucinate components mentioned in the ad brief text that are not visible in the image. If the brief mentions a logo, phone mockup, or other element that is NOT visible in the image, do NOT include it in components. Components array must ONLY contain elements you can point to in the image." if is_comp_only else "1. PLACEMENT STRATEGY + TEXT EXTRACTION + COMPONENT COMPOSITION. CRITICAL: components array must ONLY contain elements visually present in the image, NOT elements mentioned in the brief text."}
 
 Return as STRICT JSON:
 {{
@@ -453,8 +453,17 @@ STROKE+SHADOW MANDATORY on all text. visual_container always "none"."""
         def esc(s: str) -> str:
             return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("'", "&apos;").replace('"', "&quot;")
 
+        font_style = ""
+        font_dir = Path(__file__).parent.parent.parent / "assets" / "fonts"
+        for weight, filename in [("400", "Kanit-Regular.ttf"), ("700", "Kanit-Bold.ttf"), ("900", "Kanit-Black.ttf")]:
+            font_path = font_dir / filename
+            if font_path.exists():
+                font_b64 = _b64(font_path.read_bytes())
+                font_style += f"@font-face{{font-family:'Kanit';font-weight:{weight};src:url('data:font/ttf;base64,{font_b64}') format('truetype');}}"
+
         svg = f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg">'
-        svg += """<defs>
+        svg += f"""<defs>
+<style>{font_style}</style>
 <filter id="shadow-subtle" x="-5%" y="-5%" width="110%" height="110%"><feDropShadow dx="1" dy="1" stdDeviation="2" flood-color="#000" flood-opacity="0.5"/></filter>
 <filter id="shadow-strong" x="-10%" y="-10%" width="120%" height="120%"><feDropShadow dx="2" dy="2" stdDeviation="4" flood-color="#000" flood-opacity="0.8"/></filter>
 </defs>"""
@@ -928,6 +937,24 @@ Return as STRICT JSON:
             result = result.crop(bbox)
         return _img_to_bytes(result, "PNG")
 
+    @staticmethod
+    def _diecut_quality_ok(buf: bytes, label: str, min_dim: int = 40, min_opaque_ratio: float = 0.05) -> bool:
+        try:
+            import numpy as np
+            img = _open_image(buf).convert("RGBA")
+            w, h = img.size
+            if w < min_dim or h < min_dim:
+                print(f'[Diecut QA] "{label}" too small: {w}x{h}')
+                return False
+            alpha = np.array(img)[:, :, 3]
+            opaque_ratio = (alpha > 20).sum() / alpha.size
+            if opaque_ratio < min_opaque_ratio:
+                print(f'[Diecut QA] "{label}" nearly transparent: {opaque_ratio:.1%} opaque')
+                return False
+            return True
+        except Exception:
+            return True
+
     async def generate_diecut_components(
         self,
         image_buffer: bytes,
@@ -959,8 +986,10 @@ Return as STRICT JSON:
                     buf = await self._generate_single_diecut(image_buffer, mime_type, comp)
                     if i < len(components) - 1:
                         await asyncio.sleep(3)
-                if buf:
+                if buf and self._diecut_quality_ok(buf, comp.get("label", "")):
                     all_results.append({"label": comp.get("label", ""), "buffer": buf})
+                elif buf:
+                    print(f'[Diecut] Rejected "{comp.get("label")}" — failed quality check')
             except Exception as e:
                 print(f'[Diecut] Failed for "{comp.get("label")}": {e}')
 

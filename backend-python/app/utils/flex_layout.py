@@ -56,13 +56,78 @@ def _parse_pct(value: str | None) -> float:
         return float("nan")
 
 
-def compute_flex_layout(root: FlexNode, canvas_w: float, canvas_h: float) -> list[LayoutBox]:
+def _safe_int(val) -> int | None:
+    if val is None:
+        return None
+    if isinstance(val, int):
+        return val
+    if isinstance(val, float):
+        return int(val)
+    if isinstance(val, str):
+        try:
+            return int(float(val.strip().rstrip("%")))
+        except (ValueError, TypeError):
+            return None
+    if isinstance(val, dict):
+        for k in ("top", "value", "all"):
+            if k in val and isinstance(val[k], (int, float)):
+                return int(val[k])
+        nums = [v for v in val.values() if isinstance(v, (int, float))]
+        return int(nums[0]) if nums else None
+    return None
+
+
+def _safe_str(val) -> str | None:
+    if val is None:
+        return None
+    if isinstance(val, str):
+        return val
+    if isinstance(val, (int, float)):
+        return f"{val}%"
+    return None
+
+
+def _dict_to_flex_node(d: dict | FlexNode) -> FlexNode:
+    if isinstance(d, FlexNode):
+        return d
+    if not isinstance(d, dict):
+        return FlexNode(id="invalid")
+    style_raw = d.get("style")
+    style = None
+    if isinstance(style_raw, dict):
+        style = FlexNodeStyle(**{k: v for k, v in style_raw.items() if k in FlexNodeStyle.__dataclass_fields__})
+    elif isinstance(style_raw, FlexNodeStyle):
+        style = style_raw
+    children_raw = d.get("children")
+    children = None
+    if isinstance(children_raw, list):
+        children = [_dict_to_flex_node(c) for c in children_raw]
+    return FlexNode(
+        id=str(d.get("id", "node")),
+        direction=d.get("direction"),
+        children=children,
+        type=d.get("type"),
+        text=d.get("text") if isinstance(d.get("text"), str) else None,
+        label=d.get("label") if isinstance(d.get("label"), str) else None,
+        width=_safe_str(d.get("width")),
+        height=_safe_str(d.get("height")),
+        style=style,
+        gap=_safe_int(d.get("gap")),
+        padding=_safe_int(d.get("padding")),
+    )
+
+
+def compute_flex_layout(root: FlexNode | dict, canvas_w: float, canvas_h: float) -> list[LayoutBox]:
+    if isinstance(root, dict):
+        root = _dict_to_flex_node(root)
     results: list[LayoutBox] = []
     _layout_node(root, 0, 0, canvas_w, canvas_h, results)
     return results
 
 
-def _layout_node(node: FlexNode, x: float, y: float, w: float, h: float, out: list[LayoutBox]) -> None:
+def _layout_node(node: FlexNode | dict, x: float, y: float, w: float, h: float, out: list[LayoutBox]) -> None:
+    if isinstance(node, dict):
+        node = _dict_to_flex_node(node)
     is_container = node.direction is not None and isinstance(node.children, list)
 
     if not is_container:
