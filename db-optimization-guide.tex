@@ -1,0 +1,3624 @@
+\documentclass[12pt,a4paper]{article}
+
+% Packages
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{tcolorbox}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{tabularx}
+
+% Colors
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.95}
+\definecolor{pgblue}{HTML}{336791}
+\definecolor{mongogreen}{HTML}{4DB33D}
+
+% Code listing style
+\lstdefinestyle{sqlstyle}{
+    backgroundcolor=\color{backcolour},
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{blue}\bfseries,
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=2,
+    frame=single,
+    rulecolor=\color{gray!30}
+}
+\lstset{style=sqlstyle}
+
+% Header/Footer
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\leftmark}
+\fancyhead[R]{DB Optimization Guide}
+\fancyfoot[C]{\thepage}
+
+% Title formatting
+\titleformat{\section}{\Large\bfseries\color{pgblue}}{\thesection}{1em}{}
+\titleformat{\subsection}{\large\bfseries\color{pgblue!80}}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{pgblue!60}}{\thesubsubsection}{1em}{}
+
+% Custom box
+\newtcolorbox{infobox}[1][]{colback=blue!5!white, colframe=pgblue, title=#1, fonttitle=\bfseries}
+\newtcolorbox{warnbox}[1][]{colback=red!5!white, colframe=red!70!black, title=#1, fonttitle=\bfseries}
+\newtcolorbox{tipbox}[1][]{colback=green!5!white, colframe=green!50!black, title=#1, fonttitle=\bfseries}
+
+\begin{document}
+
+% Title Page
+\begin{titlepage}
+\centering
+\vspace*{2cm}
+{\Huge\bfseries Database Optimization\\[0.5cm] A Comprehensive Guide\par}
+\vspace{1.5cm}
+{\Large PostgreSQL \& MongoDB\\[0.3cm] Indexing, Query Optimization, and Beyond\par}
+\vspace{2cm}
+{\large Covering: Index Types, Search Indexes, Query Planning,\\
+Partitioning, Sharding, Caching, Replication,\\
+Connection Pooling, Schema Design, and Performance Tuning\par}
+\vspace{3cm}
+{\large\today\par}
+\vfill
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+% ============================================================
+\section{Introduction to Database Optimization}
+% ============================================================
+
+Database optimization is the practice of improving database performance by reducing query execution time, minimizing resource consumption (CPU, memory, I/O), and maximizing throughput. A well-optimized database can handle orders of magnitude more load than a poorly configured one running on identical hardware.
+
+\subsection{Why Optimization Matters}
+
+\begin{itemize}
+    \item \textbf{Cost reduction}: Fewer servers needed for the same workload.
+    \item \textbf{User experience}: Sub-100ms queries vs.\ multi-second waits.
+    \item \textbf{Scalability}: The difference between handling 100 vs.\ 100,000 concurrent users.
+    \item \textbf{Reliability}: Optimized queries hold fewer locks, reducing deadlocks and contention.
+\end{itemize}
+
+\subsection{The Optimization Hierarchy}
+
+Optimizations have diminishing returns. The hierarchy (most to least impactful):
+
+\begin{enumerate}
+    \item \textbf{Schema design} --- Getting the data model right.
+    \item \textbf{Indexing} --- Enabling efficient data access paths.
+    \item \textbf{Query optimization} --- Writing efficient SQL/queries.
+    \item \textbf{Configuration tuning} --- Memory, I/O, parallelism settings.
+    \item \textbf{Hardware/infrastructure} --- SSDs, more RAM, better CPUs.
+    \item \textbf{Application-level} --- Caching, connection pooling, batching.
+\end{enumerate}
+
+\subsection{Big-O Complexity of Database Operations}
+
+Understanding algorithmic complexity is essential:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Operation} & \textbf{Without Index} & \textbf{With B-tree Index} \\
+\midrule
+Point lookup & $O(n)$ & $O(\log n)$ \\
+Range scan & $O(n)$ & $O(\log n + k)$ \\
+Insert & $O(1)$ & $O(\log n)$ \\
+Delete & $O(n)$ & $O(\log n)$ \\
+Full table scan & $O(n)$ & $O(n)$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Where $n$ = total rows, $k$ = rows in range. For a table with 10 million rows, $\log_2(10^7) \approx 23$ --- meaning a B-tree lookup touches roughly 23 nodes instead of scanning 10 million rows.
+
+
+% ============================================================
+\section{Indexing Fundamentals}
+% ============================================================
+
+An index is a separate data structure that maintains a sorted or structured reference to rows in a table, enabling the database to locate data without scanning every row.
+
+\subsection{B-tree Index (The Default)}
+
+B-tree (balanced tree) is the default index type in both PostgreSQL and most relational databases. It maintains sorted data and allows searches, sequential access, insertions, and deletions in $O(\log n)$.
+
+\subsubsection{Structure}
+
+A B-tree of order $m$ has the following properties:
+\begin{itemize}
+    \item Every node has at most $m$ children.
+    \item Every internal node (except root) has at least $\lceil m/2 \rceil$ children.
+    \item The root has at least 2 children (if not a leaf).
+    \item All leaves appear on the same level.
+    \item A non-leaf node with $k$ children contains $k-1$ keys.
+\end{itemize}
+
+\begin{infobox}[B-tree vs B+tree]
+PostgreSQL actually uses \textbf{B+tree}, where all data pointers reside in leaf nodes, and leaf nodes are linked for efficient range scans. Internal nodes contain only keys for navigation.
+\end{infobox}
+
+\subsubsection{When to Use B-tree}
+\begin{itemize}
+    \item Equality comparisons: \texttt{WHERE id = 42}
+    \item Range queries: \texttt{WHERE price BETWEEN 10 AND 50}
+    \item Sorting: \texttt{ORDER BY created\_at}
+    \item Prefix matching: \texttt{WHERE name LIKE 'John\%'}
+    \item \texttt{MIN()}, \texttt{MAX()} aggregations
+\end{itemize}
+
+\subsubsection{When B-tree Fails}
+\begin{itemize}
+    \item Suffix/infix matching: \texttt{WHERE name LIKE '\%ohn\%'} (cannot use B-tree)
+    \item Low-cardinality columns: Boolean fields or status enums with few distinct values
+    \item Array/JSON containment queries
+\end{itemize}
+
+\begin{lstlisting}[language=SQL, caption={B-tree index examples in PostgreSQL}]
+-- Simple B-tree index
+CREATE INDEX idx_users_email ON users (email);
+
+-- Composite (multi-column) B-tree index
+CREATE INDEX idx_orders_user_date ON orders (user_id, created_at DESC);
+
+-- Unique index (also enforces constraint)
+CREATE UNIQUE INDEX idx_users_username ON users (username);
+
+-- Partial (conditional) index -- only indexes active users
+CREATE INDEX idx_active_users ON users (email) WHERE is_active = true;
+
+-- Index with INCLUDE (covering index, PG 11+)
+CREATE INDEX idx_orders_covering ON orders (user_id)
+    INCLUDE (total_amount, status);
+\end{lstlisting}
+
+\subsection{Hash Index}
+
+Hash indexes use a hash function to map keys to buckets. They support \textbf{only} equality comparisons.
+
+\begin{itemize}
+    \item Lookup: $O(1)$ average case
+    \item Cannot support range queries, sorting, or partial matching
+    \item In PostgreSQL, hash indexes became WAL-logged (crash-safe) only in version 10
+    \item Rarely better than B-tree in practice due to B-tree's versatility
+\end{itemize}
+
+\begin{lstlisting}[language=SQL, caption={Hash index}]
+CREATE INDEX idx_users_email_hash ON users USING hash (email);
+\end{lstlisting}
+
+\subsection{GiST Index (Generalized Search Tree)}
+
+GiST is a framework for building balanced tree indexes for arbitrary data types. It supports:
+
+\begin{itemize}
+    \item \textbf{Geometric/spatial data}: Points, polygons, circles (PostGIS)
+    \item \textbf{Full-text search}: \texttt{tsvector} columns
+    \item \textbf{Range types}: \texttt{int4range}, \texttt{tsrange}
+    \item \textbf{Nearest-neighbor searches}: \texttt{ORDER BY <->} operator
+    \item \textbf{Exclusion constraints}: Ensuring no overlapping ranges
+\end{itemize}
+
+\begin{lstlisting}[language=SQL, caption={GiST index examples}]
+-- Spatial index for PostGIS
+CREATE INDEX idx_locations_geom ON locations USING gist (geom);
+
+-- Full-text search index
+CREATE INDEX idx_articles_tsv ON articles USING gist (tsv_content);
+
+-- Range type index (e.g., booking time ranges)
+CREATE INDEX idx_bookings_period ON bookings USING gist (time_range);
+
+-- Exclusion constraint: no overlapping bookings for same room
+ALTER TABLE bookings ADD CONSTRAINT no_overlap
+    EXCLUDE USING gist (room_id WITH =, time_range WITH &&);
+\end{lstlisting}
+
+\subsection{GIN Index (Generalized Inverted Index)}
+
+GIN is an inverted index: it maps each element/token to the rows containing it. Ideal for multi-valued data.
+
+\begin{itemize}
+    \item \textbf{Full-text search}: Faster lookups than GiST for \texttt{tsvector}
+    \item \textbf{Array containment}: \texttt{WHERE tags @> ARRAY['python']}
+    \item \textbf{JSONB queries}: \texttt{WHERE data @> '\{"status": "active"\}'}
+    \item \textbf{Trigram similarity}: With \texttt{pg\_trgm} extension
+\end{itemize}
+
+\begin{infobox}[GIN vs GiST for Full-Text Search]
+\begin{tabular}{lll}
+\toprule
+\textbf{Aspect} & \textbf{GIN} & \textbf{GiST} \\
+\midrule
+Lookup speed & Faster (3x) & Slower \\
+Build time & Slower & Faster \\
+Update speed & Slower (pending list) & Faster \\
+Index size & Larger & Smaller (lossy) \\
+Ranking support & No & Yes (\texttt{<->}) \\
+\bottomrule
+\end{tabular}
+\end{infobox}
+
+\begin{lstlisting}[language=SQL, caption={GIN index examples}]
+-- Full-text search with GIN
+CREATE INDEX idx_articles_fts ON articles
+    USING gin (to_tsvector('english', title || ' ' || body));
+
+-- JSONB containment
+CREATE INDEX idx_events_data ON events USING gin (metadata jsonb_path_ops);
+
+-- Array containment
+CREATE INDEX idx_posts_tags ON posts USING gin (tags);
+
+-- Trigram similarity (fuzzy search)
+CREATE EXTENSION pg_trgm;
+CREATE INDEX idx_users_name_trgm ON users USING gin (name gin_trgm_ops);
+\end{lstlisting}
+
+\subsection{BRIN Index (Block Range INdex)}
+
+BRIN indexes store summary information (min/max) for ranges of physical table blocks. Extremely compact but only effective when data is \textbf{physically ordered} (correlated with the indexed column).
+
+\begin{itemize}
+    \item Index size: Often 1000x smaller than B-tree
+    \item Ideal for: Append-only tables with timestamp columns, log tables, time-series data
+    \item Not suitable for: Randomly ordered data, point lookups
+\end{itemize}
+
+\begin{lstlisting}[language=SQL, caption={BRIN index}]
+-- Perfect for time-series / append-only tables
+CREATE INDEX idx_logs_created ON logs USING brin (created_at)
+    WITH (pages_per_range = 32);
+
+-- Check correlation (should be close to 1.0 or -1.0)
+SELECT correlation FROM pg_stats
+    WHERE tablename = 'logs' AND attname = 'created_at';
+\end{lstlisting}
+
+\subsection{SP-GiST Index (Space-Partitioned GiST)}
+
+SP-GiST supports partitioned search trees: quad-trees, k-d trees, radix trees. Useful for:
+
+\begin{itemize}
+    \item IP address ranges (\texttt{inet} type)
+    \item Phone numbers and other hierarchical string data
+    \item Points in 2D space (alternative to GiST)
+\end{itemize}
+
+\begin{lstlisting}[language=SQL, caption={SP-GiST index}]
+-- IP address lookups
+CREATE INDEX idx_connections_ip ON connections USING spgist (client_ip);
+
+-- Text with prefix operations
+CREATE INDEX idx_phones ON contacts USING spgist (phone text_ops);
+\end{lstlisting}
+
+\subsection{Partial Indexes}
+
+Index only a subset of rows. Reduces index size and maintenance cost.
+
+\begin{lstlisting}[language=SQL, caption={Partial indexes}]
+-- Only index unprocessed orders (small fraction of total)
+CREATE INDEX idx_pending_orders ON orders (created_at)
+    WHERE status = 'pending';
+
+-- Only index non-null values
+CREATE INDEX idx_users_phone ON users (phone)
+    WHERE phone IS NOT NULL;
+\end{lstlisting}
+
+\subsection{Expression Indexes (Functional Indexes)}
+
+Index the result of an expression or function, not just a column.
+
+\begin{lstlisting}[language=SQL, caption={Expression indexes}]
+-- Case-insensitive email lookup
+CREATE INDEX idx_users_lower_email ON users (lower(email));
+-- Query must match: WHERE lower(email) = 'john@example.com'
+
+-- Extract year from timestamp
+CREATE INDEX idx_orders_year ON orders (EXTRACT(YEAR FROM created_at));
+
+-- JSONB field extraction
+CREATE INDEX idx_events_type ON events ((metadata->>'event_type'));
+\end{lstlisting}
+
+\subsection{Covering Indexes (Index-Only Scans)}
+
+A covering index includes all columns needed by a query, enabling the database to answer the query entirely from the index without visiting the table (heap).
+
+\begin{lstlisting}[language=SQL, caption={Covering indexes in PostgreSQL 11+}]
+-- The INCLUDE clause adds non-key columns to the index leaf pages
+CREATE INDEX idx_orders_user_covering ON orders (user_id)
+    INCLUDE (total_amount, status, created_at);
+
+-- This query can be served entirely from the index:
+SELECT total_amount, status, created_at
+FROM orders WHERE user_id = 42;
+\end{lstlisting}
+
+\begin{warnbox}[Index-Only Scan Visibility Map Caveat]
+PostgreSQL's MVCC requires checking the visibility map to confirm that a tuple is visible to the current transaction. If the visibility map is not up-to-date (e.g., after many updates without \texttt{VACUUM}), the database falls back to an index scan (visiting the heap). Run \texttt{VACUUM} regularly to maintain the visibility map.
+\end{warnbox}
+
+\subsection{Multi-Column Index Design}
+
+The order of columns in a composite index matters significantly.
+
+\begin{tipbox}[Column Order Rules]
+\begin{enumerate}
+    \item \textbf{Equality columns first}: Columns compared with \texttt{=} should come first.
+    \item \textbf{Range/inequality columns last}: Columns compared with \texttt{<}, \texttt{>}, \texttt{BETWEEN} should come after equality columns.
+    \item \textbf{High selectivity first}: Among equality columns, place the most selective (highest cardinality) first.
+    \item \textbf{Sort columns}: If the query has \texttt{ORDER BY}, include those columns after equality columns.
+\end{enumerate}
+\end{tipbox}
+
+\begin{lstlisting}[language=SQL, caption={Multi-column index design}]
+-- Query: WHERE tenant_id = ? AND status = ? AND created_at > ?
+-- ORDER BY created_at DESC
+-- Best index:
+CREATE INDEX idx_optimal ON orders (tenant_id, status, created_at DESC);
+
+-- This single index supports:
+-- WHERE tenant_id = 1
+-- WHERE tenant_id = 1 AND status = 'active'
+-- WHERE tenant_id = 1 AND status = 'active' AND created_at > '2024-01-01'
+-- WHERE tenant_id = 1 AND status = 'active' ORDER BY created_at DESC
+
+-- But NOT:
+-- WHERE status = 'active'  (leading column missing)
+-- WHERE created_at > '2024-01-01'  (leading columns missing)
+\end{lstlisting}
+
+
+% ============================================================
+\section{Full-Text Search and Search Indexes}
+% ============================================================
+
+\subsection{PostgreSQL Full-Text Search}
+
+PostgreSQL has built-in full-text search (FTS) capabilities that rival dedicated search engines for many use cases.
+
+\subsubsection{Core Concepts}
+
+\begin{itemize}
+    \item \textbf{tsvector}: A sorted list of distinct lexemes (normalized words) with positional information.
+    \item \textbf{tsquery}: A search query with boolean operators (\texttt{\&}, \texttt{|}, \texttt{!}, \texttt{<->}).
+    \item \textbf{Text search configuration}: Language-specific rules for stemming, stop words, and normalization.
+\end{itemize}
+
+\begin{lstlisting}[language=SQL, caption={PostgreSQL FTS setup}]
+-- Add a tsvector column (materialized for performance)
+ALTER TABLE articles ADD COLUMN tsv tsvector;
+
+-- Populate it
+UPDATE articles SET tsv =
+    setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
+    setweight(to_tsvector('english', coalesce(body, '')), 'B');
+
+-- Create GIN index
+CREATE INDEX idx_articles_tsv ON articles USING gin (tsv);
+
+-- Auto-update with trigger
+CREATE FUNCTION articles_tsv_trigger() RETURNS trigger AS $$
+BEGIN
+    NEW.tsv :=
+        setweight(to_tsvector('english', coalesce(NEW.title, '')), 'A') ||
+        setweight(to_tsvector('english', coalesce(NEW.body, '')), 'B');
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER tsv_update BEFORE INSERT OR UPDATE ON articles
+    FOR EACH ROW EXECUTE FUNCTION articles_tsv_trigger();
+\end{lstlisting}
+
+\subsubsection{Search Queries}
+
+\begin{lstlisting}[language=SQL, caption={FTS query examples}]
+-- Basic search
+SELECT title, ts_rank(tsv, query) AS rank
+FROM articles, to_tsquery('english', 'database & optimization') AS query
+WHERE tsv @@ query
+ORDER BY rank DESC;
+
+-- Phrase search (words adjacent)
+SELECT * FROM articles
+WHERE tsv @@ phraseto_tsquery('english', 'query optimization');
+
+-- Prefix matching
+SELECT * FROM articles
+WHERE tsv @@ to_tsquery('english', 'optim:*');
+
+-- Headline (snippet with highlighted matches)
+SELECT ts_headline('english', body, to_tsquery('database & index'),
+    'StartSel=<b>, StopSel=</b>, MaxWords=50') AS snippet
+FROM articles
+WHERE tsv @@ to_tsquery('database & index');
+
+-- Weighted ranking (title matches score higher)
+SELECT title, ts_rank_cd(tsv, query, 32) AS rank
+FROM articles, to_tsquery('english', 'postgresql') AS query
+WHERE tsv @@ query
+ORDER BY rank DESC LIMIT 20;
+\end{lstlisting}
+
+\subsubsection{FTS Weight System}
+
+PostgreSQL supports 4 weight classes: A (highest) through D (lowest). Default weights: $\{D: 0.1, C: 0.2, B: 0.4, A: 1.0\}$. Custom weights:
+
+\begin{lstlisting}[language=SQL]
+-- Custom weight array: {D, C, B, A}
+SELECT ts_rank('{0.1, 0.2, 0.4, 1.0}', tsv, query) FROM ...;
+\end{lstlisting}
+
+\subsection{Trigram Indexes for Fuzzy Search}
+
+The \texttt{pg\_trgm} extension enables similarity-based searching by decomposing strings into 3-character subsequences.
+
+\begin{lstlisting}[language=SQL, caption={Trigram fuzzy search}]
+CREATE EXTENSION pg_trgm;
+
+-- GIN trigram index (better for lookups)
+CREATE INDEX idx_products_name_trgm ON products
+    USING gin (name gin_trgm_ops);
+
+-- GiST trigram index (supports ORDER BY similarity)
+CREATE INDEX idx_products_name_trgm_gist ON products
+    USING gist (name gist_trgm_ops);
+
+-- Similarity search
+SELECT name, similarity(name, 'PostgreSQL') AS sim
+FROM products
+WHERE name % 'PostgreSQL'  -- uses default threshold 0.3
+ORDER BY sim DESC;
+
+-- Adjust similarity threshold
+SET pg_trgm.similarity_threshold = 0.5;
+
+-- LIKE/ILIKE acceleration (trigram indexes speed up pattern matching)
+SELECT * FROM products WHERE name ILIKE '%database%';
+-- This uses the trigram index!
+\end{lstlisting}
+
+\subsection{MongoDB Text Search}
+
+\subsubsection{Native Text Index}
+
+\begin{lstlisting}[language=SQL, caption={MongoDB text search}]
+// Create text index
+db.articles.createIndex(
+    { title: "text", body: "text" },
+    { weights: { title: 10, body: 1 }, default_language: "english" }
+);
+
+// Search
+db.articles.find(
+    { $text: { $search: "database optimization" } },
+    { score: { $meta: "textScore" } }
+).sort({ score: { $meta: "textScore" } });
+
+// Phrase search
+db.articles.find({ $text: { $search: "\"query optimization\"" } });
+
+// Negation
+db.articles.find({ $text: { $search: "database -mysql" } });
+\end{lstlisting}
+
+\subsubsection{Atlas Search (Lucene-Based)}
+
+MongoDB Atlas Search provides Lucene-powered full-text search integrated with the aggregation pipeline.
+
+\begin{lstlisting}[language=SQL, caption={Atlas Search}]
+// Atlas Search aggregation
+db.articles.aggregate([
+    {
+        $search: {
+            index: "default",
+            compound: {
+                must: [
+                    { text: { query: "optimization", path: "title",
+                              fuzzy: { maxEdits: 1 } } }
+                ],
+                should: [
+                    { text: { query: "postgresql", path: "body",
+                              score: { boost: { value: 2 } } } }
+                ]
+            },
+            highlight: { path: ["title", "body"] }
+        }
+    },
+    { $project: {
+        title: 1,
+        score: { $meta: "searchScore" },
+        highlights: { $meta: "searchHighlights" }
+    }},
+    { $limit: 20 }
+]);
+\end{lstlisting}
+
+
+% ============================================================
+\section{Query Optimization}
+% ============================================================
+
+\subsection{EXPLAIN and EXPLAIN ANALYZE}
+
+The single most important tool for query optimization.
+
+\begin{lstlisting}[language=SQL, caption={EXPLAIN usage}]
+-- Show query plan without executing
+EXPLAIN SELECT * FROM orders WHERE user_id = 42;
+
+-- Execute and show actual timing + row counts
+EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)
+SELECT o.*, u.name
+FROM orders o
+JOIN users u ON u.id = o.user_id
+WHERE o.status = 'pending'
+  AND o.created_at > '2024-01-01'
+ORDER BY o.created_at DESC
+LIMIT 20;
+\end{lstlisting}
+
+\subsubsection{Key EXPLAIN Metrics}
+
+\begin{itemize}
+    \item \textbf{cost}: Estimated startup cost..total cost (in arbitrary units, roughly = sequential page reads)
+    \item \textbf{rows}: Estimated number of rows
+    \item \textbf{actual time}: Real execution time in milliseconds (only with ANALYZE)
+    \item \textbf{actual rows}: Real row count (compare with estimate to detect bad statistics)
+    \item \textbf{buffers}: Shared hit (cache) vs.\ read (disk) --- low hit ratio = poor caching
+    \item \textbf{loops}: Number of times the node was executed (important for nested loops)
+\end{itemize}
+
+\subsubsection{Common Scan Types}
+
+\begin{center}
+\begin{tabular}{lp{8cm}}
+\toprule
+\textbf{Scan Type} & \textbf{Meaning} \\
+\midrule
+Seq Scan & Full table scan. Fine for small tables or when selecting large fraction of rows. \\
+Index Scan & Uses index to find rows, then fetches from table. \\
+Index Only Scan & Answers query entirely from index (best case). \\
+Bitmap Index Scan & Builds a bitmap of matching pages, then fetches them. Good for moderate selectivity. \\
+Bitmap Heap Scan & The heap-fetch phase after Bitmap Index Scan. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsubsection{Common Join Types}
+
+\begin{center}
+\begin{tabular}{lp{8cm}}
+\toprule
+\textbf{Join Type} & \textbf{When Used} \\
+\midrule
+Nested Loop & Small outer table, indexed inner table. $O(n \cdot m)$ worst case. \\
+Hash Join & Large tables, equality join. Builds hash table from smaller table. $O(n + m)$. \\
+Merge Join & Both inputs sorted on join key. $O(n \log n + m \log m)$ with sort, $O(n + m)$ if pre-sorted. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Common Query Anti-Patterns}
+
+\begin{warnbox}[Performance Killers]
+\begin{enumerate}
+    \item \textbf{SELECT *}: Fetches unnecessary columns, prevents index-only scans.
+    \item \textbf{Functions on indexed columns}: \texttt{WHERE YEAR(created\_at) = 2024} cannot use a B-tree index on \texttt{created\_at}. Use \texttt{WHERE created\_at >= '2024-01-01' AND created\_at < '2025-01-01'}.
+    \item \textbf{Implicit type casting}: \texttt{WHERE id = '42'} when \texttt{id} is integer forces a cast.
+    \item \textbf{OR conditions}: Often prevent index usage. Consider \texttt{UNION ALL}.
+    \item \textbf{NOT IN with NULLs}: \texttt{NOT IN (subquery)} returns no rows if subquery contains NULL. Use \texttt{NOT EXISTS}.
+    \item \textbf{Correlated subqueries}: Execute once per outer row. Convert to JOINs.
+    \item \textbf{OFFSET for pagination}: \texttt{OFFSET 100000} still scans 100,000 rows. Use keyset pagination.
+\end{enumerate}
+\end{warnbox}
+
+\subsection{Keyset (Cursor-Based) Pagination}
+
+\begin{lstlisting}[language=SQL, caption={Keyset pagination vs OFFSET}]
+-- BAD: OFFSET pagination (gets slower as offset increases)
+SELECT * FROM orders ORDER BY created_at DESC
+OFFSET 100000 LIMIT 20;  -- must scan 100,020 rows
+
+-- GOOD: Keyset pagination (constant performance)
+SELECT * FROM orders
+WHERE created_at < '2024-06-15T10:30:00Z'  -- last seen value
+ORDER BY created_at DESC
+LIMIT 20;
+-- Only scans 20 rows regardless of "page number"
+
+-- For non-unique sort columns, use a tiebreaker:
+SELECT * FROM orders
+WHERE (created_at, id) < ('2024-06-15T10:30:00Z', 99999)
+ORDER BY created_at DESC, id DESC
+LIMIT 20;
+\end{lstlisting}
+
+\subsection{CTE vs Subquery Optimization}
+
+\begin{lstlisting}[language=SQL, caption={CTE materialization}]
+-- In PG 11 and earlier, CTEs are ALWAYS materialized (optimization fence)
+-- In PG 12+, CTEs are inlined if referenced once and not recursive
+
+-- Force inlining (PG 12+):
+WITH cte AS NOT MATERIALIZED (
+    SELECT * FROM orders WHERE status = 'pending'
+)
+SELECT * FROM cte WHERE total > 100;
+
+-- Force materialization (useful when CTE is referenced multiple times):
+WITH cte AS MATERIALIZED (
+    SELECT expensive_function(id) AS result FROM large_table
+)
+SELECT * FROM cte WHERE result > threshold
+UNION ALL
+SELECT * FROM cte WHERE result < 0;
+\end{lstlisting}
+
+
+% ============================================================
+\section{PostgreSQL Deep Dive}
+% ============================================================
+
+\subsection{PostgreSQL Architecture Overview}
+
+\begin{itemize}
+    \item \textbf{Process-per-connection}: Each client gets a dedicated backend process (not thread-based).
+    \item \textbf{Shared buffers}: In-memory cache of table and index pages.
+    \item \textbf{WAL (Write-Ahead Log)}: All changes are logged before being applied, ensuring crash recovery.
+    \item \textbf{MVCC}: Multi-Version Concurrency Control --- readers never block writers and vice versa.
+    \item \textbf{TOAST}: Transparent compression and out-of-line storage for large values.
+\end{itemize}
+
+\subsection{PostgreSQL-Specific Index Features}
+
+\subsubsection{Bloom Filter Index}
+
+\begin{lstlisting}[language=SQL, caption={Bloom filter index}]
+CREATE EXTENSION bloom;
+
+-- Bloom index on multiple columns (useful for ad-hoc queries)
+CREATE INDEX idx_logs_bloom ON logs USING bloom (
+    user_id, action, ip_address, status_code
+) WITH (length=80, col1=2, col2=2, col3=4, col4=2);
+
+-- Supports equality checks on any combination of indexed columns
+-- Much smaller than having individual B-tree indexes on each column
+\end{lstlisting}
+
+\subsubsection{BRIN for Time-Series}
+
+\begin{lstlisting}[language=SQL, caption={BRIN for massive time-series tables}]
+-- For a 1 billion row logs table:
+-- B-tree index: ~21 GB
+-- BRIN index:   ~200 KB (!!)
+
+CREATE INDEX idx_logs_ts_brin ON logs USING brin (timestamp)
+    WITH (pages_per_range = 128);
+
+-- Autosummarize keeps BRIN up to date
+CREATE INDEX idx_logs_ts_brin ON logs USING brin (timestamp)
+    WITH (pages_per_range = 128, autosummarize = on);
+\end{lstlisting}
+
+\subsection{Table Partitioning}
+
+Partitioning splits a large table into smaller physical pieces while presenting a unified logical table.
+
+\subsubsection{Partition Types}
+
+\begin{center}
+\begin{tabular}{lp{8cm}}
+\toprule
+\textbf{Type} & \textbf{Use Case} \\
+\midrule
+Range & Time-series data (partition by month/year) \\
+List & Categorical data (partition by region, status) \\
+Hash & Even distribution when no natural range/list exists \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{lstlisting}[language=SQL, caption={Range partitioning example}]
+-- Create partitioned table
+CREATE TABLE events (
+    id          bigint GENERATED ALWAYS AS IDENTITY,
+    event_type  text NOT NULL,
+    payload     jsonb,
+    created_at  timestamptz NOT NULL
+) PARTITION BY RANGE (created_at);
+
+-- Create partitions
+CREATE TABLE events_2024_q1 PARTITION OF events
+    FOR VALUES FROM ('2024-01-01') TO ('2024-04-01');
+CREATE TABLE events_2024_q2 PARTITION OF events
+    FOR VALUES FROM ('2024-04-01') TO ('2024-07-01');
+CREATE TABLE events_2024_q3 PARTITION OF events
+    FOR VALUES FROM ('2024-07-01') TO ('2024-10-01');
+CREATE TABLE events_2024_q4 PARTITION OF events
+    FOR VALUES FROM ('2024-10-01') TO ('2025-01-01');
+
+-- Default partition for anything outside defined ranges
+CREATE TABLE events_default PARTITION OF events DEFAULT;
+
+-- Each partition can have its own indexes
+CREATE INDEX ON events_2024_q1 (event_type, created_at);
+-- Or create indexes on the parent (auto-propagated in PG 11+)
+CREATE INDEX idx_events_type_date ON events (event_type, created_at);
+\end{lstlisting}
+
+\subsubsection{Partition Pruning}
+
+\begin{lstlisting}[language=SQL, caption={Partition pruning}]
+-- PostgreSQL automatically skips irrelevant partitions
+EXPLAIN SELECT * FROM events
+WHERE created_at >= '2024-07-01' AND created_at < '2024-10-01';
+-- Only scans events_2024_q3
+
+-- Dynamic partition pruning (PG 12+) works with parameters too:
+PREPARE get_events(timestamptz) AS
+    SELECT * FROM events WHERE created_at >= $1;
+EXECUTE get_events('2024-10-01');
+-- Prunes at execution time based on parameter value
+\end{lstlisting}
+
+\subsection{VACUUM and Autovacuum}
+
+Due to MVCC, PostgreSQL does not immediately remove deleted/updated rows. \texttt{VACUUM} reclaims this space.
+
+\begin{infobox}[Why VACUUM Matters]
+\begin{itemize}
+    \item \textbf{Dead tuples}: Old row versions accumulate, causing table bloat.
+    \item \textbf{Transaction ID wraparound}: PostgreSQL uses 32-bit XIDs. Without vacuum, the database will shut down to prevent wraparound after $\sim$2 billion transactions.
+    \item \textbf{Visibility map}: Required for index-only scans. Stale visibility map forces heap fetches.
+    \item \textbf{Statistics}: \texttt{ANALYZE} (often run with vacuum) updates planner statistics.
+\end{itemize}
+\end{infobox}
+
+\begin{lstlisting}[language=SQL, caption={VACUUM tuning}]
+-- Manual vacuum
+VACUUM (VERBOSE, ANALYZE) orders;
+
+-- Aggressive vacuum (reclaims more aggressively)
+VACUUM (FULL) bloated_table;  -- WARNING: exclusive lock, rewrites table
+
+-- Autovacuum tuning per table
+ALTER TABLE high_churn_table SET (
+    autovacuum_vacuum_scale_factor = 0.01,    -- default 0.2
+    autovacuum_analyze_scale_factor = 0.005,  -- default 0.1
+    autovacuum_vacuum_cost_delay = 2          -- ms, default 2
+);
+
+-- Monitor autovacuum
+SELECT relname, n_dead_tup, n_live_tup,
+       last_vacuum, last_autovacuum, last_analyze
+FROM pg_stat_user_tables
+ORDER BY n_dead_tup DESC;
+\end{lstlisting}
+
+\subsection{PostgreSQL Configuration Tuning}
+
+\begin{lstlisting}[language=SQL, caption={Key postgresql.conf parameters}]
+-- Memory
+shared_buffers = '4GB'          -- 25% of RAM (start here)
+effective_cache_size = '12GB'   -- 75% of RAM (hint to planner)
+work_mem = '256MB'              -- per-sort/hash operation
+maintenance_work_mem = '1GB'    -- for VACUUM, CREATE INDEX
+huge_pages = 'try'              -- use OS huge pages if available
+
+-- WAL
+wal_buffers = '64MB'
+checkpoint_completion_target = 0.9
+max_wal_size = '4GB'
+min_wal_size = '1GB'
+
+-- Planner
+random_page_cost = 1.1          -- for SSDs (default 4.0 assumes HDD)
+effective_io_concurrency = 200  -- for SSDs
+seq_page_cost = 1.0             -- leave as default
+
+-- Parallelism (PG 10+)
+max_parallel_workers_per_gather = 4
+max_parallel_workers = 8
+max_parallel_maintenance_workers = 4
+parallel_tuple_cost = 0.01
+min_parallel_table_scan_size = '8MB'
+
+-- Connection management
+max_connections = 200           -- keep low, use connection pooling
+\end{lstlisting}
+
+\subsection{PostgreSQL Advanced Features}
+
+\subsubsection{Materialized Views}
+
+\begin{lstlisting}[language=SQL, caption={Materialized views}]
+CREATE MATERIALIZED VIEW mv_daily_sales AS
+SELECT date_trunc('day', created_at) AS day,
+       product_id,
+       SUM(quantity) AS total_qty,
+       SUM(amount) AS total_amount
+FROM orders
+GROUP BY 1, 2;
+
+CREATE UNIQUE INDEX idx_mv_daily_sales ON mv_daily_sales (day, product_id);
+
+-- Refresh (non-blocking with CONCURRENTLY, requires unique index)
+REFRESH MATERIALIZED VIEW CONCURRENTLY mv_daily_sales;
+\end{lstlisting}
+
+\subsubsection{Advisory Locks}
+
+\begin{lstlisting}[language=SQL, caption={Advisory locks for application-level locking}]
+-- Session-level advisory lock (released at session end)
+SELECT pg_advisory_lock(hashtext('process_batch_42'));
+-- ... do exclusive work ...
+SELECT pg_advisory_unlock(hashtext('process_batch_42'));
+
+-- Transaction-level advisory lock (released at transaction end)
+SELECT pg_advisory_xact_lock(hashtext('unique_job_id'));
+
+-- Try lock (non-blocking)
+SELECT pg_try_advisory_lock(12345);  -- returns true/false
+\end{lstlisting}
+
+\subsubsection{Row-Level Security (RLS)}
+
+\begin{lstlisting}[language=SQL, caption={Row-level security for multi-tenant}]
+ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY tenant_isolation ON orders
+    USING (tenant_id = current_setting('app.tenant_id')::int);
+
+-- Set tenant context per connection
+SET app.tenant_id = '42';
+SELECT * FROM orders;  -- only sees tenant 42's orders
+\end{lstlisting}
+
+\subsubsection{Logical Replication and Foreign Data Wrappers}
+
+\begin{lstlisting}[language=SQL, caption={Foreign Data Wrappers}]
+-- Query external databases as if they were local tables
+CREATE EXTENSION postgres_fdw;
+
+CREATE SERVER remote_db FOREIGN DATA WRAPPER postgres_fdw
+    OPTIONS (host 'remote-host', dbname 'analytics', port '5432');
+
+CREATE USER MAPPING FOR current_user SERVER remote_db
+    OPTIONS (user 'reader', password 'secret');
+
+IMPORT FOREIGN SCHEMA public FROM SERVER remote_db INTO remote_schema;
+
+-- Now query remote tables
+SELECT * FROM remote_schema.analytics_events WHERE date > '2024-01-01';
+\end{lstlisting}
+
+\subsubsection{Generated Columns and Domain Types}
+
+\begin{lstlisting}[language=SQL, caption={Generated columns (PG 12+)}]
+CREATE TABLE products (
+    id          serial PRIMARY KEY,
+    price_cents integer NOT NULL,
+    tax_rate    numeric(5,4) NOT NULL DEFAULT 0.07,
+    -- Stored generated column (computed on write)
+    total_cents integer GENERATED ALWAYS AS
+        (price_cents + (price_cents * tax_rate)::integer) STORED
+);
+
+-- Domain types for reusable constraints
+CREATE DOMAIN email AS text
+    CHECK (VALUE ~ '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z]{2,}$');
+
+CREATE TABLE users (
+    id    serial PRIMARY KEY,
+    email email NOT NULL
+);
+\end{lstlisting}
+
+\subsection{PostgreSQL Extensions Ecosystem}
+
+\begin{center}
+\begin{tabular}{lp{8cm}}
+\toprule
+\textbf{Extension} & \textbf{Purpose} \\
+\midrule
+\texttt{pg\_stat\_statements} & Track query execution statistics (essential for optimization) \\
+\texttt{pg\_trgm} & Trigram-based fuzzy string matching \\
+\texttt{PostGIS} & Geographic/spatial data types and queries \\
+\texttt{pgvector} & Vector similarity search (AI/ML embeddings) \\
+\texttt{pg\_partman} & Automated partition management \\
+\texttt{TimescaleDB} & Time-series optimization (hypertables, compression) \\
+\texttt{Citus} & Distributed PostgreSQL (sharding) \\
+\texttt{pg\_cron} & Scheduled jobs inside PostgreSQL \\
+\texttt{pgAudit} & Detailed audit logging \\
+\texttt{hstore} & Key-value pairs within a column \\
+\texttt{bloom} & Bloom filter indexes \\
+\texttt{pg\_repack} & Online table reorganization (no locks) \\
+\texttt{hypopg} & Hypothetical indexes (test without creating) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{lstlisting}[language=SQL, caption={pg\_stat\_statements --- the optimization power tool}]
+CREATE EXTENSION pg_stat_statements;
+
+-- Find slowest queries
+SELECT query, calls,
+       round(total_exec_time::numeric, 2) AS total_ms,
+       round(mean_exec_time::numeric, 2) AS avg_ms,
+       rows
+FROM pg_stat_statements
+ORDER BY total_exec_time DESC
+LIMIT 20;
+
+-- Find queries with worst estimate accuracy
+SELECT query, calls, rows,
+       round(100.0 * shared_blks_hit /
+           nullif(shared_blks_hit + shared_blks_read, 0), 2) AS cache_hit_pct
+FROM pg_stat_statements
+ORDER BY shared_blks_read DESC
+LIMIT 20;
+\end{lstlisting}
+
+\begin{lstlisting}[language=SQL, caption={pgvector for AI embeddings}]
+CREATE EXTENSION vector;
+
+CREATE TABLE documents (
+    id       serial PRIMARY KEY,
+    content  text,
+    embedding vector(1536)  -- OpenAI ada-002 dimensions
+);
+
+-- IVFFlat index (approximate, faster for large datasets)
+CREATE INDEX ON documents
+    USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+
+-- HNSW index (better recall, higher memory)
+CREATE INDEX ON documents
+    USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
+
+-- Similarity search
+SELECT content, embedding <=> '[0.1, 0.2, ...]'::vector AS distance
+FROM documents
+ORDER BY embedding <=> '[0.1, 0.2, ...]'::vector
+LIMIT 10;
+\end{lstlisting}
+
+\subsection{Hypothetical Indexes with HypoPG}
+
+\begin{lstlisting}[language=SQL, caption={Test indexes without creating them}]
+CREATE EXTENSION hypopg;
+
+-- Create a hypothetical index
+SELECT * FROM hypopg_create_index(
+    'CREATE INDEX ON orders (user_id, created_at DESC)');
+
+-- Run EXPLAIN to see if the planner would use it
+EXPLAIN SELECT * FROM orders
+WHERE user_id = 42 ORDER BY created_at DESC LIMIT 10;
+
+-- Drop all hypothetical indexes
+SELECT hypopg_reset();
+\end{lstlisting}
+
+
+% ============================================================
+\section{MongoDB Deep Dive}
+% ============================================================
+
+\subsection{MongoDB Architecture}
+
+\begin{itemize}
+    \item \textbf{Document model}: BSON documents (JSON superset) with flexible schema.
+    \item \textbf{WiredTiger storage engine}: B-tree indexes, document-level locking, compression (snappy/zstd/zlib).
+    \item \textbf{Replica sets}: Primary + secondaries for high availability and read scaling.
+    \item \textbf{Sharding}: Horizontal scaling across multiple replica sets.
+\end{itemize}
+
+\subsection{MongoDB Index Types}
+
+\subsubsection{Single Field Index}
+
+\begin{lstlisting}[language=SQL, caption={MongoDB single field index}]
+// Ascending index
+db.users.createIndex({ email: 1 });
+
+// Descending index (matters for sort optimization)
+db.orders.createIndex({ created_at: -1 });
+
+// Unique index
+db.users.createIndex({ email: 1 }, { unique: true });
+
+// Sparse index (only indexes documents that have the field)
+db.users.createIndex({ phone: 1 }, { sparse: true });
+
+// TTL index (auto-delete documents after expiry)
+db.sessions.createIndex({ last_active: 1 }, { expireAfterSeconds: 3600 });
+\end{lstlisting}
+
+\subsubsection{Compound Index}
+
+\begin{lstlisting}[language=SQL, caption={MongoDB compound indexes}]
+// Compound index
+db.orders.createIndex({ user_id: 1, created_at: -1 });
+
+// ESR Rule (Equality, Sort, Range):
+// For query: { status: "active", created_at: { $gt: ISODate(...) } }
+//            .sort({ priority: -1 })
+db.tasks.createIndex({ status: 1, priority: -1, created_at: 1 });
+\end{lstlisting}
+
+\begin{tipbox}[MongoDB ESR Rule]
+Design compound indexes following the \textbf{Equality-Sort-Range} (ESR) rule:
+\begin{enumerate}
+    \item \textbf{E}quality: Fields tested with exact match (\texttt{\$eq})
+    \item \textbf{S}ort: Fields used in \texttt{.sort()}
+    \item \textbf{R}ange: Fields tested with \texttt{\$gt}, \texttt{\$lt}, \texttt{\$in}
+\end{enumerate}
+This ordering maximizes index efficiency by narrowing results with equality first, then leveraging the index for sorting, and finally scanning the range within sorted results.
+\end{tipbox}
+
+\subsubsection{Multikey Index (Arrays)}
+
+\begin{lstlisting}[language=SQL, caption={Multikey index for arrays}]
+// Automatically created when indexing an array field
+db.articles.createIndex({ tags: 1 });
+
+// Query: find all articles tagged "python"
+db.articles.find({ tags: "python" });
+
+// Compound multikey (only ONE array field allowed per compound index)
+db.articles.createIndex({ author_id: 1, tags: 1 });
+\end{lstlisting}
+
+\subsubsection{Wildcard Index}
+
+\begin{lstlisting}[language=SQL, caption={Wildcard indexes for dynamic schemas}]
+// Index all fields in a subdocument
+db.events.createIndex({ "metadata.$**": 1 });
+
+// Index all fields in the document
+db.logs.createIndex({ "$**": 1 });
+
+// With projection (only index specific paths)
+db.events.createIndex(
+    { "$**": 1 },
+    { wildcardProjection: { "metadata.user_id": 1, "metadata.action": 1 } }
+);
+\end{lstlisting}
+
+\subsubsection{2dsphere Index (Geospatial)}
+
+\begin{lstlisting}[language=SQL, caption={Geospatial indexing}]
+db.restaurants.createIndex({ location: "2dsphere" });
+
+// Find restaurants within 5km
+db.restaurants.find({
+    location: {
+        $near: {
+            $geometry: { type: "Point", coordinates: [-73.97, 40.77] },
+            $maxDistance: 5000  // meters
+        }
+    }
+});
+
+// Geospatial aggregation
+db.restaurants.aggregate([
+    {
+        $geoNear: {
+            near: { type: "Point", coordinates: [-73.97, 40.77] },
+            distanceField: "distance",
+            maxDistance: 5000,
+            spherical: true
+        }
+    }
+]);
+\end{lstlisting>
+
+\subsubsection{Hashed Index (for Sharding)}
+
+\begin{lstlisting}[language=SQL, caption={Hashed index}]
+// Hashed index for even distribution in sharding
+db.orders.createIndex({ user_id: "hashed" });
+
+// Used as shard key for hash-based distribution
+sh.shardCollection("mydb.orders", { user_id: "hashed" });
+\end{lstlisting}
+
+\subsection{MongoDB Query Optimization}
+
+\subsubsection{explain() Method}
+
+\begin{lstlisting}[language=SQL, caption={MongoDB explain}]
+// Verbose execution stats
+db.orders.find({ user_id: 42, status: "pending" })
+    .sort({ created_at: -1 })
+    .explain("executionStats");
+
+// Key metrics to check:
+// - executionStats.totalDocsExamined (lower is better)
+// - executionStats.totalKeysExamined (index keys scanned)
+// - executionStats.nReturned (documents returned)
+// - IDEAL: nReturned ~= totalKeysExamined ~= totalDocsExamined
+
+// Check if query is covered (no document fetch needed)
+// winningPlan.stage should show "IXSCAN" not "FETCH" if covered
+\end{lstlisting}
+
+\subsubsection{Aggregation Pipeline Optimization}
+
+\begin{lstlisting}[language=SQL, caption={Aggregation optimization}]
+// BAD: $match after $lookup (processes all documents)
+db.orders.aggregate([
+    { $lookup: { from: "users", ... } },
+    { $match: { status: "active" } }  // too late!
+]);
+
+// GOOD: $match before $lookup (filters first)
+db.orders.aggregate([
+    { $match: { status: "active" } },  // filter early
+    { $lookup: { from: "users", ... } }
+]);
+
+// Pipeline optimization rules:
+// 1. $match as early as possible (uses indexes)
+// 2. $project/$unset early to reduce document size
+// 3. $limit early when possible
+// 4. $sort + $limit together = top-k optimization
+// 5. $match + $sort on indexed fields = index-powered sort
+\end{lstlisting}
+
+\subsection{MongoDB Sharding}
+
+Sharding distributes data across multiple servers (shards).
+
+\subsubsection{Shard Key Selection}
+
+\begin{center}
+\begin{tabular}{lp{4cm}p{4cm}}
+\toprule
+\textbf{Strategy} & \textbf{Pros} & \textbf{Cons} \\
+\midrule
+Ranged (e.g., timestamp) & Good for range queries & Hot shard problem (writes to latest shard) \\
+Hashed (e.g., user\_id) & Even write distribution & Range queries scatter to all shards \\
+Compound (zone + hash) & Best of both worlds & Complex to manage \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{lstlisting}[language=SQL, caption={Sharding setup}]
+// Enable sharding on database
+sh.enableSharding("myapp");
+
+// Shard with compound key (zone-aware)
+db.orders.createIndex({ region: 1, order_id: "hashed" });
+sh.shardCollection("myapp.orders", { region: 1, order_id: "hashed" });
+
+// Zone-based sharding (data locality)
+sh.addShardTag("shard-us-east", "US");
+sh.addShardTag("shard-eu-west", "EU");
+sh.addTagRange("myapp.orders",
+    { region: "US" }, { region: "US~" }, "US");
+sh.addTagRange("myapp.orders",
+    { region: "EU" }, { region: "EU~" }, "EU");
+\end{lstlisting}
+
+\subsubsection{Targeted vs Scatter-Gather Queries}
+
+\begin{itemize}
+    \item \textbf{Targeted}: Query includes shard key $\rightarrow$ routed to single shard. $O(1)$ shards.
+    \item \textbf{Scatter-gather}: Query lacks shard key $\rightarrow$ broadcast to all shards. $O(s)$ where $s$ = number of shards.
+\end{itemize}
+
+\subsection{MongoDB Schema Design Patterns}
+
+\subsubsection{Embedding vs Referencing}
+
+\begin{center}
+\begin{tabular}{lp{5cm}p{5cm}}
+\toprule
+& \textbf{Embed} & \textbf{Reference} \\
+\midrule
+When & Data accessed together, 1:few, rarely changes & Data accessed independently, 1:many, frequently updated \\
+Pros & Single read, atomic writes, data locality & Smaller documents, no duplication, flexible \\
+Cons & Document size limit (16MB), update anomalies & Multiple reads (\$lookup), no atomic cross-doc writes \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsubsection{Common Patterns}
+
+\begin{lstlisting}[language=SQL, caption={MongoDB design patterns}]
+// 1. Bucket pattern (time-series optimization)
+{
+    sensor_id: "temp-42",
+    day: ISODate("2024-06-15"),
+    measurements: [
+        { ts: ISODate("...T00:00:00"), value: 22.1 },
+        { ts: ISODate("...T00:01:00"), value: 22.3 },
+        // ... up to ~200 entries per bucket
+    ],
+    count: 200,
+    sum: 4420.5  // pre-aggregated
+}
+
+// 2. Computed pattern (pre-aggregate for read performance)
+{
+    product_id: "ABC123",
+    name: "Widget",
+    total_reviews: 1523,       // updated on each review
+    avg_rating: 4.2,           // recomputed periodically
+    rating_histogram: {
+        "1": 45, "2": 89, "3": 201, "4": 512, "5": 676
+    }
+}
+
+// 3. Outlier pattern (handle unbounded arrays)
+{
+    movie_id: "tt0111161",
+    title: "The Shawshank Redemption",
+    fans: ["user1", "user2", ..., "user500"],  // capped at 500
+    has_overflow: true  // overflow in separate collection
+}
+
+// 4. Extended reference (denormalize frequently-read fields)
+{
+    order_id: "ORD-001",
+    customer: {
+        _id: ObjectId("..."),
+        name: "John Doe",      // denormalized from users collection
+        email: "john@doe.com"  // avoids $lookup for display
+    },
+    items: [...]
+}
+\end{lstlisting}
+
+\subsection{MongoDB Change Streams}
+
+\begin{lstlisting}[language=SQL, caption={Change streams for real-time reactions}]
+// Watch for changes on a collection
+const changeStream = db.orders.watch([
+    { $match: { "fullDocument.status": "completed" } }
+]);
+
+changeStream.on("change", (change) => {
+    // Trigger downstream processing
+    // change.operationType: "insert", "update", "delete", "replace"
+    // change.fullDocument: the complete document (with fullDocument: "updateLookup")
+});
+
+// Resume after disconnect
+const resumeToken = change._id;
+db.orders.watch([], { resumeAfter: resumeToken });
+\end{lstlisting}
+
+\subsection{MongoDB Transactions}
+
+\begin{lstlisting}[language=SQL, caption={Multi-document transactions (4.0+)}]
+const session = client.startSession();
+try {
+    session.startTransaction({
+        readConcern: { level: "snapshot" },
+        writeConcern: { w: "majority" },
+        readPreference: "primary"
+    });
+
+    await db.accounts.updateOne(
+        { _id: "sender" },
+        { $inc: { balance: -100 } },
+        { session }
+    );
+    await db.accounts.updateOne(
+        { _id: "receiver" },
+        { $inc: { balance: 100 } },
+        { session }
+    );
+
+    await session.commitTransaction();
+} catch (e) {
+    await session.abortTransaction();
+} finally {
+    session.endSession();
+}
+\end{lstlisting}
+
+\subsection{Slot-Based Execution Engine (SBE)}
+
+Introduced in MongoDB 5.1, SBE replaces the classic Volcano-iterator model with a register-machine-style executor. Instead of materializing full documents between pipeline stages, SBE passes only required fields through typed \textbf{slots}, eliminating redundant document reconstruction.
+
+\begin{lstlisting}[language=SQL, caption={Detecting and controlling SBE}]
+// Check if SBE is active via explain output
+// explainVersion: "2" = SBE, "1" = classic engine
+db.orders.find({ user_id: 42 }).explain("executionStats");
+
+// In slow query logs (MongoDB 6.2+), queryFramework field shows:
+// "sbe" or "classic"
+
+// Force classic engine cluster-wide (for regression triage):
+db.adminCommand({
+    setParameter: 1,
+    internalQueryFrameworkControl: "forceClassicEngine"
+});
+\end{lstlisting}
+
+\begin{warnbox}[What Silently Disables SBE]
+Several conditions revert to classic engine without warning:
+\begin{itemize}
+    \item \textbf{\$lookup with \texttt{pipeline:} key}: Forces classic. Use \texttt{localField}/\texttt{foreignField} instead --- this is the single most impactful SBE change for existing pipelines.
+    \item \textbf{Geospatial operators}: Any \texttt{\$geoNear}, \texttt{\$near}, or \texttt{\$geoWithin} in the pipeline.
+    \item \textbf{Sharded foreign collections}: \texttt{\$lookup} against a sharded \texttt{from} collection.
+    \item \textbf{Non-SBE stage before \$group}: One incompatible stage anywhere before \texttt{\$group} evicts the entire aggregation from SBE.
+\end{itemize}
+\end{warnbox}
+
+\begin{infobox}[\texttt{EQ\_LOOKUP} in explain output]
+When SBE handles a join correctly (indexed, \texttt{localField}/\texttt{foreignField} syntax), \texttt{explain()} shows an \texttt{EQ\_LOOKUP} stage instead of the classic \texttt{\$lookup} stage. This confirms SBE is executing the join.
+\end{infobox}
+
+\subsection{Clustered Collections}
+
+A clustered collection stores documents physically sorted by \texttt{\_id} in a single WiredTiger B-tree, eliminating the separate heap file.
+
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+\textbf{Operation} & \textbf{Standard} & \textbf{Clustered} & \textbf{Saving} \\
+\midrule
+Point lookup & 2 I/Os (index + heap) & 1 I/O & 50\% \\
+Range scan & 2 I/Os per doc & 1 I/O per doc & 50\% \\
+\texttt{\_id} index size & Significant & \textbf{Zero} & 100\% \\
+TTL expiry & Requires TTL index & Built-in on cluster key & --- \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{lstlisting}[language=SQL, caption={Creating clustered collections}]
+// Create a clustered collection
+db.createCollection("events", {
+    clusteredIndex: { key: { _id: 1 }, unique: true }
+});
+
+// TTL on the cluster key itself -- no separate TTL index needed
+db.createCollection("sessions", {
+    clusteredIndex: { key: { _id: 1 }, unique: true },
+    expireAfterSeconds: 3600  // auto-expire 1 hour after _id timestamp
+});
+
+// Verify: _id index size will show 0
+db.events.stats().indexSizes;
+\end{lstlisting}
+
+\begin{warnbox}[Sequential Key Requirement]
+Randomly distributed \texttt{\_id} values (e.g., UUID v4) cause B-tree page splits, degrading insert performance. Use monotonically increasing keys: \textbf{ObjectId}, timestamp-prefixed strings, or \textbf{UUIDv7}. Secondary indexes on clustered collections store the full \texttt{\_id} as the record locator --- a long string \texttt{\_id} inflates every secondary index.
+\end{warnbox}
+
+\subsection{Hidden Indexes}
+
+A hidden index is maintained on every write but invisible to the query planner. Its primary purpose is \textbf{safe index drop validation}.
+
+\begin{lstlisting}[language=SQL, caption={Hidden index safe-drop workflow}]
+// Hide an index before dropping
+db.orders.hideIndex("idx_orders_legacy_field");
+
+// Run production traffic for 24--48 hours.
+// If performance degrades, unhide instantly (zero rebuild cost):
+db.orders.unhideIndex("idx_orders_legacy_field");
+
+// If no impact, drop safely:
+db.orders.dropIndex("idx_orders_legacy_field");
+
+// Confirm zero access while hidden ($indexStats still tracks hits):
+db.orders.aggregate([
+    { $indexStats: {} },
+    { $match: { name: "idx_orders_legacy_field" } }
+]);
+\end{lstlisting}
+
+\begin{tipbox}[Hidden Index Gotchas]
+\begin{itemize}
+    \item \textbf{TTL still runs}: A hidden TTL index continues to expire documents. Hiding it does \textbf{not} pause deletion.
+    \item \textbf{\texttt{hint()} cannot force a hidden index}: Unhide first to force-test a plan.
+    \item \textbf{Write overhead continues}: The index is still maintained on every write --- hiding saves no write cost.
+    \item \textbf{\texttt{\_id} index cannot be hidden}: The primary index is exempt.
+\end{itemize}
+\end{tipbox}
+
+\subsection{Partial Indexes: Advanced Patterns}
+
+\begin{lstlisting}[language=SQL, caption={Advanced partial index patterns}]
+// 1. Soft-delete optimization
+// If 99% of documents are deleted, the index shrinks to 1% of full size.
+db.orders.createIndex(
+    { created_at: -1, user_id: 1 },
+    { partialFilterExpression: { deleted: false } }
+);
+
+// 2. Sparse uniqueness: enforce unique email ONLY where field exists.
+// Allows unlimited documents with no email field.
+db.users.createIndex(
+    { email: 1 },
+    {
+        unique: true,
+        partialFilterExpression: { email: { $exists: true } }
+    }
+);
+
+// 3. Partial TTL: auto-expire ONLY temporary tokens, not permanent records
+db.tokens.createIndex(
+    { created_at: 1 },
+    {
+        expireAfterSeconds: 3600,
+        partialFilterExpression: { type: "temporary" }
+    }
+);
+
+// 4. Queue hot-path: index only pending tasks (tiny fraction of total)
+db.tasks.createIndex(
+    { priority: -1, created_at: 1 },
+    { partialFilterExpression: { status: "pending" } }
+);
+\end{lstlisting}
+
+\begin{infobox}[Query Implication Rule]
+For a query to use a partial index, the query must \textbf{imply} the partial filter expression --- the planner must prove all candidates satisfy the filter. A query on \texttt{\{ status: "pending", score: \{ \$gt: 5 \} \}} will use a partial index filtered on \texttt{\{ status: "pending" \}} because the equality clause logically implies the filter. If the query omits \texttt{status}, the planner falls back to a collection scan even when the partial index exists. \textbf{Partial and sparse options are mutually exclusive} --- partial is strictly more powerful.
+\end{infobox}
+
+\subsection{\$lookup Execution Strategies and Hash Join}
+
+MongoDB chooses between three \texttt{\$lookup} execution strategies. The selection is non-obvious and has major performance consequences.
+
+\begin{center}
+\begin{tabular}{lp{5cm}r}
+\toprule
+\textbf{Strategy} & \textbf{Conditions} & \textbf{Benchmark (260K docs)} \\
+\midrule
+Indexed Nested Loop & Index on \texttt{foreignField} & 2{,}456 ms \\
+\textbf{Hash Join} & \texttt{allowDiskUse: true} + foreign $<$10K docs / 100MB & \textbf{750 ms} \\
+Unindexed Nested Loop & No index, no hash join & 1{,}618 ms \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Hash join was fastest despite an available index, because it loads the foreign collection into memory once and avoids per-row index lookups.
+
+\begin{lstlisting}[language=SQL, caption={\$lookup: wrong vs right approach}]
+// WRONG: pipeline key disables SBE AND hash join
+db.orders.aggregate([
+    { $lookup: {
+        from: "users",
+        let: { uid: "$user_id" },
+        pipeline: [{ $match: { $expr: { $eq: ["$_id", "$$uid"] } } }],
+        as: "user"
+    }}
+]);
+
+// RIGHT: localField/foreignField enables SBE + hash join eligibility
+db.orders.aggregate([
+    { $match: { status: "active" } },     // always filter BEFORE $lookup
+    { $lookup: {
+        from: "users",
+        localField: "user_id",
+        foreignField: "_id",
+        as: "user"
+    }},
+    { $unwind: "$user" }
+], { allowDiskUse: true });
+
+// Confirm SBE join: look for EQ_LOOKUP stage in explain output
+db.orders.explain("executionStats").aggregate([...]);
+\end{lstlisting}
+
+\begin{warnbox}[Sharded Foreign Collections Disable Hash Join]
+If the \texttt{from} collection is sharded, MongoDB falls back to classic engine + unindexed nested loop regardless of index availability. For sharded clusters, denormalize the data or keep the lookup target unsharded.
+\end{warnbox}
+
+\subsection{Resumable Index Builds}
+
+MongoDB 5.0+ index builds survive clean \texttt{mongod} restarts by checkpointing progress to disk.
+
+\subsubsection{Build Phases}
+
+\begin{enumerate}
+    \item \textbf{Initialization}: Lock acquisition, index metadata written.
+    \item \textbf{Bulk-load}: Full collection scan + sort, yields to read/write ops.
+    \item \textbf{Drain}: Processes writes that arrived during the scan (runs multiple times on replica sets before commit).
+    \item \textbf{Vote + Commit}: Replica set members vote; primary commits when quorum is reached.
+\end{enumerate}
+
+\begin{lstlisting}[language=SQL, caption={Controlling index build commit quorum}]
+// Build with custom commit quorum (default: "votingMembers")
+db.orders.createIndex(
+    { user_id: 1, created_at: -1 },
+    {},
+    { commitQuorum: "majority" }  // or 1 for fastest commit
+);
+
+// Change commit quorum MID-BUILD without stopping it:
+db.adminCommand({
+    setIndexCommitQuorum: "orders",
+    indexNames: ["user_id_1_created_at_-1"],
+    commitQuorum: 1
+});
+
+// Monitor build progress:
+db.currentOp({ "msg": /Index Build/ });
+\end{lstlisting}
+
+\begin{tipbox}[Resumption Behavior]
+On \texttt{SIGTERM}, build progress is written to disk. On restart, \texttt{mongod} logs \texttt{"Resuming index build from last saved state"}. The build continues from the checkpoint --- not from scratch. No user action is needed.
+\end{tipbox}
+
+\subsection{WiredTiger Compression Tuning}
+
+\begin{lstlisting}[language=SQL, caption={Per-collection compression configuration}]
+// Set compression at collection creation (cannot change on existing data)
+db.createCollection("archive_events", {
+    storageEngine: {
+        wiredTiger: { configString: "block_compressor=zstd" }
+    }
+});
+
+// Set index compression independently (reduces index storage)
+db.createCollection("hot_collection", {
+    storageEngine: {
+        wiredTiger: { configString: "block_compressor=snappy" }
+    },
+    indexOptionDefaults: {
+        storageEngine: {
+            wiredTiger: { configString: "block_compressor=zstd" }
+        }
+    }
+});
+
+// To change compression on existing data:
+// mongodump -> mongorestore with new collection settings (no live path)
+\end{lstlisting}
+
+\begin{center}
+\begin{tabular}{lp{4cm}p{4cm}}
+\toprule
+\textbf{Compressor} & \textbf{Best For} & \textbf{Tradeoff} \\
+\midrule
+\texttt{snappy} (default) & Write-heavy OLTP & Lower CPU, larger files \\
+\texttt{zstd} level 6 & Read-heavy / analytical & Better ratio, more CPU on write \\
+\texttt{zstd} level 15--19 & Cold / archive data & Excellent ratio, highest CPU on write \\
+\texttt{none} & Already-compressed data & Zero CPU overhead \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{infobox}[zstd Quality Levels (MongoDB 7.0+)]
+\texttt{zstd} supports quality levels 1--22 (default: 6). Level 1 is near-snappy speed with better compression; level 22 is maximum compression at significant CPU cost. zstd \textbf{decompression} is consistently fast across all levels --- the CPU cost is primarily on compression (writes). Time-series collections default to \texttt{zstd} (not \texttt{snappy}) since MongoDB 6.x.
+\end{infobox}
+
+\subsection{Oplog: Window Sizing and Delta Format}
+
+\subsubsection{Oplog Window}
+
+The critical metric is \textbf{time coverage}, not size. A 50\,GB oplog at 100K ops/sec covers only $\sim$8 minutes; the same 50\,GB at 100 ops/sec covers days.
+
+\begin{lstlisting}[language=SQL, caption={Oplog window management}]
+// Check current oplog time range
+use local
+db.oplog.rs.find().sort({ $natural: 1 }).limit(1).next().ts   // oldest
+db.oplog.rs.find().sort({ $natural: -1 }).limit(1).next().ts  // newest
+
+// Resize oplog live (no restart needed, size in MB)
+db.adminCommand({ replSetResizeOplog: 1, size: 51200 });  // 50 GB
+
+// Guarantee minimum time window regardless of write volume (MongoDB 4.4+)
+db.adminCommand({
+    replSetResizeOplog: 1,
+    size: 51200,
+    minRetentionHours: 24
+});
+\end{lstlisting}
+
+\subsubsection{Oplog Delta Format (MongoDB 6.0+)}
+
+\begin{lstlisting}[language=SQL, caption={Minimizing oplog entry size}]
+// BAD: full document replacement -- entire document written to oplog
+db.products.replaceOne({ _id: productId }, { ...largeDoc, price: 99 });
+
+// GOOD: update operator -- only delta written to oplog
+db.products.updateOne(
+    { _id: productId },
+    { $set: { price: 99, updated_at: new Date() } }
+);
+// For a 10KB document with one field change: oplog entry drops from
+// ~10KB to ~100 bytes. Compound benefit: smaller replication traffic
+// and a wider effective oplog time window.
+\end{lstlisting}
+
+\begin{warnbox}[Oplog Exhaustion and Secondaries]
+If a secondary falls behind the primary's oplog window, it enters \textbf{recovering} state and requires a full initial sync --- potentially hours of downtime. Monitor \texttt{rs.status()} \texttt{optimeDate} lag vs the oldest oplog entry. On sharded clusters, monitor per-shard oplog utilization independently: a hot shard can exhaust its window while others have ample coverage.
+\end{warnbox}
+
+\subsection{Hedged Reads}
+
+Available on sharded clusters via \texttt{mongos} (MongoDB 4.4+), hedged reads send a query to \textbf{two} replica set members simultaneously per shard and return the first response, discarding the other.
+
+\begin{lstlisting}[language=SQL, caption={Hedged read configuration}]
+// nearest hedges automatically; others require explicit opt-in
+const result = await collection.findOne(
+    { _id: docId },
+    {
+        readPreference: new ReadPreference("nearest", null, {
+            hedge: { enabled: true }
+        })
+    }
+);
+
+// Connection-level default
+const client = new MongoClient(uri, {
+    readPreference: {
+        mode: "secondaryPreferred",
+        hedgeOptions: { enabled: true }
+    }
+});
+\end{lstlisting}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Metric} & \textbf{Effect} \\
+\midrule
+P50 latency & Minimal improvement \\
+P95/P99 latency & Significant reduction (eliminates slow-member outliers) \\
+Read ops per shard & $\sim$2x increase \\
+Consistency & Secondary replication lag applies --- not for strong consistency \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{warnbox}[Hedged Reads: Sharded Clusters Only]
+Hedged reads are a \texttt{mongos}-level feature with no effect on direct replica set connections. Do not use for reads requiring strong consistency. Avoid on near-capacity clusters: the $\sim$2x read op increase can worsen overall throughput.
+\end{warnbox}
+
+\subsection{Query Settings API (MongoDB 8.0+)}
+
+Query Settings replaces the deprecated index filters with a persistent, replica-set-aware mechanism to attach index hints or rejection flags to a \textbf{query shape} --- survives restarts and replicates to all members.
+
+\begin{lstlisting}[language=SQL, caption={Query Settings: hints and rejection filters}]
+// Force a specific index for a query shape
+db.adminCommand({
+    setQuerySettings: {
+        find: "orders",
+        filter: { user_id: { $eq: "$$USER_ID" } },
+        sort: { created_at: -1 },
+        $db: "myapp"
+    },
+    settings: {
+        indexHints: {
+            ns: { db: "myapp", coll: "orders" },
+            allowedIndexes: ["user_id_1_created_at_-1"]
+        }
+    }
+});
+
+// Emergency kill switch: reject a runaway query shape without redeploy
+db.adminCommand({
+    setQuerySettings: {
+        find: "analytics_events",
+        filter: { payload: { $exists: true } },
+        $db: "myapp"
+    },
+    settings: { reject: true }
+});
+
+// Audit all active settings cluster-wide
+db.aggregate([{ $querySettings: {} }]);
+
+// Remove a setting
+db.adminCommand({
+    removeQuerySettings: { find: "orders", $db: "myapp" }
+});
+\end{lstlisting}
+
+\begin{tipbox}[Query Settings vs Index Filters]
+\begin{tabular}{lll}
+\toprule
+\textbf{Feature} & \textbf{Index Filters (deprecated)} & \textbf{Query Settings (8.0+)} \\
+\midrule
+Persist across restart & No & Yes \\
+Replicate to secondaries & No & Yes \\
+Emergency reject & No & Yes \\
+Audit via aggregation & No & Yes (\texttt{\$querySettings}) \\
+\bottomrule
+\end{tabular}
+\end{tipbox}
+
+\subsection{Queryable Encryption}
+
+MongoDB 6.0+ supports client-side field-level encryption where the \textbf{server never sees plaintext} but can still execute equality queries on encrypted fields. Range queries became GA in MongoDB 8.0.
+
+\begin{lstlisting}[language=SQL, caption={Queryable Encryption setup (Node.js)}]
+const encryptedFieldsMap = {
+    "myapp.patients": {
+        fields: [
+            {
+                path: "ssn",
+                bsonType: "string",
+                queries: { queryType: "equality" }  // MongoDB 6.0+ GA
+            },
+            {
+                path: "salary",
+                bsonType: "double",
+                queries: {
+                    queryType: "range",  // MongoDB 8.0+ GA
+                    min: 0,
+                    max: 1000000,
+                    trimFactor: 6,       // privacy/performance tradeoff
+                    sparsity: 1
+                }
+            }
+        ]
+    }
+};
+
+const client = new MongoClient(uri, {
+    autoEncryption: {
+        keyVaultNamespace: "encryption.__keyVault",
+        kmsProviders: { aws: { accessKeyId, secretAccessKey } },
+        encryptedFieldsMap
+    }
+});
+
+// Query on encrypted field -- server processes ciphertext only
+const patient = await db.collection("patients")
+    .findOne({ ssn: "123-45-6789" });
+
+// Range query on encrypted field (MongoDB 8.0+)
+const highEarners = await db.collection("patients")
+    .find({ salary: { $gte: 200000 } }).toArray();
+\end{lstlisting}
+
+\begin{infobox}[Queryable Encryption Constraints]
+\begin{itemize}
+    \item \textbf{Storage overhead}: $\sim$2--5x per encrypted field (auxiliary search structures stored alongside ciphertext).
+    \item \textbf{Incompatible with}: \texttt{\$lookup}, cross-collection transactions, sharding on encrypted fields.
+    \item \textbf{Key management}: Client-managed or via KMS (AWS, GCP, Azure). Key rotation requires re-encrypting affected documents.
+    \item \textbf{Community Edition}: Available since MongoDB 7.0 (not Atlas-only).
+    \item \textbf{Prefix/suffix/substring}: Public preview as of MongoDB 8.2.
+\end{itemize}
+\end{infobox}
+
+\subsection{Atlas Online Archive}
+
+Atlas Online Archive automatically tiers documents matching a date-based or custom filter from a live Atlas cluster to MongoDB-managed S3-backed object storage, queryable via a unified federated endpoint.
+
+\begin{lstlisting}[language=SQL, caption={Online Archive configuration and querying}]
+// Archive rule: move documents older than 90 days
+// (configured via Atlas UI or Admin API)
+{
+    "criteria": {
+        "type": "date",
+        "dateField": "created_at",
+        "expireAfterDays": 90
+    },
+    "partitionFields": [
+        { "fieldName": "region", "order": 0 },
+        { "fieldName": "user_id", "order": 1 }  // up to 2 extra fields
+    ]
+}
+
+// Query live cluster + archive via federated connection string:
+const liveAndArchived = await db.collection("events")
+    .find({ region: "US", created_at: { $gte: ninetyDaysAgo } })
+    .toArray();
+// Automatically merges results from both tiers
+\end{lstlisting}
+
+\begin{tipbox}[Online Archive Performance Tips]
+\begin{itemize}
+    \item \textbf{Partition fields are a performance lever}: Queries including partition fields skip full-archive scans. Choose your 2 most frequent non-date query predicates.
+    \item \textbf{Index the date field on the live collection}: Archival reads the live collection using the date field. Without an index, each archival job is a full collection scan on the primary.
+    \item \textbf{Archived format is columnar}: Range scans are fast; random point lookups are slower than on the live cluster.
+    \item \textbf{Custom filter archival}: Archive by any field (e.g., \texttt{\{ status: "closed" \}}) --- not just by date.
+    \item \textbf{Separate connection string}: The federated endpoint uses a different URI. Queries to the live cluster URI do not include archived data.
+\end{itemize}
+\end{tipbox}
+
+
+% ============================================================
+\section{Caching Strategies}
+% ============================================================
+
+\subsection{Cache Patterns}
+
+\subsubsection{Cache-Aside (Lazy Loading)}
+
+The application manages cache reads and writes explicitly:
+
+\begin{enumerate}
+    \item Check cache for data.
+    \item If cache miss: query database, store result in cache, return.
+    \item If cache hit: return cached data.
+    \item On write: update database, then invalidate (or update) cache.
+\end{enumerate}
+
+\begin{lstlisting}[language=SQL, caption={Cache-aside pseudocode}]
+async function getUser(userId) {
+    // 1. Check cache
+    let user = await redis.get(`user:${userId}`);
+    if (user) return JSON.parse(user);
+
+    // 2. Cache miss: query DB
+    user = await db.query("SELECT * FROM users WHERE id = $1", [userId]);
+
+    // 3. Populate cache with TTL
+    await redis.setex(`user:${userId}`, 3600, JSON.stringify(user));
+    return user;
+}
+
+async function updateUser(userId, data) {
+    await db.query("UPDATE users SET ... WHERE id = $1", [userId]);
+    await redis.del(`user:${userId}`);  // invalidate cache
+}
+\end{lstlisting}
+
+\subsubsection{Write-Through}
+
+Every write goes through the cache to the database. Ensures cache consistency but adds write latency.
+
+\subsubsection{Write-Behind (Write-Back)}
+
+Writes go to cache immediately; cache asynchronously flushes to database. High performance but risk of data loss if cache fails before flush.
+
+\subsubsection{Read-Through}
+
+Cache itself is responsible for loading data from the database on cache miss. The application only interacts with the cache.
+
+\subsection{Cache Invalidation Strategies}
+
+\begin{center}
+\begin{tabular}{lp{4cm}p{4cm}}
+\toprule
+\textbf{Strategy} & \textbf{Pros} & \textbf{Cons} \\
+\midrule
+TTL-based & Simple, self-healing & Stale data within TTL window \\
+Event-based & Immediate consistency & Complex to implement, coupling \\
+Version-based & No stale reads & Requires version tracking \\
+Tag-based & Group invalidation & Memory overhead for tag tracking \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{PostgreSQL Internal Caching}
+
+\begin{lstlisting}[language=SQL, caption={PostgreSQL buffer cache analysis}]
+CREATE EXTENSION pg_buffercache;
+
+-- Check buffer cache usage by table
+SELECT c.relname,
+       count(*) AS buffers,
+       pg_size_pretty(count(*) * 8192) AS cached_size,
+       round(100.0 * count(*) /
+           (SELECT setting::int FROM pg_settings
+            WHERE name = 'shared_buffers'), 2) AS pct_of_cache
+FROM pg_buffercache b
+JOIN pg_class c ON b.relfilenode = pg_relation_filenode(c.oid)
+WHERE b.reldatabase = (SELECT oid FROM pg_database WHERE datname = current_database())
+GROUP BY c.relname
+ORDER BY buffers DESC
+LIMIT 20;
+
+-- Overall cache hit ratio (should be > 99%)
+SELECT
+    sum(heap_blks_read) AS heap_read,
+    sum(heap_blks_hit) AS heap_hit,
+    round(sum(heap_blks_hit)::numeric /
+        (sum(heap_blks_hit) + sum(heap_blks_read)), 4) AS hit_ratio
+FROM pg_statio_user_tables;
+\end{lstlisting}
+
+\subsection{MongoDB WiredTiger Cache}
+
+\begin{lstlisting}[language=SQL, caption={MongoDB cache configuration}]
+// WiredTiger internal cache (default: 50% of RAM - 1GB)
+// Set in mongod.conf:
+storage:
+  wiredTiger:
+    engineConfig:
+      cacheSizeGB: 8
+
+// Monitor cache usage
+db.serverStatus().wiredTiger.cache
+// Key metrics:
+// - "bytes currently in the cache"
+// - "tracked dirty bytes in the cache"
+// - "pages read into cache"
+// - "pages evicted"
+\end{lstlisting}
+
+
+% ============================================================
+\section{Connection Pooling}
+% ============================================================
+
+\subsection{Why Connection Pooling}
+
+Database connections are expensive:
+\begin{itemize}
+    \item PostgreSQL forks a new process per connection ($\sim$5--10MB RAM each).
+    \item TCP handshake + TLS negotiation + authentication = 50--200ms per connection.
+    \item OS context switching overhead scales with connection count.
+\end{itemize}
+
+\subsection{PgBouncer}
+
+The most widely used PostgreSQL connection pooler.
+
+\begin{lstlisting}[language=SQL, caption={PgBouncer configuration}]
+[databases]
+mydb = host=127.0.0.1 port=5432 dbname=mydb
+
+[pgbouncer]
+listen_addr = *
+listen_port = 6432
+auth_type = md5
+auth_file = /etc/pgbouncer/userlist.txt
+
+; Pool modes:
+; session    - connection held for entire client session (safest)
+; transaction - connection returned after each transaction (recommended)
+; statement  - connection returned after each statement (most aggressive)
+pool_mode = transaction
+
+; Pool sizing
+default_pool_size = 25        ; connections per user/db pair
+min_pool_size = 5
+reserve_pool_size = 5
+max_client_conn = 1000        ; max client connections to PgBouncer
+
+; Timeouts
+server_idle_timeout = 600
+client_idle_timeout = 0
+query_timeout = 300
+\end{lstlisting}
+
+\begin{warnbox}[Transaction Mode Limitations]
+In \texttt{transaction} pool mode, these features \textbf{do not work}:
+\begin{itemize}
+    \item \texttt{SET} statements (session variables)
+    \item \texttt{LISTEN/NOTIFY}
+    \item \texttt{PREPARE} / prepared statements (use \texttt{-c prepared\_statements='' } at app level)
+    \item Cursors across transactions
+    \item Advisory locks (session-level)
+    \item Temporary tables
+\end{itemize}
+\end{warnbox}
+
+\subsection{Application-Level Pooling}
+
+\begin{lstlisting}[language=SQL, caption={Connection pool configuration examples}]
+# Python (asyncpg)
+pool = await asyncpg.create_pool(
+    dsn="postgresql://user:pass@host/db",
+    min_size=5,
+    max_size=20,
+    max_inactive_connection_lifetime=300
+)
+
+# Node.js (pg-pool)
+const pool = new Pool({
+    connectionString: "postgresql://...",
+    max: 20,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 2000
+});
+
+# MongoDB (driver built-in)
+client = MongoClient(
+    "mongodb://host:27017",
+    maxPoolSize=100,
+    minPoolSize=10,
+    maxIdleTimeMS=30000,
+    waitQueueTimeoutMS=5000
+)
+\end{lstlisting}
+
+
+% ============================================================
+\section{Replication and High Availability}
+% ============================================================
+
+\subsection{PostgreSQL Replication}
+
+\subsubsection{Streaming Replication (Physical)}
+
+\begin{itemize}
+    \item Replicates entire cluster at the byte level via WAL shipping.
+    \item Standby is a read-only copy (hot standby).
+    \item Synchronous mode: primary waits for standby acknowledgment (zero data loss, higher latency).
+    \item Asynchronous mode: primary does not wait (potential data loss on failover, lower latency).
+\end{itemize}
+
+\begin{lstlisting}[language=SQL, caption={PostgreSQL streaming replication}]
+-- Primary: postgresql.conf
+wal_level = replica
+max_wal_senders = 10
+synchronous_standby_names = 'standby1'  -- for sync replication
+
+-- Standby: create with pg_basebackup
+pg_basebackup -h primary-host -D /var/lib/postgresql/data -P -R
+
+-- The -R flag creates standby.signal and sets primary_conninfo
+\end{lstlisting}
+
+\subsubsection{Logical Replication}
+
+\begin{itemize}
+    \item Replicates at the row level (INSERT, UPDATE, DELETE).
+    \item Can replicate specific tables, not the entire cluster.
+    \item Subscribers can have different indexes, additional tables, even different PostgreSQL versions.
+    \item Useful for: zero-downtime upgrades, data distribution, consolidation.
+\end{itemize}
+
+\begin{lstlisting}[language=SQL, caption={Logical replication}]
+-- Publisher (source)
+CREATE PUBLICATION my_pub FOR TABLE orders, users;
+
+-- Subscriber (destination)
+CREATE SUBSCRIPTION my_sub
+    CONNECTION 'host=publisher-host dbname=mydb'
+    PUBLICATION my_pub;
+
+-- Selective publication
+CREATE PUBLICATION active_orders_pub FOR TABLE orders
+    WHERE (status = 'active');  -- PG 15+ row filter
+\end{lstlisting}
+
+\subsection{MongoDB Replica Sets}
+
+\begin{lstlisting}[language=SQL, caption={MongoDB replica set}]
+// Initialize replica set
+rs.initiate({
+    _id: "myrs",
+    members: [
+        { _id: 0, host: "mongo1:27017", priority: 2 },  // preferred primary
+        { _id: 1, host: "mongo2:27017", priority: 1 },
+        { _id: 2, host: "mongo3:27017", priority: 1 },
+        { _id: 3, host: "mongo4:27017", arbiterOnly: true }  // arbiter (no data)
+    ]
+});
+
+// Read preference options
+// primary         - always read from primary (default, strongest consistency)
+// primaryPreferred - primary if available, else secondary
+// secondary       - read from secondary (eventual consistency)
+// secondaryPreferred - secondary if available, else primary
+// nearest         - lowest network latency
+
+db.orders.find({ user_id: 42 }).readPref("secondaryPreferred");
+\end{lstlisting}
+
+\subsubsection{Write Concern and Read Concern}
+
+\begin{center}
+\begin{tabular}{lp{8cm}}
+\toprule
+\textbf{Write Concern} & \textbf{Meaning} \\
+\midrule
+\texttt{w: 0} & Fire and forget (no acknowledgment) \\
+\texttt{w: 1} & Acknowledged by primary (default) \\
+\texttt{w: "majority"} & Acknowledged by majority of replica set \\
+\texttt{w: N} & Acknowledged by N members \\
+\texttt{j: true} & Written to journal on disk \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{center}
+\begin{tabular}{lp{8cm}}
+\toprule
+\textbf{Read Concern} & \textbf{Meaning} \\
+\midrule
+\texttt{local} & Returns most recent data on the queried node \\
+\texttt{majority} & Returns data acknowledged by majority \\
+\texttt{linearizable} & Strongest: reflects all successful majority writes before the read \\
+\texttt{snapshot} & Used in multi-document transactions \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+% ============================================================
+\section{Advanced Optimization Techniques}
+% ============================================================
+
+\subsection{Database Normalization vs Denormalization}
+
+\begin{center}
+\begin{tabular}{lp{5cm}p{5cm}}
+\toprule
+& \textbf{Normalized (3NF)} & \textbf{Denormalized} \\
+\midrule
+Writes & Fast (single location) & Slow (multiple updates) \\
+Reads & Slow (many JOINs) & Fast (single read) \\
+Storage & Efficient (no duplication) & Wasteful (duplicated data) \\
+Consistency & Guaranteed & Must be maintained manually \\
+Use case & OLTP (transactional) & OLAP / read-heavy workloads \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Batch Operations}
+
+\begin{lstlisting}[language=SQL, caption={Batch insert optimization}]
+-- PostgreSQL: Use COPY for bulk loading (10-100x faster than INSERT)
+COPY orders (user_id, product_id, amount, created_at)
+FROM '/tmp/orders.csv' WITH (FORMAT csv, HEADER true);
+
+-- Multi-value INSERT (better than individual INSERTs)
+INSERT INTO orders (user_id, amount) VALUES
+    (1, 100), (2, 200), (3, 300), ... ;
+
+-- PostgreSQL: UPSERT (INSERT ... ON CONFLICT)
+INSERT INTO inventory (product_id, quantity)
+VALUES ('SKU-001', 10)
+ON CONFLICT (product_id)
+DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity;
+\end{lstlisting}
+
+\begin{lstlisting}[language=SQL, caption={MongoDB bulk operations}]
+// Ordered bulk write (stops on first error)
+db.orders.bulkWrite([
+    { insertOne: { document: { ... } } },
+    { updateOne: { filter: { _id: 1 }, update: { $set: { status: "done" } } } },
+    { deleteOne: { filter: { _id: 2 } } }
+], { ordered: true });
+
+// Unordered bulk write (continues on error, parallel execution)
+db.orders.bulkWrite([...], { ordered: false });
+\end{lstlisting}
+
+\subsection{Query Hints and Plan Control}
+
+\begin{lstlisting}[language=SQL, caption={PostgreSQL query hints}]
+-- PostgreSQL doesn't have traditional hints, but you can:
+
+-- 1. Disable specific plan types for debugging
+SET enable_seqscan = off;       -- force index usage
+SET enable_nestloop = off;      -- prevent nested loop joins
+SET enable_hashjoin = off;      -- prevent hash joins
+
+-- 2. Use pg_hint_plan extension
+CREATE EXTENSION pg_hint_plan;
+/*+ SeqScan(users) HashJoin(orders users) */
+SELECT * FROM orders JOIN users ON orders.user_id = users.id;
+
+-- 3. Force specific join order
+SET join_collapse_limit = 1;  -- optimizer follows FROM clause order
+\end{lstlisting}
+
+\begin{lstlisting}[language=SQL, caption={MongoDB query hints}]
+// Force specific index
+db.orders.find({ user_id: 42 }).hint({ user_id: 1, created_at: -1 });
+
+// Force collection scan (no index)
+db.orders.find({ user_id: 42 }).hint({ $natural: 1 });
+\end{lstlisting}
+
+\subsection{Lock Optimization}
+
+\begin{lstlisting}[language=SQL, caption={PostgreSQL lock management}]
+-- View current locks
+SELECT l.locktype, l.mode, l.granted, l.pid,
+       a.query, a.state, a.wait_event_type
+FROM pg_locks l
+JOIN pg_stat_activity a ON l.pid = a.pid
+WHERE NOT l.granted;
+
+-- Skip locked rows (avoid contention in worker queues)
+SELECT * FROM tasks
+WHERE status = 'pending'
+ORDER BY priority DESC
+LIMIT 1
+FOR UPDATE SKIP LOCKED;
+
+-- NOWAIT: fail immediately instead of waiting for lock
+SELECT * FROM accounts WHERE id = 42 FOR UPDATE NOWAIT;
+
+-- Reduce lock duration: use smaller transactions
+BEGIN;
+-- Only lock during the critical section
+UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+COMMIT;  -- lock released immediately
+\end{lstlisting}
+
+\subsection{EXPLAIN Analysis Checklist}
+
+\begin{tipbox}[Performance Investigation Checklist]
+\begin{enumerate}
+    \item Run \texttt{EXPLAIN (ANALYZE, BUFFERS)} on the slow query.
+    \item Check \textbf{estimated vs actual rows} --- large discrepancies mean stale statistics. Run \texttt{ANALYZE tablename}.
+    \item Look for \textbf{Seq Scan} on large tables --- missing index?
+    \item Check for \textbf{Sort} nodes with high \texttt{Sort Method: external merge} --- increase \texttt{work\_mem}.
+    \item Look for \textbf{Nested Loop} with high \texttt{loops} count --- consider Hash Join.
+    \item Check \textbf{Buffers: shared read} vs.\ \textbf{shared hit} --- low hit ratio = poor caching.
+    \item Look for \textbf{Filter: (removed N rows)} after scan --- the index isn't selective enough.
+    \item Check \textbf{Rows Removed by Filter} --- suggests a better index could help.
+    \item Look for \textbf{Hash Batch} $> 1$ --- \texttt{work\_mem} too low for hash join.
+\end{enumerate}
+\end{tipbox}
+
+
+% ============================================================
+\section{Monitoring and Diagnostics}
+% ============================================================
+
+\subsection{PostgreSQL Monitoring}
+
+\begin{lstlisting}[language=SQL, caption={Essential PostgreSQL monitoring queries}]
+-- 1. Active queries and wait events
+SELECT pid, state, wait_event_type, wait_event,
+       now() - query_start AS duration, query
+FROM pg_stat_activity
+WHERE state != 'idle'
+ORDER BY duration DESC;
+
+-- 2. Long-running transactions
+SELECT pid, now() - xact_start AS xact_duration,
+       now() - query_start AS query_duration, query
+FROM pg_stat_activity
+WHERE xact_start IS NOT NULL
+  AND state != 'idle'
+ORDER BY xact_duration DESC;
+
+-- 3. Table I/O statistics
+SELECT relname,
+       seq_scan, seq_tup_read,
+       idx_scan, idx_tup_fetch,
+       n_tup_ins, n_tup_upd, n_tup_del,
+       n_dead_tup, last_autovacuum
+FROM pg_stat_user_tables
+ORDER BY seq_tup_read DESC;
+
+-- 4. Index usage statistics
+SELECT indexrelname, idx_scan, idx_tup_read, idx_tup_fetch,
+       pg_size_pretty(pg_relation_size(indexrelid)) AS index_size
+FROM pg_stat_user_indexes
+ORDER BY idx_scan ASC;  -- low scan count = potentially unused index
+
+-- 5. Unused indexes (candidates for removal)
+SELECT indexrelname, idx_scan,
+       pg_size_pretty(pg_relation_size(indexrelid)) AS size
+FROM pg_stat_user_indexes
+WHERE idx_scan = 0
+  AND indexrelname NOT LIKE '%pkey%'
+  AND indexrelname NOT LIKE '%unique%'
+ORDER BY pg_relation_size(indexrelid) DESC;
+
+-- 6. Table bloat estimation
+SELECT relname,
+       pg_size_pretty(pg_total_relation_size(relid)) AS total_size,
+       n_live_tup, n_dead_tup,
+       round(100.0 * n_dead_tup / nullif(n_live_tup + n_dead_tup, 0), 2)
+           AS dead_pct
+FROM pg_stat_user_tables
+ORDER BY n_dead_tup DESC;
+
+-- 7. Checkpoint frequency
+SELECT checkpoints_timed, checkpoints_req,
+       buffers_checkpoint, buffers_clean, buffers_backend,
+       pg_size_pretty(buffers_checkpoint * 8192) AS checkpoint_write_size
+FROM pg_stat_bgwriter;
+\end{lstlisting}
+
+\subsection{MongoDB Monitoring}
+
+\begin{lstlisting}[language=SQL, caption={MongoDB monitoring}]
+// Current operations
+db.currentOp({ "active": true, "secs_running": { $gt: 5 } });
+
+// Server status overview
+db.serverStatus();  // connections, opcounters, wiredTiger stats
+
+// Collection statistics
+db.orders.stats({ scale: 1048576 });  // sizes in MB
+
+// Index statistics
+db.orders.aggregate([{ $indexStats: {} }]);
+
+// Profiler (log slow queries)
+db.setProfilingLevel(1, { slowms: 100 });  // log queries > 100ms
+db.system.profile.find().sort({ ts: -1 }).limit(10);
+
+// Connection pool stats
+db.serverStatus().connections;
+// { current: 42, available: 958, totalCreated: 1234 }
+\end{lstlisting}
+
+
+% ============================================================
+\section{PostgreSQL vs MongoDB: When to Use What}
+% ============================================================
+
+\begin{center}
+\begin{longtable}{p{3.5cm}p{5cm}p{5cm}}
+\toprule
+\textbf{Criterion} & \textbf{PostgreSQL} & \textbf{MongoDB} \\
+\midrule
+\endhead
+Data model & Relational (tables, rows) & Document (BSON/JSON) \\
+Schema & Strict schema (DDL) & Flexible schema \\
+Transactions & Full ACID, serializable & Multi-doc ACID (4.0+), snapshot isolation \\
+Joins & Native SQL JOINs & \$lookup (limited), denormalization preferred \\
+Scaling strategy & Vertical + read replicas + Citus for horizontal & Native horizontal sharding \\
+Full-text search & Built-in (tsvector/tsquery) & Native text index + Atlas Search \\
+Geospatial & PostGIS (gold standard) & 2dsphere (good, simpler API) \\
+JSON support & JSONB (indexed, queryable) & Native (it IS JSON) \\
+Time-series & TimescaleDB extension & Native time-series collections (5.0+) \\
+Vector search & pgvector extension & Atlas Vector Search \\
+Best for & Complex queries, strong consistency, regulated industries & Rapid prototyping, flexible schemas, horizontal scale \\
+Not ideal for & Horizontal write scaling & Complex multi-collection transactions \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+\subsection{Hybrid Approaches}
+
+Many production systems use both:
+\begin{itemize}
+    \item \textbf{PostgreSQL} for transactional data (users, orders, payments) where consistency is critical.
+    \item \textbf{MongoDB} for event logs, user activity, content, product catalogs where schema flexibility and write throughput matter.
+    \item \textbf{Redis} as a caching layer in front of either.
+    \item \textbf{Elasticsearch/OpenSearch} for full-text search if native FTS is insufficient.
+\end{itemize}
+
+
+% ============================================================
+\section{Performance Benchmarking}
+% ============================================================
+
+\subsection{PostgreSQL Benchmarking}
+
+\begin{lstlisting}[language=SQL, caption={pgbench for PostgreSQL benchmarking}]
+# Initialize benchmark tables
+pgbench -i -s 100 mydb  # scale factor 100 (~1.6GB data)
+
+# Run TPC-B-like benchmark
+pgbench -c 50 -j 4 -T 300 mydb
+# -c 50: 50 concurrent clients
+# -j 4:  4 worker threads
+# -T 300: run for 300 seconds
+
+# Custom benchmark script
+pgbench -c 20 -T 60 -f custom_query.sql mydb
+\end{lstlisting}
+
+\subsection{MongoDB Benchmarking}
+
+\begin{lstlisting}[language=SQL, caption={YCSB for MongoDB benchmarking}]
+# Yahoo Cloud Serving Benchmark
+./bin/ycsb load mongodb -s -P workloads/workloada \
+    -p mongodb.url=mongodb://localhost:27017/ycsb
+
+./bin/ycsb run mongodb -s -P workloads/workloada \
+    -p mongodb.url=mongodb://localhost:27017/ycsb \
+    -p operationcount=1000000 -threads 32
+\end{lstlisting}
+
+
+% ============================================================
+\section{Security Considerations for Performance}
+% ============================================================
+
+\subsection{PostgreSQL Security That Affects Performance}
+
+\begin{itemize}
+    \item \textbf{Row-Level Security (RLS)}: Adds per-row policy checks. Can impact query plans --- ensure policies use indexed columns.
+    \item \textbf{SSL/TLS}: Adds encryption overhead ($\sim$2--5\% CPU). Use connection poolers to amortize handshake cost.
+    \item \textbf{pg\_stat\_statements}: Expose query patterns. Ensure it's not accessible to untrusted users (SQL injection reconnaissance).
+    \item \textbf{Parameterized queries}: Always use prepared statements to prevent SQL injection AND enable plan caching.
+\end{itemize}
+
+\subsection{MongoDB Security}
+
+\begin{itemize}
+    \item \textbf{Authentication}: SCRAM-SHA-256 (default), x.509, LDAP, Kerberos.
+    \item \textbf{Encryption at rest}: WiredTiger encryption, or filesystem-level (LUKS, BitLocker).
+    \item \textbf{Field-level encryption}: Client-Side Field Level Encryption (CSFLE) for sensitive fields.
+    \item \textbf{Audit logging}: Can impact write performance ($\sim$5--10\%). Use filtering to log only critical operations.
+\end{itemize}
+
+
+% ============================================================
+\section{Emerging Trends and Future Directions}
+% ============================================================
+
+\subsection{Vector Databases and AI Integration}
+
+Both PostgreSQL (pgvector) and MongoDB (Atlas Vector Search) now support vector similarity search for AI/ML workloads:
+\begin{itemize}
+    \item Storing and querying embeddings from LLMs (OpenAI, Anthropic, Cohere).
+    \item Retrieval-Augmented Generation (RAG) architectures.
+    \item Hybrid search: combining full-text search with vector similarity.
+\end{itemize}
+
+\subsection{Distributed SQL}
+
+New systems (CockroachDB, YugabyteDB, TiDB) offer PostgreSQL-compatible SQL with native horizontal scaling:
+\begin{itemize}
+    \item Raft-based consensus for distributed transactions.
+    \item Automatic sharding and rebalancing.
+    \item Geo-distributed deployments with data locality.
+\end{itemize}
+
+\subsection{Serverless Databases}
+
+\begin{itemize}
+    \item \textbf{Neon}: Serverless PostgreSQL with branching (like Git for databases).
+    \item \textbf{PlanetScale}: Serverless MySQL with Vitess-based sharding.
+    \item \textbf{MongoDB Atlas Serverless}: Pay-per-operation pricing.
+    \item \textbf{CockroachDB Serverless}: Distributed SQL with consumption-based pricing.
+\end{itemize}
+
+\subsection{Time-Series Optimization}
+
+\begin{lstlisting}[language=SQL, caption={TimescaleDB hypertables}]
+-- Convert regular table to hypertable
+CREATE EXTENSION timescaledb;
+
+SELECT create_hypertable('sensor_data', 'timestamp',
+    chunk_time_interval => INTERVAL '1 day');
+
+-- Continuous aggregate (materialized view, auto-refreshed)
+CREATE MATERIALIZED VIEW daily_averages
+WITH (timescaledb.continuous) AS
+SELECT sensor_id,
+       time_bucket('1 day', timestamp) AS day,
+       AVG(value), MIN(value), MAX(value)
+FROM sensor_data
+GROUP BY sensor_id, day;
+
+-- Compression (10-20x space reduction)
+ALTER TABLE sensor_data SET (
+    timescaledb.compress,
+    timescaledb.compress_segmentby = 'sensor_id',
+    timescaledb.compress_orderby = 'timestamp DESC'
+);
+
+-- Retention policy (auto-drop old data)
+SELECT add_retention_policy('sensor_data', INTERVAL '90 days');
+\end{lstlisting}
+
+\begin{lstlisting}[language=SQL, caption={MongoDB time-series collections}]
+// Native time-series collection (MongoDB 5.0+)
+db.createCollection("sensor_data", {
+    timeseries: {
+        timeField: "timestamp",
+        metaField: "sensor_id",
+        granularity: "minutes"  // or "seconds", "hours"
+    },
+    expireAfterSeconds: 7776000  // 90 days auto-expiry
+});
+
+// Automatic bucketing, compression, and query optimization
+\end{lstlisting}
+
+
+% ============================================================
+\section{Optimization Cheat Sheet}
+% ============================================================
+
+\begin{tipbox}[Quick Reference: Top Optimization Actions]
+\textbf{Immediate wins (do these first):}
+\begin{enumerate}
+    \item Enable \texttt{pg\_stat\_statements} and identify top 10 slowest queries.
+    \item Run \texttt{EXPLAIN ANALYZE} on slow queries.
+    \item Add missing indexes based on query patterns.
+    \item Remove unused indexes (they slow down writes).
+    \item Tune \texttt{shared\_buffers}, \texttt{effective\_cache\_size}, \texttt{work\_mem}.
+    \item Set \texttt{random\_page\_cost = 1.1} for SSDs.
+    \item Use connection pooling (PgBouncer).
+\end{enumerate}
+
+\textbf{Medium-term improvements:}
+\begin{enumerate}
+    \item Convert OFFSET pagination to keyset pagination.
+    \item Add covering indexes (\texttt{INCLUDE}) for hot queries.
+    \item Partition large tables (100M+ rows).
+    \item Implement caching (Redis) for frequently-read data.
+    \item Use partial indexes for filtered queries.
+    \item Tune autovacuum for high-churn tables.
+    \item Set up monitoring dashboards.
+\end{enumerate}
+
+\textbf{Long-term architecture:}
+\begin{enumerate}
+    \item Read replicas for read-heavy workloads.
+    \item Materialized views for complex aggregations.
+    \item CQRS (Command Query Responsibility Segregation).
+    \item Sharding for write-heavy horizontal scaling.
+    \item Event sourcing for audit-heavy domains.
+\end{enumerate}
+\end{tipbox}
+
+
+% ============================================================
+\section{Storage Engine Internals: B-tree vs LSM Tree}
+% ============================================================
+
+Understanding the underlying storage engine is critical for optimization decisions. The two dominant paradigms are B-tree (used by PostgreSQL, MySQL/InnoDB) and LSM tree (used by RocksDB, Cassandra, LevelDB).
+
+\subsection{B-tree Storage Engine}
+
+B-tree engines maintain a sorted, balanced tree structure on disk. Each node corresponds to a fixed-size page (typically 8KB in PostgreSQL).
+
+\subsubsection{How B-tree Writes Work}
+
+\begin{enumerate}
+    \item Find the correct leaf page via tree traversal: $O(\log n)$.
+    \item If the page has space, insert the record in-place.
+    \item If full, \textbf{split} the page into two and update the parent (may cascade).
+    \item Write the modified page(s) to disk.
+    \item Log the change to WAL for crash recovery.
+\end{enumerate}
+
+\textbf{Write amplification}: A single logical write can trigger multiple physical writes (page split + parent update + WAL). Typical write amplification factor: 10--30x.
+
+\subsubsection{B-tree Read Path}
+
+\begin{enumerate}
+    \item Start at root node.
+    \item Binary search within each node to find the correct child pointer.
+    \item Traverse down $O(\log_B n)$ levels (where $B$ is the branching factor, typically 100--500).
+    \item Read the leaf page containing the data.
+\end{enumerate}
+
+For a table with 1 billion rows and branching factor 500: $\log_{500}(10^9) \approx 3.3$ --- only 4 page reads to find any row.
+
+\subsection{LSM Tree Storage Engine}
+
+LSM (Log-Structured Merge) trees optimize for write throughput by converting random writes into sequential writes.
+
+\subsubsection{How LSM Writes Work}
+
+\begin{enumerate}
+    \item Write to an in-memory sorted buffer (\textbf{memtable}, typically a red-black tree or skip list).
+    \item When memtable reaches threshold (e.g., 64MB), flush it to disk as an immutable \textbf{SSTable} (Sorted String Table).
+    \item Background \textbf{compaction} merges multiple SSTables into larger ones, removing duplicates and tombstones.
+\end{enumerate}
+
+\subsubsection{How LSM Reads Work}
+
+\begin{enumerate}
+    \item Check memtable (in-memory, fast).
+    \item Check each level of SSTables from newest to oldest.
+    \item Use \textbf{Bloom filters} to skip SSTables that definitely don't contain the key.
+    \item Use \textbf{sparse indexes} within SSTables for binary search.
+\end{enumerate}
+
+\subsubsection{Compaction Strategies}
+
+\begin{center}
+\begin{tabular}{lp{5cm}p{5cm}}
+\toprule
+\textbf{Strategy} & \textbf{Size-Tiered (STCS)} & \textbf{Leveled (LCS)} \\
+\midrule
+Mechanism & Merge similarly-sized SSTables & Merge into fixed-size levels \\
+Write amp & Lower (2--3x) & Higher (10--30x) \\
+Read amp & Higher (more files to check) & Lower (bounded per level) \\
+Space amp & Higher (2x temporary) & Lower (10--20\%) \\
+Best for & Write-heavy workloads & Read-heavy, space-sensitive \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{B-tree vs LSM Tree: Comprehensive Comparison}
+
+\begin{center}
+\begin{tabular}{lp{5cm}p{5cm}}
+\toprule
+\textbf{Aspect} & \textbf{B-tree} & \textbf{LSM Tree} \\
+\midrule
+Write throughput & Moderate (random I/O) & High (sequential I/O) \\
+Read latency & Low (predictable) & Variable (multiple levels) \\
+Space efficiency & Good (no duplication) & Temporary duplication during compaction \\
+Write amplification & 10--30x & 10--30x (leveled), 2--3x (size-tiered) \\
+Read amplification & 1x (single path) & 1--Nx (multiple SSTables) \\
+Concurrent access & Row/page locking & Lock-free (append-only) \\
+Range queries & Excellent (sorted leaves) & Good (sorted within SSTables) \\
+Point lookups & Excellent & Good (with Bloom filters) \\
+SSD friendly & Moderate (random writes) & Excellent (sequential writes) \\
+Compression & Page-level & SSTable-level (better ratio) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{infobox}[Which Databases Use Which Engine?]
+\textbf{B-tree}: PostgreSQL, MySQL/InnoDB, Oracle, SQL Server, MongoDB (WiredTiger default for documents)\\
+\textbf{LSM tree}: Apache Cassandra, RocksDB, LevelDB, HBase, InfluxDB, CockroachDB (Pebble), TiDB (TiKV/RocksDB), ScyllaDB\\
+\textbf{Hybrid}: MongoDB WiredTiger uses B-tree for indexes but has LSM-like write batching. MyRocks uses RocksDB (LSM) as a MySQL storage engine.
+\end{infobox}
+
+
+% ============================================================
+\section{MVCC Deep Dive and Dead Tuple Management}
+% ============================================================
+
+\subsection{PostgreSQL MVCC Architecture}
+
+PostgreSQL's MVCC (Multi-Version Concurrency Control) is fundamental to its concurrency model. Understanding it is essential for performance tuning.
+
+\subsubsection{Tuple Header and Visibility}
+
+Every row (tuple) in PostgreSQL carries hidden system columns:
+
+\begin{itemize}
+    \item \textbf{xmin}: Transaction ID that inserted this tuple.
+    \item \textbf{xmax}: Transaction ID that deleted/updated this tuple (0 if live).
+    \item \textbf{ctid}: Physical location (page, offset) of the tuple or its newer version.
+    \item \textbf{t\_infomask}: Bit flags for commit status, null bitmap, etc.
+\end{itemize}
+
+\subsubsection{Visibility Rules}
+
+A tuple is visible to transaction $T$ if:
+\begin{enumerate}
+    \item \texttt{xmin} is committed AND \texttt{xmin} $<$ $T$'s snapshot.
+    \item \texttt{xmax} is either 0 (not deleted), uncommitted, or $\geq$ $T$'s snapshot.
+\end{enumerate}
+
+\subsubsection{UPDATE Creates a New Tuple}
+
+\begin{lstlisting}[language=SQL, caption={What happens during UPDATE}]
+-- When you run:
+UPDATE users SET name = 'Jane' WHERE id = 1;
+
+-- PostgreSQL does NOT modify the existing tuple. Instead:
+-- 1. Marks old tuple: xmax = current_transaction_id
+-- 2. Creates NEW tuple: xmin = current_transaction_id, xmax = 0
+-- 3. Old tuple's ctid points to new tuple's location
+-- 4. Index entries for the OLD tuple remain (unless HOT update)
+
+-- This means:
+-- - Every UPDATE doubles storage temporarily
+-- - Old tuple becomes a "dead tuple" after all concurrent readers finish
+-- - VACUUM must reclaim dead tuples
+\end{lstlisting}
+
+\subsection{HOT Updates (Heap-Only Tuples)}
+
+HOT is PostgreSQL's optimization to reduce write amplification from updates.
+
+\begin{infobox}[HOT Update Conditions]
+A HOT update occurs when ALL of these conditions are met:
+\begin{enumerate}
+    \item The new tuple fits on the \textbf{same heap page} as the old tuple.
+    \item \textbf{No indexed columns} are modified.
+    \item The page has enough free space.
+\end{enumerate}
+When HOT succeeds:
+\begin{itemize}
+    \item No new index entries are created (huge performance win).
+    \item Dead tuples can be reclaimed by \textit{page-level} pruning during regular reads (not just VACUUM).
+    \item Write amplification is dramatically reduced.
+\end{itemize}
+\end{infobox}
+
+\begin{lstlisting}[language=SQL, caption={Monitoring HOT updates}]
+-- Check HOT update ratio (should be high for frequently updated tables)
+SELECT relname,
+       n_tup_upd AS total_updates,
+       n_tup_hot_upd AS hot_updates,
+       round(100.0 * n_tup_hot_upd / nullif(n_tup_upd, 0), 2) AS hot_pct
+FROM pg_stat_user_tables
+WHERE n_tup_upd > 0
+ORDER BY n_tup_upd DESC;
+
+-- If HOT percentage is low, consider:
+-- 1. Increasing fillfactor (leave space for HOT updates)
+ALTER TABLE users SET (fillfactor = 80);  -- 20% space reserved for updates
+-- 2. Removing unnecessary indexes on frequently-updated columns
+-- 3. Using INCLUDE columns instead of indexing them
+\end{lstlisting}
+
+\subsection{Transaction ID Wraparound Prevention}
+
+PostgreSQL uses 32-bit transaction IDs ($\sim$4.2 billion). Without VACUUM's \textbf{freezing}, the database would shut down to prevent data corruption.
+
+\begin{lstlisting}[language=SQL, caption={Monitor transaction ID age}]
+-- Check how close tables are to wraparound
+SELECT relname,
+       age(relfrozenxid) AS xid_age,
+       pg_size_pretty(pg_total_relation_size(oid)) AS size
+FROM pg_class
+WHERE relkind = 'r'
+ORDER BY age(relfrozenxid) DESC
+LIMIT 20;
+
+-- DANGER: If age approaches 2 billion, emergency VACUUM is triggered
+-- (single-threaded, blocks all writes)
+
+-- Prevention: ensure autovacuum_freeze_max_age is reasonable
+-- Default: 200 million (triggers aggressive vacuum at this age)
+SHOW autovacuum_freeze_max_age;
+
+-- For high-transaction-rate systems, tune:
+ALTER TABLE high_write_table SET (
+    autovacuum_freeze_max_age = 100000000,   -- freeze sooner
+    autovacuum_freeze_table_age = 80000000
+);
+\end{lstlisting}
+
+\subsection{Parallel VACUUM (PostgreSQL 13+)}
+
+\begin{lstlisting}[language=SQL, caption={Parallel vacuum}]
+-- Parallel vacuum for index cleanup (the slowest phase)
+VACUUM (PARALLEL 4) large_table;
+
+-- Check vacuum progress
+SELECT * FROM pg_stat_progress_vacuum;
+-- Shows: phase, heap_blks_total, heap_blks_scanned,
+--        heap_blks_vacuumed, index_vacuum_count, dead_tuples
+
+-- Phases:
+-- 1. "scanning heap" - finding dead tuples
+-- 2. "vacuuming indexes" - cleaning index entries (parallelizable)
+-- 3. "vacuuming heap" - reclaiming heap space
+-- 4. "cleaning up indexes" - final cleanup
+-- 5. "truncating heap" - returning empty pages to OS
+-- 6. "performing final cleanup"
+\end{lstlisting}
+
+
+% ============================================================
+\section{WAL (Write-Ahead Log) Optimization}
+% ============================================================
+
+\subsection{WAL Architecture}
+
+The WAL is PostgreSQL's crash recovery mechanism. Every data modification is first written to the WAL before being applied to data files.
+
+\subsubsection{WAL Write Path}
+
+\begin{enumerate}
+    \item Transaction modifies data in shared buffers (memory).
+    \item WAL record describing the change is written to WAL buffer.
+    \item On \texttt{COMMIT}: WAL buffer is flushed to WAL files on disk (\texttt{fsync}).
+    \item Modified data pages are written to data files later (during checkpoint).
+\end{enumerate}
+
+\subsection{WAL Configuration for Performance}
+
+\begin{lstlisting}[language=SQL, caption={WAL tuning parameters}]
+-- WAL buffer size (default 16MB since PG 14, was ~3MB before)
+wal_buffers = '64MB'          -- increase for write-heavy workloads
+
+-- WAL compression (PG 15+ supports lz4/zstd)
+wal_compression = 'lz4'       -- reduces WAL volume 50-70%
+                               -- lz4 is fastest, zstd has best ratio
+
+-- Checkpoint settings
+checkpoint_timeout = '15min'           -- time between checkpoints (default 5min)
+checkpoint_completion_target = 0.9     -- spread writes over 90% of interval
+max_wal_size = '8GB'                   -- allow more WAL before forced checkpoint
+min_wal_size = '2GB'                   -- preallocate to reduce I/O spikes
+
+-- Synchronous commit levels (trade durability for performance)
+synchronous_commit = 'on'      -- default, safest
+synchronous_commit = 'off'     -- 3x write speedup, risk losing last ~600ms
+synchronous_commit = 'local'   -- sync to local disk, async to replicas
+\end{lstlisting}
+
+\begin{warnbox}[synchronous\_commit = off]
+Setting \texttt{synchronous\_commit = off} can provide a 2--3x write performance improvement. The trade-off: in a crash, you may lose the last $\sim$600ms (3 $\times$ \texttt{wal\_writer\_delay}) of committed transactions. The database remains consistent---you just lose recent commits. This is acceptable for many workloads (logging, analytics, non-financial data).
+
+You can set this \textbf{per-transaction}:
+\begin{lstlisting}[language=SQL]
+SET LOCAL synchronous_commit = off;
+INSERT INTO logs (...) VALUES (...);  -- fast, slightly less durable
+COMMIT;
+\end{lstlisting}
+\end{warnbox}
+
+\subsection{WAL Monitoring}
+
+\begin{lstlisting}[language=SQL, caption={WAL monitoring queries}]
+-- WAL generation rate
+SELECT pg_wal_lsn_diff(pg_current_wal_lsn(), '0/0') / 1024 / 1024 AS total_wal_mb;
+
+-- WAL generation rate per second (run twice, compare)
+SELECT pg_current_wal_lsn();
+
+-- Checkpoint statistics
+SELECT checkpoints_timed, checkpoints_req,
+       checkpoint_write_time, checkpoint_sync_time,
+       buffers_checkpoint, buffers_clean, buffers_backend
+FROM pg_stat_bgwriter;
+-- checkpoints_req should be MUCH lower than checkpoints_timed
+-- (req means WAL filled up, forcing an unscheduled checkpoint)
+
+-- WAL archiving status (if using continuous archiving)
+SELECT archived_count, failed_count, last_archived_wal,
+       last_archived_time
+FROM pg_stat_archiver;
+\end{lstlisting}
+
+
+% ============================================================
+\section{Connection Pooling Deep Dive}
+% ============================================================
+
+\subsection{Why Connections Are Expensive}
+
+Each PostgreSQL connection consumes:
+\begin{itemize}
+    \item \textbf{$\sim$5--10MB RAM} per backend process (shared buffers mapping, work\_mem, etc.)
+    \item \textbf{1 OS process} with its own address space (fork cost: $\sim$1--5ms)
+    \item \textbf{TCP + TLS handshake}: 50--200ms for new connections
+    \item \textbf{Authentication overhead}: SCRAM-SHA-256, LDAP, etc.
+    \item \textbf{Context switching}: OS scheduler overhead scales with process count
+\end{itemize}
+
+At 500 connections $\times$ 10MB = 5GB RAM just for connection overhead.
+
+\subsection{Connection Pooler Comparison (2025 Benchmarks)}
+
+Based on benchmarks from Tembo and independent testing:
+
+\begin{center}
+\begin{tabular}{lp{3cm}p{3cm}p{3cm}}
+\toprule
+\textbf{Feature} & \textbf{PgBouncer} & \textbf{PgCat} & \textbf{Supavisor} \\
+\midrule
+Language & C & Rust & Elixir/Erlang \\
+Threading & Single-threaded & Multi-threaded & Multi-process (BEAM) \\
+Peak TPS & $\sim$44K & $\sim$59K & $\sim$22K \\
+Latency (50 conn) & Lowest & Comparable & 80--160\% higher \\
+Latency ($>$50 conn) & Degrades & Best & Moderate \\
+Prepared stmts & Named only (session mode) & Full support & Full support \\
+Replica routing & No & Yes (built-in) & Yes \\
+Sharding & No & Yes & No \\
+Failover & No & Automatic & Automatic \\
+Multi-tenancy & No & Limited & Native \\
+Maturity & 17+ years, battle-tested & Newer, actively developed & Newest, Supabase-backed \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{tipbox}[Connection Pooler Selection Guide (2025)]
+\begin{itemize}
+    \item \textbf{PgBouncer}: Best for straightforward deployments, lowest resource usage, most stable. Run multiple instances behind HAProxy for high connection counts.
+    \item \textbf{PgCat}: Best for cloud-native deployments needing replica routing, automatic failover, and high connection counts. Written in Rust with multi-threaded architecture.
+    \item \textbf{Supavisor}: Best for serverless/multi-tenant platforms where millions of intermittent connections are expected.
+    \item \textbf{Odyssey}: Enterprise alternative---multi-threaded, supports LDAP, transaction-level prepared statements.
+\end{itemize}
+\end{tipbox}
+
+\subsection{Optimal Pool Sizing}
+
+The famous formula from the PostgreSQL wiki:
+
+$$\text{pool\_size} = \text{num\_cores} \times 2 + \text{num\_disks}$$
+
+For SSDs, effective disk concurrency is higher:
+$$\text{pool\_size} \approx \text{num\_cores} \times 2 + \text{effective\_io\_concurrency}$$
+
+\begin{warnbox}[The ``More Connections = Better'' Myth]
+Beyond the optimal pool size, adding more connections \textbf{decreases} performance due to:
+\begin{itemize}
+    \item Lock contention on shared data structures
+    \item CPU cache thrashing from context switching
+    \item Increased memory pressure and swap risk
+\end{itemize}
+A database with 20 connections and a pooler handling 5,000 clients will outperform the same database with 5,000 direct connections by 10--50x.
+\end{warnbox}
+
+
+% ============================================================
+\section{PostgreSQL 17 and 18: Latest Optimization Features}
+% ============================================================
+
+\subsection{PostgreSQL 17 Performance Improvements}
+
+Released September 2024, PostgreSQL 17 includes significant optimization features:
+
+\subsubsection{Overhauled VACUUM Memory Management}
+
+PostgreSQL 17 introduced a completely new memory management system for VACUUM operations:
+\begin{itemize}
+    \item Reduced memory consumption during vacuum by up to 20x for large tables.
+    \item Incremental vacuum can process portions of large tables without holding all dead tuple TIDs in memory.
+    \item Bi-directional index scanning improves vacuum efficiency on B-tree indexes.
+\end{itemize}
+
+\subsubsection{B-tree IN Clause Optimization}
+
+\begin{lstlisting}[language=SQL, caption={PostgreSQL 17 B-tree IN optimization}]
+-- In PG 16: Each value in IN clause = separate index scan
+-- In PG 17: Single scan with skip-ahead (ScalarArrayOp optimization)
+
+-- This query is now dramatically faster:
+SELECT * FROM orders WHERE status IN ('pending', 'processing', 'shipped')
+AND user_id = 42;
+
+-- PG 17 reduces CPU and buffer page contention for large IN lists
+-- Improvement: 2-3x faster for IN lists with 10+ values
+\end{lstlisting}
+
+\subsubsection{BRIN Parallel Build}
+
+\begin{lstlisting}[language=SQL, caption={Parallel BRIN index creation in PG 17}]
+-- BRIN indexes can now be built in parallel
+SET max_parallel_maintenance_workers = 4;
+CREATE INDEX idx_logs_brin ON logs USING brin (created_at);
+-- Build time reduced by ~3x with 4 workers
+\end{lstlisting}
+
+\subsubsection{Enhanced Parallelism}
+
+\begin{itemize}
+    \item \textbf{FULL OUTER JOIN} can now use parallel workers.
+    \item Parallel aggregation improvements for \texttt{GROUP BY} with many groups.
+    \item Incremental sort optimizations for larger datasets with minimal memory.
+\end{itemize}
+
+\subsubsection{SIMD Acceleration}
+
+PostgreSQL 17 expands SIMD (Single Instruction/Multiple Data) support:
+\begin{itemize}
+    \item AVX-512 for \texttt{bit\_count()} function.
+    \item Accelerated CRC-32C computation for WAL.
+    \item Faster string operations on modern CPUs.
+\end{itemize}
+
+\subsection{PostgreSQL 18 Preview Features}
+
+\begin{itemize}
+    \item \textbf{Virtual generated columns}: Computed on read (not stored), saving disk space.
+    \item \textbf{Async I/O}: Native asynchronous I/O for sequential scans and bitmap heap scans.
+    \item \textbf{Improved query parallelism}: More query types can leverage parallel workers.
+\end{itemize}
+
+
+% ============================================================
+\section{MongoDB 8.0: Performance Leap}
+% ============================================================
+
+Released 2024, MongoDB 8.0 delivers significant performance improvements:
+
+\subsection{Performance Benchmarks}
+
+\begin{center}
+\begin{tabular}{lc}
+\toprule
+\textbf{Workload} & \textbf{Improvement vs MongoDB 7.0} \\
+\midrule
+Read-heavy workloads & 36\% faster \\
+Mixed read/write & 32\% faster \\
+Typical web application & 32\% faster overall \\
+Sharding data distribution & Up to 50x faster \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{ExpressPlan Query Optimizer}
+
+MongoDB 8.0 introduces \textbf{ExpressPlan}, an evolution of the IDHACK optimization:
+
+\begin{itemize}
+    \item Simple queries (single-field equality on indexed field) bypass the full query planner.
+    \item Minimal code path reduces per-query overhead significantly.
+    \item Particularly impactful for high-throughput OLTP workloads.
+\end{itemize}
+
+\subsection{Architecture Improvements}
+
+\begin{itemize}
+    \item \textbf{TCMalloc memory allocator}: Replaced the previous allocator with a newer version that has lower fragmentation and better multi-threaded performance.
+    \item \textbf{Optimized \$in parsing}: Large \texttt{\$in} queries now parse significantly faster.
+    \item \textbf{Improved query yielding}: Better scheduling of long-running queries to reduce latency spikes.
+    \item \textbf{config.transactions as clustered collection}: Reduced overhead for sharded transactions.
+    \item \textbf{Reworked locking}: Finer-grained locking throughout the codebase.
+    \item \textbf{Authorization micro-optimizations}: Reduced overhead of per-operation auth checks.
+\end{itemize}
+
+\subsection{Enhanced Sharding}
+
+\begin{itemize}
+    \item Data distribution across shards is now up to \textbf{50x faster}.
+    \item Starting cost for sharded deployments reduced by \textbf{50\%}.
+    \item Zone-aware auto-balancing: MongoDB automatically places data closer to where it's accessed most.
+    \item Improved chunk migration with less impact on foreground operations.
+\end{itemize}
+
+\subsection{Time-Series Block Processing}
+
+MongoDB 8.0 introduces block processing for time-series collections: aggregation operators execute directly against the compressed columnar bucket format without unpacking documents.
+
+\begin{lstlisting}[language=SQL, caption={Time-series aggregation benefiting from block processing}]
+// The following operators use block processing on time-series collections:
+// $match, $sort, $group, $setWindowFields
+
+// Example: OHLC + volume (classic financial analytics pattern)
+db.prices.aggregate([
+    { $match: {
+        symbol: "AAPL",
+        timestamp: { $gte: ISODate("2024-01-01") }
+    }},
+    { $group: {
+        _id: {
+            symbol: "$symbol",
+            day: { $dateTrunc: { date: "$timestamp", unit: "day" } }
+        },
+        open:   { $first: "$price" },
+        high:   { $max: "$price" },
+        low:    { $min: "$price" },
+        close:  { $last: "$price" },
+        volume: { $sum: "$volume" }
+    }},
+    { $sort: { "_id.day": 1 } }
+]);
+// MongoDB 8.0: up to 100x faster vs 7.0 for this pattern
+\end{lstlisting}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Improvement (vs MongoDB 7.0)} & \textbf{Factor} \\
+\midrule
+Typical analytical aggregations & 10--40x \\
+OHLC + moving average patterns & Up to 100x \\
+WiredTiger cache usage & 10--20x reduction \\
+Insert throughput (direct columnar write) & 2--3x, stable (no sawtooth spikes) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{infobox}[Time-Series Optimization Checklist]
+\begin{itemize}
+    \item \textbf{MetaField cardinality}: Avoid high-cardinality metaField values (e.g., per-event UUIDs). High cardinality defeats bucketing, producing one bucket per document.
+    \item \textbf{Batch by metaField}: Insert all measurements for the same metaField value in a single batch call --- one insert cost instead of $N$.
+    \item \textbf{Numeric precision}: Round values to the application-needed precision (e.g., 2 decimal places). Improves delta compression ratio within buckets.
+    \item \textbf{Granularity is permanent}: \texttt{granularity}, \texttt{bucketMaxSpanSeconds}, and \texttt{bucketRoundingSeconds} cannot be freely changed after collection creation. Match the setting to actual measurement frequency.
+    \item \textbf{Secondary index key order}: Compound secondary indexes must lead with the metaField, then the timeField, to be useful against bucket documents.
+\end{itemize}
+\end{infobox}
+
+
+% ============================================================
+\section{Vector Search and AI-Native Database Features}
+% ============================================================
+
+\subsection{pgvector Deep Dive}
+
+\subsubsection{Index Type Comparison: HNSW vs IVFFlat}
+
+Based on 2025 benchmarks:
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Metric (at 0.998 recall)} & \textbf{HNSW} & \textbf{IVFFlat} \\
+\midrule
+Query throughput & 40.5 QPS & 2.6 QPS \\
+Index build time & 4065 seconds & 128 seconds \\
+Index size & 729 MB & 257 MB \\
+Search complexity & $O(\log n)$ & $O(n/\text{lists})$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+HNSW achieves \textbf{15.5x} better throughput than IVFFlat at equivalent recall, but takes \textbf{32x} longer to build and uses \textbf{2.8x} more space.
+
+\subsubsection{HNSW Tuning Parameters}
+
+\begin{lstlisting}[language=SQL, caption={pgvector HNSW tuning}]
+-- m: number of bi-directional links per node (default 16)
+--    Higher = better recall, more memory, slower build
+-- ef_construction: search depth during build (default 64)
+--    Higher = better recall, slower build
+
+CREATE INDEX ON documents USING hnsw (embedding vector_cosine_ops)
+WITH (m = 32, ef_construction = 128);  -- high quality
+
+-- Runtime search parameter
+SET hnsw.ef_search = 100;  -- default 40, higher = better recall, slower
+\end{lstlisting}
+
+\subsubsection{IVFFlat Tuning}
+
+\begin{lstlisting}[language=SQL, caption={pgvector IVFFlat tuning}]
+-- lists: number of clusters (rule of thumb: sqrt(n) for <1M rows,
+--        sqrt(n)/10 for >1M rows)
+CREATE INDEX ON documents USING ivfflat (embedding vector_cosine_ops)
+WITH (lists = 1000);
+
+-- Runtime search parameter
+SET ivfflat.probes = 10;  -- default 1, check more lists for better recall
+-- probes = sqrt(lists) gives ~good recall/speed tradeoff
+\end{lstlisting}
+
+\subsubsection{pgvector 0.8.0 Features}
+
+\begin{itemize}
+    \item Support for \textbf{sparse vectors} (sparsevec type) --- efficient for high-dimensional sparse embeddings.
+    \item \textbf{Iterative index scans} --- better handling of filtered vector search.
+    \item Improved \textbf{parallel index builds} for both HNSW and IVFFlat.
+    \item \textbf{Quantization support} for reduced memory usage.
+\end{itemize}
+
+\subsection{MongoDB Atlas Vector Search}
+
+\begin{itemize}
+    \item Supports dimensions up to \textbf{8,192}.
+    \item Both approximate (ANN) and exact nearest-neighbor algorithms.
+    \item \textbf{Unified queries}: Combine vector similarity, metadata filters, and full-text search in a single aggregation pipeline.
+    \item Automatic index synchronization --- no manual sync between vector index and data.
+\end{itemize}
+
+\begin{lstlisting}[language=SQL, caption={MongoDB Atlas Vector Search}]
+// Create vector search index (Atlas UI or API)
+{
+  "fields": [{
+    "type": "vector",
+    "path": "embedding",
+    "numDimensions": 1536,
+    "similarity": "cosine"  // or "euclidean", "dotProduct"
+  }]
+}
+
+// Hybrid search: vector + text + filter
+db.documents.aggregate([
+  {
+    $vectorSearch: {
+      index: "vector_index",
+      path: "embedding",
+      queryVector: [0.1, 0.2, ...],
+      numCandidates: 200,
+      limit: 20,
+      filter: { category: "technical" }
+    }
+  },
+  { $project: {
+    title: 1, score: { $meta: "vectorSearchScore" }
+  }}
+]);
+\end{lstlisting}
+
+\subsection{Hybrid Search: Text + Vector}
+
+The emerging pattern combines traditional full-text search with vector similarity for best results:
+
+\begin{lstlisting}[language=SQL, caption={Hybrid search in PostgreSQL}]
+-- Combine FTS relevance with vector similarity
+WITH text_results AS (
+    SELECT id, ts_rank(tsv, query) AS text_score
+    FROM documents, to_tsquery('english', 'database optimization') AS query
+    WHERE tsv @@ query
+),
+vector_results AS (
+    SELECT id, 1 - (embedding <=> $1::vector) AS vector_score
+    FROM documents
+    ORDER BY embedding <=> $1::vector
+    LIMIT 100
+)
+SELECT d.id, d.title,
+    coalesce(t.text_score, 0) * 0.3 +
+    coalesce(v.vector_score, 0) * 0.7 AS hybrid_score
+FROM documents d
+LEFT JOIN text_results t ON d.id = t.id
+LEFT JOIN vector_results v ON d.id = v.id
+WHERE t.id IS NOT NULL OR v.id IS NOT NULL
+ORDER BY hybrid_score DESC
+LIMIT 20;
+\end{lstlisting}
+
+
+% ============================================================
+\section{Atlas Search vs Elasticsearch}
+% ============================================================
+
+\subsection{Architecture Comparison}
+
+\begin{center}
+\begin{tabular}{lp{5cm}p{5cm}}
+\toprule
+\textbf{Aspect} & \textbf{MongoDB Atlas Search} & \textbf{Elasticsearch} \\
+\midrule
+Engine & Apache Lucene (embedded) & Apache Lucene (standalone) \\
+Data sync & Automatic (same platform) & Manual ETL / Change Data Capture \\
+Query language & Aggregation pipeline (\$search) & Query DSL (JSON) \\
+Operational overhead & Low (managed, integrated) & High (separate cluster) \\
+Search features & Good (fuzzy, autocomplete, facets) & Excellent (analyzers, percolators, ML) \\
+Vector search & Atlas Vector Search & kNN / BBQ \\
+Latency & Good for integrated use & Better for search-heavy workloads \\
+Development speed & 30--50\% faster & More setup required \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{tipbox}[When to Use Which]
+\begin{itemize}
+    \item \textbf{Atlas Search}: Already on MongoDB, need search with low operational overhead, moderate search complexity.
+    \item \textbf{Elasticsearch}: Search is a core product feature, need advanced analyzers, complex scoring, search-heavy workloads with strict latency requirements.
+\end{itemize}
+\end{tipbox}
+
+
+% ============================================================
+\section{Architectural Patterns for Database Performance}
+% ============================================================
+
+\subsection{CQRS (Command Query Responsibility Segregation)}
+
+CQRS separates the write model (commands) from the read model (queries), allowing each to be independently optimized.
+
+\subsubsection{Architecture}
+
+\begin{itemize}
+    \item \textbf{Write side}: Normalized schema, optimized for transactional integrity. Uses PostgreSQL with strict constraints.
+    \item \textbf{Read side}: Denormalized views, optimized for query performance. Can use materialized views, Redis, Elasticsearch, or a separate read replica.
+    \item \textbf{Sync mechanism}: Events, CDC (Change Data Capture), or triggers propagate changes from write to read side.
+\end{itemize}
+
+\subsubsection{Implementation Example}
+
+\begin{lstlisting}[language=SQL, caption={CQRS with PostgreSQL}]
+-- WRITE SIDE: Normalized tables
+CREATE TABLE orders (
+    id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id     bigint NOT NULL REFERENCES users(id),
+    status      text NOT NULL DEFAULT 'pending',
+    created_at  timestamptz DEFAULT now()
+);
+CREATE TABLE order_items (
+    id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    order_id    bigint NOT NULL REFERENCES orders(id),
+    product_id  bigint NOT NULL REFERENCES products(id),
+    quantity    int NOT NULL,
+    unit_price  numeric(10,2) NOT NULL
+);
+
+-- READ SIDE: Denormalized materialized view
+CREATE MATERIALIZED VIEW order_summary AS
+SELECT o.id, o.status, o.created_at,
+       u.name AS user_name, u.email,
+       json_agg(json_build_object(
+           'product', p.name,
+           'quantity', oi.quantity,
+           'price', oi.unit_price
+       )) AS items,
+       SUM(oi.quantity * oi.unit_price) AS total
+FROM orders o
+JOIN users u ON u.id = o.user_id
+JOIN order_items oi ON oi.order_id = o.id
+JOIN products p ON p.id = oi.product_id
+GROUP BY o.id, o.status, o.created_at, u.name, u.email;
+
+-- Refresh on schedule or via trigger/event
+REFRESH MATERIALIZED VIEW CONCURRENTLY order_summary;
+\end{lstlisting}
+
+\subsection{Event Sourcing}
+
+Instead of storing current state, store the complete history of state changes as events.
+
+\begin{lstlisting}[language=SQL, caption={Event sourcing in PostgreSQL}]
+-- Event store
+CREATE TABLE events (
+    id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    aggregate_id  uuid NOT NULL,
+    aggregate_type text NOT NULL,
+    event_type    text NOT NULL,
+    event_data    jsonb NOT NULL,
+    metadata      jsonb DEFAULT '{}',
+    version       int NOT NULL,
+    created_at    timestamptz DEFAULT now(),
+    UNIQUE (aggregate_id, version)  -- optimistic concurrency control
+);
+
+-- Append-only: never UPDATE or DELETE events
+CREATE INDEX idx_events_aggregate ON events (aggregate_id, version);
+
+-- Snapshot table (optimization: avoid replaying all events)
+CREATE TABLE snapshots (
+    aggregate_id   uuid PRIMARY KEY,
+    aggregate_type text NOT NULL,
+    version        int NOT NULL,
+    state          jsonb NOT NULL,
+    created_at     timestamptz DEFAULT now()
+);
+
+-- Rebuild state: load snapshot + replay events since snapshot
+SELECT state FROM snapshots WHERE aggregate_id = $1;
+SELECT event_data FROM events
+WHERE aggregate_id = $1 AND version > $2
+ORDER BY version;
+\end{lstlisting}
+
+\subsection{Read Replicas and Read/Write Splitting}
+
+\begin{lstlisting}[language=SQL, caption={Application-level read/write splitting}]
+# Python example with SQLAlchemy
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
+write_engine = create_engine("postgresql://primary:5432/mydb")
+read_engine = create_engine("postgresql://replica:5432/mydb")
+
+def get_user(user_id):
+    """Reads go to replica"""
+    with Session(read_engine) as session:
+        return session.get(User, user_id)
+
+def create_order(data):
+    """Writes go to primary"""
+    with Session(write_engine) as session:
+        order = Order(**data)
+        session.add(order)
+        session.commit()
+        return order
+\end{lstlisting}
+
+\begin{warnbox}[Replication Lag]
+Read replicas have \textbf{replication lag} (typically 10ms--1s for streaming replication). After a write, an immediate read from a replica may return stale data. Solutions:
+\begin{enumerate}
+    \item \textbf{Read-your-writes}: Route reads to primary for $N$ seconds after a write.
+    \item \textbf{Causal consistency}: Track LSN and wait for replica to catch up.
+    \item \textbf{Synchronous replication}: Primary waits for replica ACK (adds latency).
+\end{enumerate}
+\end{warnbox}
+
+
+% ============================================================
+\section{Database Anti-Patterns and Pitfalls}
+% ============================================================
+
+\subsection{The N+1 Query Problem}
+
+\begin{lstlisting}[language=SQL, caption={N+1 query problem}]
+-- BAD: N+1 queries (1 query + N queries for related data)
+users = db.query("SELECT * FROM users LIMIT 100")
+for user in users:
+    orders = db.query(f"SELECT * FROM orders WHERE user_id = {user.id}")
+    # 101 total queries!
+
+-- GOOD: Single query with JOIN
+SELECT u.*, o.*
+FROM users u
+LEFT JOIN orders o ON o.user_id = u.id
+LIMIT 100;
+
+-- Or batch loading
+SELECT * FROM orders WHERE user_id IN (1, 2, 3, ..., 100);
+\end{lstlisting}
+
+\subsection{Over-Indexing}
+
+\begin{warnbox}[The Cost of Indexes]
+Each index:
+\begin{itemize}
+    \item Adds $O(\log n)$ write overhead per INSERT/UPDATE/DELETE.
+    \item Consumes disk space (often 10--30\% of table size per index).
+    \item Requires VACUUM maintenance.
+    \item Competes for shared\_buffers cache space.
+    \item Can prevent HOT updates if indexed column changes.
+\end{itemize}
+A table with 10 indexes means every INSERT does 11 writes (1 heap + 10 index insertions).
+\end{warnbox}
+
+\begin{lstlisting}[language=SQL, caption={Finding redundant indexes}]
+-- Find indexes that are subsets of other indexes
+-- (e.g., idx(a) is redundant if idx(a, b) exists)
+SELECT a.indexrelid::regclass AS redundant_index,
+       b.indexrelid::regclass AS covering_index,
+       pg_size_pretty(pg_relation_size(a.indexrelid)) AS wasted_size
+FROM pg_index a
+JOIN pg_index b ON a.indrelid = b.indrelid
+    AND a.indexrelid != b.indexrelid
+    AND a.indkey::text = ANY(string_to_array(
+        array_to_string(
+            ARRAY(SELECT unnest(b.indkey::int[])), ','), ','))
+WHERE NOT a.indisunique;
+\end{lstlisting}
+
+\subsection{Unbounded Queries}
+
+\begin{lstlisting}[language=SQL, caption={Always use LIMIT}]
+-- BAD: No limit (could return millions of rows)
+SELECT * FROM logs WHERE level = 'ERROR';
+
+-- GOOD: Bounded query
+SELECT * FROM logs WHERE level = 'ERROR'
+ORDER BY created_at DESC LIMIT 100;
+
+-- For batch processing, use cursor-based iteration
+DECLARE log_cursor CURSOR FOR
+    SELECT * FROM logs WHERE level = 'ERROR' ORDER BY id;
+FETCH 1000 FROM log_cursor;
+\end{lstlisting}
+
+\subsection{Missing WHERE Clause in UPDATE/DELETE}
+
+\begin{lstlisting}[language=SQL, caption={Safe update practices}]
+-- ALWAYS use transactions for data modifications
+BEGIN;
+-- Check what will be affected FIRST
+SELECT count(*) FROM users WHERE last_login < '2020-01-01';
+-- Then modify
+DELETE FROM users WHERE last_login < '2020-01-01';
+-- Verify, then commit or rollback
+COMMIT;  -- or ROLLBACK;
+\end{lstlisting}
+
+
+% ============================================================
+\section{Production Deployment Checklist}
+% ============================================================
+
+\subsection{PostgreSQL Production Checklist}
+
+\begin{tipbox}[Pre-Production Optimization Checklist]
+\textbf{Configuration:}
+\begin{enumerate}[label=$\square$]
+    \item \texttt{shared\_buffers} = 25\% of RAM
+    \item \texttt{effective\_cache\_size} = 75\% of RAM
+    \item \texttt{work\_mem} = RAM / (max\_connections $\times$ 2) (but at least 64MB)
+    \item \texttt{maintenance\_work\_mem} = RAM / 8 (up to 2GB)
+    \item \texttt{random\_page\_cost} = 1.1 (SSDs)
+    \item \texttt{effective\_io\_concurrency} = 200 (SSDs)
+    \item \texttt{wal\_compression} = lz4
+    \item \texttt{huge\_pages} = try
+\end{enumerate}
+
+\textbf{Monitoring:}
+\begin{enumerate}[label=$\square$]
+    \item \texttt{pg\_stat\_statements} enabled and monitored
+    \item Cache hit ratio $> 99\%$
+    \item Autovacuum running regularly (no tables approaching wraparound)
+    \item Replication lag monitored (if using replicas)
+    \item Connection count monitored (should be well below max\_connections)
+    \item Checkpoint frequency reasonable (mostly timed, not requested)
+\end{enumerate}
+
+\textbf{Indexes:}
+\begin{enumerate}[label=$\square$]
+    \item All foreign keys have indexes
+    \item No unused indexes (idx\_scan = 0)
+    \item No duplicate/redundant indexes
+    \item Covering indexes for hot queries
+    \item Partial indexes for filtered queries
+\end{enumerate}
+
+\textbf{Application:}
+\begin{enumerate}[label=$\square$]
+    \item Connection pooler deployed (PgBouncer/PgCat)
+    \item Prepared statements used (plan caching)
+    \item Keyset pagination (no OFFSET for large datasets)
+    \item N+1 queries eliminated
+    \item All queries have LIMIT
+\end{enumerate}
+\end{tipbox}
+
+\subsection{MongoDB Production Checklist}
+
+\begin{tipbox}[MongoDB Production Checklist]
+\textbf{Indexes:}
+\begin{enumerate}[label=$\square$]
+    \item ESR rule followed for compound indexes
+    \item \texttt{explain()} shows IXSCAN, not COLLSCAN for common queries
+    \item \texttt{nReturned} $\approx$ \texttt{totalKeysExamined} $\approx$ \texttt{totalDocsExamined}
+    \item TTL indexes for auto-expiring data
+    \item No unused indexes (\texttt{\$indexStats})
+\end{enumerate}
+
+\textbf{Schema:}
+\begin{enumerate}[label=$\square$]
+    \item Embedding vs referencing decisions documented
+    \item No unbounded arrays (use bucket pattern or overflow collection)
+    \item Document size well under 16MB limit
+    \item Denormalized fields updated consistently
+\end{enumerate}
+
+\textbf{Sharding (if applicable):}
+\begin{enumerate}[label=$\square$]
+    \item Shard key chosen with high cardinality
+    \item Common queries include shard key (targeted, not scatter-gather)
+    \item Chunk distribution is balanced across shards
+    \item Zone-based sharding configured for data locality
+\end{enumerate}
+
+\textbf{Operations:}
+\begin{enumerate}[label=$\square$]
+    \item Write concern = majority for critical data
+    \item Read concern appropriate for use case
+    \item Profiler enabled for slow queries ($>$100ms)
+    \item WiredTiger cache sized appropriately
+    \item Replica set has odd number of voting members
+\end{enumerate}
+\end{tipbox}
+
+
+% ============================================================
+\section{References and Further Reading}
+% ============================================================
+
+\subsection{Books}
+
+\begin{itemize}
+    \item \textbf{Designing Data-Intensive Applications} by Martin Kleppmann --- The definitive guide to distributed systems and database internals.
+    \item \textbf{Database Internals} by Alex Petrov --- Deep dive into storage engines, B-trees, LSM trees, and distributed consensus.
+    \item \textbf{The Art of PostgreSQL} by Dimitri Fontaine --- Advanced SQL patterns and PostgreSQL-specific techniques.
+    \item \textbf{PostgreSQL 14 Internals} by Egor Rogov --- MVCC, buffer management, WAL, and query execution internals.
+    \item \textbf{PostgreSQL Query Optimization: The Ultimate Guide} by Henrietta Dombrovskaya, Boris Novikov, Anna Bailliekova (Springer, 2nd ed.)
+    \item \textbf{MongoDB: The Definitive Guide} by Shannon Bradshaw et al.\ --- Comprehensive MongoDB reference.
+    \item \textbf{High Performance MySQL} by Silvia Botros \& Jeremy Tinley --- MySQL optimization (many concepts transfer to PostgreSQL).
+\end{itemize}
+
+\subsection{Official Documentation}
+
+\begin{itemize}
+    \item \textbf{PostgreSQL Documentation}: \url{https://www.postgresql.org/docs/current/}
+    \item \textbf{PostgreSQL Planner/Optimizer}: \url{https://www.postgresql.org/docs/current/planner-optimizer.html}
+    \item \textbf{PostgreSQL WAL Configuration}: \url{https://www.postgresql.org/docs/current/runtime-config-wal.html}
+    \item \textbf{PostgreSQL Table Partitioning}: \url{https://www.postgresql.org/docs/current/ddl-partitioning.html}
+    \item \textbf{MongoDB Query Optimization}: \url{https://www.mongodb.com/docs/manual/core/query-optimization/}
+    \item \textbf{MongoDB Sharding Best Practices}: \url{https://www.mongodb.com/blog/post/performance-best-practices-sharding}
+    \item \textbf{pgvector}: \url{https://github.com/pgvector/pgvector}
+\end{itemize}
+
+\subsection{Online Resources and Articles}
+
+\begin{itemize}
+    \item \textbf{Use The Index, Luke}: \url{https://use-the-index-luke.com/} --- SQL indexing and tuning tutorial.
+    \item \textbf{PostgreSQL 17 Released}: \url{https://www.postgresql.org/about/news/postgresql-17-released-2936/}
+    \item \textbf{PG 17 Query Performance Improvements} (Microsoft): \url{https://techcommunity.microsoft.com/blog/adforpostgresql/postgres-17-query-performance-improvements/4284693}
+    \item \textbf{MongoDB 8.0: Raising the Bar}: \url{https://www.mongodb.com/blog/post/mongodb-8-0-raising-the-bar}
+    \item \textbf{MongoDB 8.0 Performance}: \url{https://www.mongodb.com/blog/post/mongodb-8-0-improving-performance-avoiding-regressions}
+    \item \textbf{Deep Dive into PostgreSQL VACUUM} (Google Cloud): \url{https://cloud.google.com/blog/products/databases/deep-dive-into-postgresql-vacuum-garbage-collector}
+    \item \textbf{MVCC in PostgreSQL --- Vacuum} (Postgres Professional): \url{https://postgrespro.com/blog/pgsql/5967918}
+    \item \textbf{PostgreSQL Deep Dive: Query Optimizations} (Postgres Professional): \url{https://postgrespro.com/blog/pgsql/5968054}
+    \item \textbf{Unconventional PostgreSQL Optimizations} (Haki Benita): \url{https://hakibenita.com/postgresql-unconventional-optimizations}
+    \item \textbf{Benchmarking PostgreSQL Connection Poolers} (Tembo): \url{https://legacy.tembo.io/blog/postgres-connection-poolers/}
+    \item \textbf{PgBouncer vs PgCat vs Odyssey 2025}: \url{https://onidel.com/blog/postgresql-proxy-comparison-2025}
+    \item \textbf{Tuning PostgreSQL for Write Heavy Workloads}: \url{https://www.cloudraft.io/blog/tuning-postgresql-for-write-heavy-workloads}
+    \item \textbf{Tuning Postgres for High Write Loads} (Crunchy Data): \url{https://www.crunchydata.com/blog/tuning-your-postgres-database-for-high-write-loads}
+    \item \textbf{pgvector HNSW Performance}: \url{https://jkatz05.com/post/postgres/pgvector-hnsw-performance/}
+    \item \textbf{pgvector IVFFlat vs HNSW} (AWS): \url{https://aws.amazon.com/blogs/database/optimize-generative-ai-applications-with-pgvector-indexing-a-deep-dive-into-ivfflat-and-hnsw-techniques/}
+    \item \textbf{pgvector Performance Benchmarks} (Instaclustr): \url{https://www.instaclustr.com/education/vector-database/pgvector-performance-benchmark-results-and-5-ways-to-boost-performance/}
+    \item \textbf{B-tree vs LSM Tree on Modern Hardware} (USENIX): \url{https://www.usenix.org/publications/loginonline/revisit-b-tree-vs-lsm-tree-upon-arrival-modern-storage-hardware-built}
+    \item \textbf{Database Indexing Strategies} (DasRoot): \url{https://dasroot.net/posts/2026/02/database-indexing-strategies-b-tree-hash-beyond/}
+    \item \textbf{MongoDB Atlas Search vs Elasticsearch}: \url{https://www.mongodb.com/resources/compare/mongodb-atlas-search-vs-elastic-elasticsearch}
+    \item \textbf{MongoDB Optimization 2025}: \url{https://simplelogic-it.com/mongodb-optimization-2025/}
+    \item \textbf{CQRS Pattern} (Microsoft Azure): \url{https://learn.microsoft.com/en-us/azure/architecture/patterns/cqrs}
+    \item \textbf{PostgreSQL Partitioning Strategies}: \url{https://dev.to/finny_collins/postgresql-partitioning-4-strategies-for-managing-large-tables-416d}
+    \item \textbf{Optimal Postgres Partition Size} (Tiger Data): \url{https://www.tigerdata.com/learn/determining-optimal-postgres-partition-size}
+    \item \textbf{pgMustard}: Online EXPLAIN ANALYZE visualizer --- \url{https://www.pgmustard.com/}
+\end{itemize}
+
+\end{document}

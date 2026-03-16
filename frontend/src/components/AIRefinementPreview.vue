@@ -323,20 +323,36 @@ function flattenFlexTree(node: any, x: number, y: number, w: number, h: number, 
   const unalloc = sizes.filter((s: number | null) => s === null).length;
   const each = unalloc > 0 ? Math.max(0, 1 - allocd) / unalloc : 0;
 
-  let cursor = dir === 'row' ? ix : iy;
+  const childSizes = sizes.map((s: number | null) => (s ?? each) * avail);
+  const totalChildren = childSizes.reduce((a: number, b: number) => a + b, 0) + gap * (children.length - 1);
+  const mainSize = dir === 'row' ? iw : ih;
+  const extraSpace = Math.max(0, mainSize - totalChildren);
+  const justify = node.justifyContent || 'start';
+  const n = children.length;
+  let startOffset = 0, betweenExtra = 0;
+  if (justify === 'end') { startOffset = extraSpace; }
+  else if (justify === 'center') { startOffset = extraSpace / 2; }
+  else if (justify === 'space-between' && n > 1) { betweenExtra = extraSpace / (n - 1); }
+  else if (justify === 'space-evenly') { betweenExtra = extraSpace / (n + 1); startOffset = betweenExtra; }
+
+  let cursor = (dir === 'row' ? ix : iy) + startOffset;
   for (let i = 0; i < children.length; i++) {
-    const frac = sizes[i] ?? each;
-    const main = avail * frac;
+    const main = childSizes[i];
     const cx = dir === 'row' ? cursor : ix;
     const cy = dir === 'row' ? iy : cursor;
     const cw = dir === 'row' ? main : iw;
     const ch = dir === 'row' ? ih : main;
     flattenFlexTree(children[i], cx, cy, cw, ch, out);
-    cursor += main + gap;
+    cursor += main + gap + betweenExtra;
   }
 }
 
+const currentComputedBoxes = ref<DebugBox[] | null>(null);
+
 const debugBoxes = computed<DebugBox[]>(() => {
+  if (currentComputedBoxes.value && currentComputedBoxes.value.length > 0) {
+    return currentComputedBoxes.value;
+  }
   if (!currentFlexTree.value) return [];
   const out: DebugBox[] = [];
   const { w, h } = debugCanvasSize.value;
@@ -541,6 +557,7 @@ const connectSSE = async (formData: FormData) => {
     liveComponents.value = [];
     liveSvgOverlay.value = ""; // clear previous SVG overlay
     currentFlexTree.value = null; // clear previous layout boxes
+    currentComputedBoxes.value = null;
     pipelineSteps.value = [];
     statusText.value = "Initializing design suite...";
 
@@ -643,6 +660,9 @@ const handleSSEEvent = (event: string, data: any) => {
       statusText.value = "Design Approved";
       isComplete.value = true;
       addMessage("Layout finalized successfully", "success");
+      if (data.data?.computedBoxes) {
+        currentComputedBoxes.value = data.data.computedBoxes;
+      }
       if (data.data?.flexTree) {
         currentFlexTree.value = data.data.flexTree;
         if (data.data.canvasSize) {
@@ -699,6 +719,9 @@ const handleSSEEvent = (event: string, data: any) => {
         } else if (data.components) {
           liveComponents.value = data.components;
         }
+      }
+      if (data.computedBoxes) {
+        currentComputedBoxes.value = data.computedBoxes;
       }
       if (data.flexTree) {
         currentFlexTree.value = data.flexTree;
