@@ -217,6 +217,19 @@ def _compute_vertical_stack(measured: list[dict], zone: dict, padding: float) ->
 
 # ── buildFlexSVG ──
 
+def _resolve_font_size(style: FlexNodeStyle, box_h: float) -> int:
+    raw = style.fontSize or "medium"
+    if isinstance(raw, (int, float)):
+        return max(12, int(raw))
+    if isinstance(raw, str):
+        try:
+            return max(12, int(raw))
+        except ValueError:
+            pass
+    ratio = FLEX_FONT_RATIO.get(raw, 0.5)
+    return max(12, round(box_h * ratio))
+
+
 def _render_text_box(box: LayoutBox, clip_id: str) -> tuple[list[str], list[str]]:
     defs: list[str] = []
     elements: list[str] = []
@@ -230,11 +243,10 @@ def _render_text_box(box: LayoutBox, clip_id: str) -> tuple[list[str], list[str]
     font_weight = style.fontWeight or "700"
     color = style.color or "#FFFFFF"
 
-    ratio = FLEX_FONT_RATIO.get(style.fontSize or "medium", 0.5)
     box_padding = 20 if style.backgroundColor else 4
     max_text_width = box.w - box_padding * 2
 
-    start_font = round(box.h * ratio)
+    start_font = _resolve_font_size(style, box.h)
     min_font = max(12, round(start_font * 0.15))
 
     font_size = max(min_font, start_font)
@@ -244,7 +256,15 @@ def _render_text_box(box: LayoutBox, clip_id: str) -> tuple[list[str], list[str]
         font_size = max(min_font, round(font_size * 0.9))
         wrapped = wrap_text(text, max_text_width, font_size, font_weight)
 
-    line_height = font_size * 1.35
+    if style.maxLines and len(wrapped.lines) > style.maxLines:
+        wrapped = type(wrapped)(
+            lines=wrapped.lines[:style.maxLines],
+            line_height=wrapped.line_height,
+            total_height=wrapped.line_height * style.maxLines,
+        )
+
+    lh_mult = style.lineHeight or 1.35
+    line_height = font_size * lh_mult
     total_text_height = len(wrapped.lines) * line_height
     offset_y = max(0, (box.h - total_text_height) / 2)
 
@@ -259,10 +279,30 @@ def _render_text_box(box: LayoutBox, clip_id: str) -> tuple[list[str], list[str]
     defs.append(f'      <rect x="{box.x}" y="{box.y}" width="{box.w}" height="{box.h}" />')
     defs.append(f"    </clipPath>")
 
+    shadow_filter_id = ""
+    if style.textShadow:
+        shadow_filter_id = f"shadow-{clip_id}"
+        parts = style.textShadow.split()
+        dx = parts[0].replace("px", "") if len(parts) > 0 else "2"
+        dy = parts[1].replace("px", "") if len(parts) > 1 else "2"
+        blur = parts[2].replace("px", "") if len(parts) > 2 else "3"
+        shadow_color = parts[3] if len(parts) > 3 else "rgba(0,0,0,0.5)"
+        defs.append(f'    <filter id="{shadow_filter_id}">')
+        defs.append(f'      <feDropShadow dx="{dx}" dy="{dy}" stdDeviation="{blur}" flood-color="{shadow_color}" flood-opacity="0.5" />')
+        defs.append(f'    </filter>')
+
     stroke_attrs = ""
     if style.strokeColor:
         sw = style.strokeWidth or 2
         stroke_attrs = f' stroke="{_escape_xml(style.strokeColor)}" stroke-width="{sw}" paint-order="stroke"'
+
+    extra_attrs = ""
+    if style.letterSpacing:
+        extra_attrs += f' letter-spacing="{style.letterSpacing}"'
+    if style.opacity is not None and style.opacity < 1.0:
+        extra_attrs += f' opacity="{style.opacity}"'
+    if shadow_filter_id:
+        extra_attrs += f' filter="url(#{shadow_filter_id})"'
 
     metrics = measure_text(text, font_size, font_weight)
     baseline_y = box.y + offset_y + metrics.ascent
@@ -270,7 +310,7 @@ def _render_text_box(box: LayoutBox, clip_id: str) -> tuple[list[str], list[str]
     elements.append(
         f'  <text id="{_escape_xml(box.id)}" data-role="text" clip-path="url(#{clip_id})" '
         f'font-family="Kanit, sans-serif" font-size="{font_size}" font-weight="{font_weight}" '
-        f'fill="{_escape_xml(color)}"{stroke_attrs} text-anchor="{anchor}">'
+        f'fill="{_escape_xml(color)}"{stroke_attrs}{extra_attrs} text-anchor="{anchor}">'
     )
 
     for i, line in enumerate(wrapped.lines):
@@ -317,16 +357,22 @@ def build_flex_svg(input: FlexSVGInput) -> FlexSVGResult:
 
     svg_lines.append("  </defs>")
 
-    # Background rects (rounded for CTA-like elements)
+    # Background rects
     CTA_KEYWORDS = {"cta", "button", "btn"}
     for box in boxes:
         if box.style and box.style.backgroundColor:
-            is_cta = any(kw in (box.id or "").lower() for kw in CTA_KEYWORDS)
-            rx = min(12, box.h / 2) if is_cta else 0
+            rx = 0
+            if box.style.borderRadius is not None:
+                rx = box.style.borderRadius
+            elif any(kw in (box.id or "").lower() for kw in CTA_KEYWORDS):
+                rx = min(12, box.h / 2)
             rx_attr = f' rx="{rx:.0f}" ry="{rx:.0f}"' if rx > 0 else ""
+            opacity_attr = ""
+            if box.style.opacity is not None and box.style.opacity < 1.0:
+                opacity_attr = f' opacity="{box.style.opacity}"'
             svg_lines.append(
                 f'  <rect x="{box.x}" y="{box.y}" width="{box.w}" height="{box.h}"{rx_attr} '
-                f'fill="{_escape_xml(box.style.backgroundColor)}" />'
+                f'fill="{_escape_xml(box.style.backgroundColor)}"{opacity_attr} />'
             )
 
     # Component images

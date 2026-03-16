@@ -98,3 +98,21 @@ def test_nested_layout():
     assert header.h == pytest.approx(200, abs=1)
     assert sidebar.h == pytest.approx(800, abs=1)
     assert content.w == pytest.approx(700, abs=1)
+
+
+def test_margin_shifts_position():
+    root = {
+        "id": "root", "direction": "column", "padding": 0, "gap": 0,
+        "children": [
+            {"id": "a", "type": "text", "text": "A", "height": "50%",
+             "style": {"fontSize": "large", "margin": 10}},
+            {"id": "b", "type": "text", "text": "B", "height": "50%"},
+        ],
+    }
+    boxes = compute_flex_layout(root, 400, 200)
+    a = next(b for b in boxes if b.id == "a")
+    b = next(b for b in boxes if b.id == "b")
+    assert a.x == 10
+    assert a.y == 10
+    assert a.w == 380  # 400 - 10*2
+    assert a.h == 80   # 100 - 10*2

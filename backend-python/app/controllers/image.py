@@ -639,7 +639,7 @@ async def _step_flex_layout(
     send_sse,
     ref_descriptions: list[str] | None = None,
     style_guide: str | None = None,
-) -> tuple[str, dict | None]:
+) -> tuple[str, dict | None, list[dict]]:
     component_labels = [c["label"] for c in visual_components]
     flex_result = await vertex_service.suggest_flex_layout(
         image_bytes, mime, target_text, component_labels,
@@ -653,6 +653,11 @@ async def _step_flex_layout(
         log_event("Layout Design Reasoning", flex_result["layoutThought"][:1500])
 
     flex_boxes = compute_flex_layout(flex_result["flexTree"], canvas_w, canvas_h)
+    computed_boxes = [
+        {"id": b.id, "type": b.type, "x": round(b.x), "y": round(b.y),
+         "w": round(b.w), "h": round(b.h), "text": b.text, "label": b.label}
+        for b in flex_boxes
+    ]
 
     component_images = {}
     for vc in visual_components:
@@ -677,10 +682,10 @@ async def _step_flex_layout(
         "step": "flex_layout",
         "message": "Flex tree computed",
         "flexTree": flex_result["flexTree"],
-        "boxes": [{"id": b.id, "type": b.type, "x": round(b.x), "y": round(b.y), "w": round(b.w), "h": round(b.h)} for b in flex_boxes],
+        "boxes": computed_boxes,
     })
 
-    return svg_result.svg, flex_result
+    return svg_result.svg, flex_result, computed_boxes
 
 
 async def _step_refinement_loop(
@@ -1017,7 +1022,7 @@ async def create_campaign(
 
                 # Flex tree pipeline
                 try:
-                    svg_overlay, flex_result = await _step_flex_layout(
+                    svg_overlay, flex_result, computed_boxes = await _step_flex_layout(
                         image_bytes=image_buffer, mime=mime_type,
                         target_text=target_text,
                         visual_components=visual_components,
@@ -1037,6 +1042,7 @@ async def create_campaign(
                     analysis["background_description"] = flex_result.get("background_description") or analysis.get("background_description")
                     analysis["campaign_vibe"] = flex_result.get("campaign_vibe") or analysis.get("campaign_vibe")
                 except Exception as e:
+                    import traceback; traceback.print_exc()
                     print(f"[Pass2] Layout intent pipeline failed: {e}")
 
                 for e in events:
@@ -1058,6 +1064,7 @@ async def create_campaign(
                 "components": component_suggestions,
                 "visualComponents": visual_components,
                 "flexTree": flex_tree,
+                "computedBoxes": computed_boxes,
                 "canvasSize": {"w": canvas_w, "h": canvas_h},
             })
             for e in events:
@@ -1126,6 +1133,7 @@ async def create_campaign(
                     "campaignVibe": analysis.get("campaign_vibe", ""),
                     "svg_overlay": svg_overlay,
                     "flexTree": flex_tree,
+                    "computedBoxes": computed_boxes,
                     "canvasSize": {"w": canvas_w, "h": canvas_h},
                     "textLayers": text_layers,
                     "visualComponents": visual_components,
