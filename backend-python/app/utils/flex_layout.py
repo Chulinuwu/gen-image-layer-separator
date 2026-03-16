@@ -171,11 +171,16 @@ def _layout_node(node: FlexNode | dict, x: float, y: float, w: float, h: float, 
     remaining_fraction = max(0, 1 - claimed_fraction)
     per_unsized = remaining_fraction / unsized_count if unsized_count > 0 else 0
 
+    MIN_TEXT_HEIGHT = 40
+
     cursor = 0.0
     for i, child in enumerate(children):
         pct = _parse_pct(child.width if is_row else child.height)
         fraction = per_unsized if math.isnan(pct) else pct
         child_main = fraction * available_main
+
+        if not is_row and child_main < MIN_TEXT_HEIGHT and (child.type == "text" or child.direction is not None):
+            child_main = MIN_TEXT_HEIGHT
 
         child_x = inner_x + cursor if is_row else inner_x
         child_y = inner_y if is_row else inner_y + cursor

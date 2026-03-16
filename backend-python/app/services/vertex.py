@@ -471,9 +471,10 @@ class VertexService:
         mime_type: str,
         target_text: str,
         style_only: bool = False,
+        has_components: bool = True,
     ) -> dict:
         model = self._text_model()
-        prompt = build_critique_prompt(target_text, style_only)
+        prompt = build_critique_prompt(target_text, style_only, has_components)
 
         try:
             parts = [
@@ -1149,18 +1150,63 @@ class VertexService:
                 warnings.append(f"{path}: text leaf missing text")
         return warnings
 
+    _PLACEHOLDER_PATTERNS = re.compile(
+        r"^\[.*\]$"
+        r"|\bphone\s*mockup\b"
+        r"|\bscreenshot\b"
+        r"|\bapp\s*(?:UI|screen|display)\b"
+        r"|\bimage\s*(?:of|showing)\b"
+        r"|\b(?:logo|icon|badge)\s*(?:of|showing|image)\b",
+        re.IGNORECASE,
+    )
+
+    def _is_placeholder_text(self, text: str | None) -> bool:
+        if not text:
+            return False
+        t = text.strip()
+        if t.startswith("[") and t.endswith("]"):
+            return True
+        return bool(self._PLACEHOLDER_PATTERNS.search(t))
+
     def _strip_component_nodes(self, node: dict) -> None:
         children = node.get("children")
         if not isinstance(children, list):
             return
         filtered = []
+        stripped_pct = 0.0
         for child in children:
             if child.get("type") == "component":
-                print(f'[FlexLayout] Stripped hallucinated component node: "{child.get("label", child.get("id", "?"))}"')
+                h = child.get("height", "")
+                if isinstance(h, str) and h.endswith("%"):
+                    try:
+                        stripped_pct += float(h[:-1])
+                    except ValueError:
+                        pass
+                print(f'[FlexLayout] Stripped hallucinated component node: "{child.get("label", child.get("id", "?"))}" (height={h})')
+                continue
+            if child.get("type") == "text" and self._is_placeholder_text(child.get("text")):
+                h = child.get("height", "")
+                if isinstance(h, str) and h.endswith("%"):
+                    try:
+                        stripped_pct += float(h[:-1])
+                    except ValueError:
+                        pass
+                print(f'[FlexLayout] Stripped placeholder text node: "{child.get("text", "")[:60]}" (height={h})')
                 continue
             self._strip_component_nodes(child)
             filtered.append(child)
         node["children"] = filtered
+        if stripped_pct > 0 and filtered:
+            sized = [c for c in filtered if isinstance(c.get("height", ""), str) and c["height"].endswith("%")]
+            if sized:
+                bonus = stripped_pct / len(sized)
+                for c in sized:
+                    try:
+                        old = float(c["height"][:-1])
+                        c["height"] = f"{old + bonus:.0f}%"
+                    except ValueError:
+                        pass
+                print(f"[FlexLayout] Redistributed {stripped_pct:.0f}% across {len(sized)} siblings")
 
     async def suggest_flex_layout(
         self,
@@ -1287,10 +1333,11 @@ class VertexService:
         )
         description = (desc_resp.text or "").strip() or "Generic advertisement background"
 
+        s = get_settings()
         embed_resp = await with_retry(lambda: self.client.aio.models.embed_content(
-            model="gemini-embedding-001",
+            model=s.gemini_embedding_model,
             contents=description,
-            config={"task_type": "RETRIEVAL_QUERY", "output_dimensionality": 1536},
+            config={"task_type": "RETRIEVAL_QUERY", "output_dimensionality": s.gemini_embedding_dimensions},
         ))
         embedding = []
         if hasattr(embed_resp, "embeddings") and embed_resp.embeddings:

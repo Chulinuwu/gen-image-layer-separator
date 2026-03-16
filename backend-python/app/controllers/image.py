@@ -742,7 +742,8 @@ async def _step_refinement_loop(
 
         # AI critique
         critique = await vertex_service.critique_layout(
-            image_bytes, preview_bytes, mime, target_text, False
+            image_bytes, preview_bytes, mime, target_text, False,
+            has_components=bool(visual_components),
         )
         last_critique = critique
 

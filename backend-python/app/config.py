@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     gemini_model_endpoint: str = "gemini-3-flash-preview"
     gemini_model_endpoint_2: str = ""
     imagen_edit_endpoint: str = "imagen-3.0-capability-001"
+    gemini_embedding_model: str = "gemini-embedding-001"
+    gemini_embedding_dimensions: int = 3072
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

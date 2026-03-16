@@ -317,11 +317,15 @@ def build_flex_svg(input: FlexSVGInput) -> FlexSVGResult:
 
     svg_lines.append("  </defs>")
 
-    # Background rects
+    # Background rects (rounded for CTA-like elements)
+    CTA_KEYWORDS = {"cta", "button", "btn"}
     for box in boxes:
         if box.style and box.style.backgroundColor:
+            is_cta = any(kw in (box.id or "").lower() for kw in CTA_KEYWORDS)
+            rx = min(12, box.h / 2) if is_cta else 0
+            rx_attr = f' rx="{rx:.0f}" ry="{rx:.0f}"' if rx > 0 else ""
             svg_lines.append(
-                f'  <rect x="{box.x}" y="{box.y}" width="{box.w}" height="{box.h}" '
+                f'  <rect x="{box.x}" y="{box.y}" width="{box.w}" height="{box.h}"{rx_attr} '
                 f'fill="{_escape_xml(box.style.backgroundColor)}" />'
             )
 
