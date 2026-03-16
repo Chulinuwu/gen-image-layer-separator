@@ -140,10 +140,57 @@ def _dict_to_flex_node(d: dict | FlexNode) -> FlexNode:
 def compute_flex_layout(root: FlexNode | dict, canvas_w: float, canvas_h: float) -> list[LayoutBox]:
     if isinstance(root, dict):
         root = _dict_to_flex_node(root)
+    if root.justifyContent is None and root.children:
+        last = root.children[-1]
+        if any(kw in (last.id or "").lower() for kw in _FOOTER_KEYWORDS):
+            root.justifyContent = "space-between"
+            print(f"[FlexLayout] Auto-set root justifyContent=space-between (last child '{last.id}' is footer)")
     results: list[LayoutBox] = []
     _layout_node(root, 0, 0, canvas_w, canvas_h, results)
+    _shrink_oversized_boxes(results, canvas_w, canvas_h)
     _fix_overlapping_boxes(results, canvas_w, canvas_h)
     return results
+
+
+def _estimate_text_height(box: LayoutBox, canvas_w: float) -> float:
+    if not box.text or box.type != "text":
+        return box.h
+    style = box.style
+    font_size = 24
+    if style and style.fontSize:
+        fs = style.fontSize
+        if isinstance(fs, (int, float)):
+            font_size = max(12, int(fs))
+        elif isinstance(fs, str):
+            try:
+                font_size = max(12, int(float(fs)))
+            except ValueError:
+                size_map = {"xlarge": 72, "large": 48, "medium": 32, "small": 22, "xsmall": 14}
+                font_size = size_map.get(fs, 24)
+    lh = 1.35
+    if style and style.lineHeight:
+        lh = style.lineHeight
+    line_h = font_size * lh
+    chars_per_line = max(1, int(box.w / (font_size * 0.6)))
+    num_lines = max(1, math.ceil(len(box.text) / chars_per_line))
+    padding = font_size * 0.5
+    return num_lines * line_h + padding * 2
+
+
+def _shrink_oversized_boxes(boxes: list[LayoutBox], canvas_w: float, canvas_h: float) -> None:
+    total_saved = 0.0
+    for b in boxes:
+        if b.type != "text" or not b.text:
+            continue
+        estimated = _estimate_text_height(b, canvas_w)
+        if b.h > estimated * 2.5 and b.h > 80:
+            old_h = b.h
+            b.h = max(estimated * 1.5, 60)
+            saved = old_h - b.h
+            total_saved += saved
+            print(f"[FlexLayout] Shrunk '{b.id}' height {old_h:.0f} → {b.h:.0f} (text needs ~{estimated:.0f})")
+    if total_saved > 0:
+        print(f"[FlexLayout] Total height saved: {total_saved:.0f}px")
 
 
 _FOOTER_KEYWORDS = {"footer", "disclaimer", "fineprint", "fine_print", "legal"}
@@ -178,6 +225,13 @@ def _fix_overlapping_boxes(boxes: list[LayoutBox], canvas_w: float, canvas_h: fl
         if curr.y < prev_bottom:
             curr.y = prev_bottom + 2
             print(f"[FlexLayout] Fixed overlap: pushed '{curr.id}' down to y={curr.y:.0f}")
+    bottom_padding = canvas_h * 0.02
+    for b in boxes:
+        if any(kw in (b.id or "").lower() for kw in _FOOTER_KEYWORDS):
+            target_y = canvas_h - b.h - bottom_padding
+            if target_y > b.y:
+                print(f"[FlexLayout] Pinned footer '{b.id}' to bottom: y={b.y:.0f} → {target_y:.0f}")
+                b.y = target_y
 
 
 def _layout_node(node: FlexNode | dict, x: float, y: float, w: float, h: float, out: list[LayoutBox]) -> None:

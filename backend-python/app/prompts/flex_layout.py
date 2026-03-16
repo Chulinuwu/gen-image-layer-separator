@@ -27,9 +27,29 @@ def build_flex_layout_prompt(
 {footer_section}
 CANVAS: {canvas_size["w"]}x{canvas_size["h"]}px
 
-STEP 1 — DESIGN REASONING in <layout_thought>...</layout_thought>
+STEP 1 — DEEP DESIGN THINKING in <layout_thought>...</layout_thought>
+You are the designer. Think deeply and make deliberate choices — do not leave any style decision to chance.
+
+a) CAMPAIGN VIBE: What feeling does this campaign convey? How should the typography and colors reflect that?
+b) VISUAL HIERARCHY: Which text is the HERO? Plan the reading order — what grabs attention 1st, 2nd, 3rd? How will font sizes create that hierarchy?
+c) BACKGROUND ANALYSIS: Look at the background image carefully. Where is it busy vs clean? Where are dark vs light areas? For each text node you plan to place, ask: "Will this text be readable HERE without any treatment?" If not, decide what treatment to use (textShadow, strokeColor, semi-transparent backgroundColor, or a combination).
+d) STYLE DECISIONS PER NODE: For EVERY text node, explicitly decide and write down:
+   - fontSize + fontWeight → proportional to its importance
+   - color → fits the vibe and contrasts with what's behind it
+   - readability treatment → textShadow / strokeColor / backgroundColor / none, and WHY
+   - spacing → letterSpacing for premium feel, lineHeight for density
+   - special treatment → borderRadius for badges, backgroundColor for CTAs/tags
+e) SIZE PROPORTIONS: Each node's height% should match its content. A single-line badge needs much less height than a multi-line paragraph. Ask yourself: "Is this box too tall for the text inside it?"
+f) REFERENCE STYLE: If references are provided, identify specific traits to borrow (color palette, text treatment style, spacing rhythm, typography choices) — don't just note them, USE them in your style decisions above.
+
 STEP 2 — ELEMENT GROUPING in <grouping>...</grouping>
+Group related text elements together. Think like a real designer:
+- Which elements belong together visually? (e.g. date + price + platform could be one row group)
+- Would placing some elements side-by-side (row) create a more interesting layout than stacking everything vertically?
+- Don't just list elements top-to-bottom — create STRUCTURE with nested containers.
+- A flat column of 8+ children is lazy design. Group into 3-4 logical sections with rows inside.
 STEP 3 — FLEX TREE JSON:
+CRITICAL: Your JSON MUST reflect every style decision you made in STEP 1. If you decided a node needs textShadow — put it in the style object. If you decided a node needs backgroundColor — put it in. Do NOT think about styles in STEP 1 and then output bare JSON with only fontSize and color. Every node's style object should contain ALL the properties you reasoned about.
 {{"flexTree": {{...}}, "campaign_vibe": "...", "background_description": "..."}}
 
 FLEX TREE FORMAT:
