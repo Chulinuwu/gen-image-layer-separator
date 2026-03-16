@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re as _re
 from pathlib import Path
 
 import numpy as np
@@ -51,6 +52,67 @@ def find_similar_refs(
 
     scored.sort(key=lambda x: x["score"], reverse=True)
     return scored[:top_k]
+
+
+def extract_style_guide(refs: list[dict]) -> str:
+    if not refs:
+        return ""
+
+    colors = []
+    layouts = []
+    typography = []
+
+    for ref in refs:
+        desc = ref.get("description", "")
+
+        color_match = _re.search(
+            r"(?:Color\s*/?\s*Atmosphere|Colors?)\s*\n(.*?)(?:\n#|\n\n|\Z)",
+            desc, _re.DOTALL | _re.IGNORECASE,
+        )
+        if color_match:
+            colors.append(color_match.group(1).strip()[:200])
+
+        typo_match = _re.search(
+            r"Typography\s*\n(.*?)(?:\n#|\n\n|\Z)",
+            desc, _re.DOTALL | _re.IGNORECASE,
+        )
+        if typo_match:
+            typography.append(typo_match.group(1).strip()[:200])
+
+        struct_match = _re.search(
+            r"Structure\s*\n(.*?)(?:\n#|\n\n|\Z)",
+            desc, _re.DOTALL | _re.IGNORECASE,
+        )
+        if struct_match:
+            layouts.append(struct_match.group(1).strip()[:300])
+
+    parts = ["STYLE GUIDE (extracted from reference ads):"]
+
+    if colors:
+        parts.append("COLOR PALETTE:")
+        for i, c in enumerate(colors):
+            parts.append(f"  Ref {i+1}: {c}")
+
+    if layouts:
+        parts.append("LAYOUT PATTERNS:")
+        for i, l in enumerate(layouts):
+            parts.append(f"  Ref {i+1}: {l}")
+
+    if typography:
+        parts.append("TYPOGRAPHY:")
+        for i, t in enumerate(typography):
+            parts.append(f"  Ref {i+1}: {t}")
+
+    if len(parts) == 1:
+        return ""
+
+    parts.append("")
+    parts.append(
+        "INSTRUCTION: Your design MUST follow the color palette, layout pattern, "
+        "and typography style shown in these references. Match their visual DNA — "
+        "use similar colors, similar text hierarchy, similar spacing and composition."
+    )
+    return "\n".join(parts)
 
 
 def clear_ref_image_cache() -> None:

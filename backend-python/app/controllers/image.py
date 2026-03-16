@@ -19,7 +19,7 @@ from app.constants.pipeline import (
 from app.services.vertex import vertex_service
 from app.utils.ai_logger import log_event, trace_ai
 from app.utils.flex_layout import compute_flex_layout
-from app.utils.ref_image_search import find_similar_refs
+from app.utils.ref_image_search import find_similar_refs, extract_style_guide
 from app.utils.safe_zones import BBox, compute_safe_zones
 from app.utils.svg_builder import build_flex_svg, FlexSVGInput
 
@@ -637,12 +637,16 @@ async def _step_flex_layout(
     ref_image_url: str,
     origin: str,
     send_sse,
+    ref_descriptions: list[str] | None = None,
+    style_guide: str | None = None,
 ) -> tuple[str, dict | None]:
     component_labels = [c["label"] for c in visual_components]
     flex_result = await vertex_service.suggest_flex_layout(
         image_bytes, mime, target_text, component_labels,
         {"w": canvas_w, "h": canvas_h},
         ref_image_buffers, footer_text or None,
+        ref_descriptions=ref_descriptions,
+        style_guide=style_guide,
     )
 
     if flex_result.get("layoutThought"):
@@ -697,6 +701,8 @@ async def _step_refinement_loop(
     mode: str,
     send_sse,
     max_iter: int = 1,
+    ref_descriptions: list[str] | None = None,
+    style_guide: str | None = None,
 ) -> tuple[str, dict]:
     current_svg = svg_overlay
     last_critique: dict = {"status": "FAIL"}
@@ -784,6 +790,8 @@ async def _step_refinement_loop(
                 image_bytes, mime, refined_text, component_labels,
                 {"w": canvas_w, "h": canvas_h},
                 ref_image_buffers, footer_text or None,
+                ref_descriptions=ref_descriptions,
+                style_guide=style_guide,
             )
 
             refined_boxes = compute_flex_layout(refined_flex["flexTree"], canvas_w, canvas_h)
@@ -976,14 +984,19 @@ async def create_campaign(
 
                 # Reference image lookup
                 ref_image_buffers: list[bytes] = []
+                ref_descriptions: list[str] = []
+                style_guide: str = ""
                 try:
                     desc_result = await vertex_service.describe_and_embed(image_buffer, mime_type)
                     refs = find_similar_refs(desc_result["embedding"], 3)
                     if refs:
                         ref_image_buffers = [Path(r["filepath"]).read_bytes() for r in refs]
+                        ref_descriptions = [r["description"] for r in refs]
+                        style_guide = extract_style_guide(refs)
                         send_sse("debug", {
                             "step": "ref_images",
                             "message": f"Found {len(refs)} similar reference ads",
+                            "style_guide_preview": style_guide[:200] if style_guide else "",
                         })
                 except Exception as e:
                     print(f"[Pass2] Reference image search failed: {e}")
@@ -1015,6 +1028,8 @@ async def create_campaign(
                         ref_image_url=ref_url,
                         origin=origin,
                         send_sse=send_sse,
+                        ref_descriptions=ref_descriptions,
+                        style_guide=style_guide,
                     )
                     analysis["svg_overlay"] = svg_overlay
                     flex_tree = flex_result.get("flexTree")
@@ -1066,6 +1081,8 @@ async def create_campaign(
                     origin=origin,
                     mode=mode or "",
                     send_sse=send_sse,
+                    ref_descriptions=ref_descriptions if mode != "only_bg_comp" else None,
+                    style_guide=style_guide if mode != "only_bg_comp" else None,
                 )
             except Exception as e:
                 send_sse("error", {

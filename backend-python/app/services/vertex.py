@@ -1217,6 +1217,8 @@ class VertexService:
         canvas_size: dict,
         ref_images: list[bytes] | None = None,
         footer_text: str | None = None,
+        ref_descriptions: list[str] | None = None,
+        style_guide: str | None = None,
     ) -> dict:
         proc_buf, proc_mime = _resize_for_processing(image_buffer)
         model = self._text_model_best()
@@ -1225,16 +1227,21 @@ class VertexService:
             if component_labels
             else "No die-cut components available. CRITICAL: Do NOT create any component nodes in the flex tree. ALL elements must be type \"text\". Even if the brief mentions logos, phone mockups, or other visual elements — they do not exist as die-cut images so you MUST NOT include them as component leaves."
         )
-        ref_section = (
-            f"REFERENCE IMAGES:\nThe first {len(ref_images)} images are examples of well-designed layouts.\n"
-            "Study their composition. THE LAST IMAGE is the actual background.\n\n"
-            if ref_images else ""
-        )
+        ref_section = ""
+        if ref_images:
+            ref_section = f"REFERENCE IMAGES:\nThe first {len(ref_images)} images are examples of well-designed layouts.\n"
+            ref_section += "Study their composition, colors, typography, and spacing. THE LAST IMAGE is the actual background.\n"
+            if ref_descriptions:
+                ref_section += "\nREFERENCE DESCRIPTIONS:\n"
+                for i, desc in enumerate(ref_descriptions):
+                    truncated = desc[:500] + "..." if len(desc) > 500 else desc
+                    ref_section += f"\n--- Ref {i+1} ---\n{truncated}\n"
+            ref_section += "\n"
         footer_section = (
             f'FOOTER TEXT (MUST be at bottom): "{footer_text}"\n' if footer_text else ""
         )
 
-        prompt = build_flex_layout_prompt(target_text, components_list, ref_section, footer_section, canvas_size)
+        prompt = build_flex_layout_prompt(target_text, components_list, ref_section, footer_section, canvas_size, style_guide=style_guide or "")
 
         parts = []
         if ref_images:

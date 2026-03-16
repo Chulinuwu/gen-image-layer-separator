@@ -4,10 +4,23 @@ def build_flex_layout_prompt(
     ref_section: str,
     footer_section: str,
     canvas_size: dict,
+    style_guide: str = "",
 ) -> str:
+    style_section = f"\n{style_guide}\n" if style_guide else ""
+
+    style_matching_rules = ""
+    if style_guide:
+        style_matching_rules = """
+- STYLE MATCHING: Reference images and their style guide are provided above. Your design MUST match their visual DNA:
+  - Use the SAME color palette (dominant colors, gradients, accents).
+  - Use SIMILAR typography (font sizes, weights, text colors, stroke effects).
+  - Follow SIMILAR layout patterns (element grouping, spacing, hierarchy).
+  - Match the MOOD (premium, playful, tech-forward, etc.).
+  - Do NOT copy text content from references — only copy their VISUAL STYLE."""
+
     return f"""You are a master of 2D graphic design and visual composition.
 
-{ref_section}CAMPAIGN TEXT:
+{ref_section}{style_section}CAMPAIGN TEXT:
 {target_text}
 
 {components_list}
@@ -34,4 +47,4 @@ RULES:
 - Hero/promo number = LARGEST element (fontSize "xlarge", fontWeight "900").
 - Group related elements together. Use strokeColor for readability on busy backgrounds.
 - READABILITY: If text is placed over a busy or bright area of the background, ADD "backgroundColor" with a semi-transparent dark color (e.g. "rgba(0,0,0,0.5)") to ensure the text is readable.
-- CTA BUTTON: For call-to-action text, ALWAYS use "backgroundColor" with a solid brand color (e.g. "#4B0082", "#E040FB") to make it look like a clickable button. Use contrasting text color."""
+- CTA BUTTON: For call-to-action text, ALWAYS use "backgroundColor" with a solid brand color (e.g. "#4B0082", "#E040FB") to make it look like a clickable button. Use contrasting text color.{style_matching_rules}"""
