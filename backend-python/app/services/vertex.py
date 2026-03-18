@@ -472,9 +472,15 @@ class VertexService:
         target_text: str,
         style_only: bool = False,
         has_components: bool = True,
+        style_guide: str | None = None,
+        layout_thought: str | None = None,
     ) -> dict:
         model = self._text_model()
-        prompt = build_critique_prompt(target_text, style_only, has_components)
+        prompt = build_critique_prompt(
+            target_text, style_only, has_components,
+            style_guide=style_guide or "",
+            layout_thought=layout_thought or "",
+        )
 
         try:
             parts = [
@@ -1219,6 +1225,9 @@ class VertexService:
         footer_text: str | None = None,
         ref_descriptions: list[str] | None = None,
         style_guide: str | None = None,
+        layout_strategy: dict | None = None,
+        no_go_zones: list[dict] | None = None,
+        image_description: str | None = None,
     ) -> dict:
         proc_buf, proc_mime = _resize_for_processing(image_buffer)
         model = self._text_model_best()
@@ -1241,7 +1250,40 @@ class VertexService:
             f'FOOTER TEXT (MUST be at bottom): "{footer_text}"\n' if footer_text else ""
         )
 
-        prompt = build_flex_layout_prompt(target_text, components_list, ref_section, footer_section, canvas_size, style_guide=style_guide or "")
+        layout_strategy_section = ""
+        if layout_strategy:
+            layout_strategy_section = (
+                "LAYOUT STRATEGY (from Art Director):\n"
+                f'- Concept: "{layout_strategy.get("layout_concept", "")}"\n'
+                f'- Dominant element: "{layout_strategy.get("dominant_element", "")}"\n'
+                f'- Recommended text zone: "{layout_strategy.get("recommended_text_zone", "")}"\n'
+                f"- Text hierarchy: {layout_strategy.get('text_hierarchy', [])}\n"
+                f'- Notes: "{layout_strategy.get("composition_notes", "")}"\n'
+                "Follow this strategy — do NOT contradict it.\n\n"
+            )
+
+        no_go_zones_section = ""
+        if no_go_zones:
+            lines = "\n".join(
+                f'- "Detected Subject" at [top: {z.get("top", 0)}, left: {z.get("left", 0)}, width: {z.get("width", 0)}, height: {z.get("height", 0)}]'
+                for z in no_go_zones
+            )
+            no_go_zones_section = f"SUBJECT POSITIONS (avoid placing text here):\n{lines}\n\n"
+
+        image_description_section = ""
+        if image_description:
+            image_description_section = (
+                f"BACKGROUND DESCRIPTION (pre-analyzed):\n{image_description}\n"
+                "Use this description instead of re-analyzing the background from scratch.\n\n"
+            )
+
+        prompt = build_flex_layout_prompt(
+            target_text, components_list, ref_section, footer_section, canvas_size,
+            style_guide=style_guide or "",
+            layout_strategy_section=layout_strategy_section,
+            no_go_zones_section=no_go_zones_section,
+            image_description_section=image_description_section,
+        )
 
         parts = []
         if ref_images:

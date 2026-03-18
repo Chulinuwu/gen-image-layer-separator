@@ -639,6 +639,9 @@ async def _step_flex_layout(
     send_sse,
     ref_descriptions: list[str] | None = None,
     style_guide: str | None = None,
+    layout_strategy: dict | None = None,
+    no_go_zones: list[dict] | None = None,
+    image_description: str | None = None,
 ) -> tuple[str, dict | None, list[dict]]:
     component_labels = [c["label"] for c in visual_components]
     flex_result = await vertex_service.suggest_flex_layout(
@@ -647,6 +650,9 @@ async def _step_flex_layout(
         ref_image_buffers, footer_text or None,
         ref_descriptions=ref_descriptions,
         style_guide=style_guide,
+        layout_strategy=layout_strategy,
+        no_go_zones=no_go_zones,
+        image_description=image_description,
     )
 
     if flex_result.get("layoutThought"):
@@ -708,6 +714,7 @@ async def _step_refinement_loop(
     max_iter: int = 1,
     ref_descriptions: list[str] | None = None,
     style_guide: str | None = None,
+    layout_thought: str | None = None,
 ) -> tuple[str, dict]:
     current_svg = svg_overlay
     last_critique: dict = {"status": "FAIL"}
@@ -755,6 +762,8 @@ async def _step_refinement_loop(
         critique = await vertex_service.critique_layout(
             image_bytes, preview_bytes, mime, target_text, False,
             has_components=bool(visual_components),
+            style_guide=style_guide,
+            layout_thought=layout_thought,
         )
         last_critique = critique
 
@@ -950,6 +959,7 @@ async def create_campaign(
 
             svg_overlay = ""
             flex_tree = None
+            flex_result: dict | None = None
 
             if mode != "only_bg_comp":
                 # Plan layout strategy
@@ -959,6 +969,7 @@ async def create_campaign(
                     {"label": c["label"], **c["position"]}
                     for c in visual_components
                 ]
+                layout_hint: dict = {}
                 try:
                     layout_hint = await vertex_service.plan_layout_strategy(
                         image_buffer, mime_type, target_text,
@@ -991,6 +1002,7 @@ async def create_campaign(
                 ref_image_buffers: list[bytes] = []
                 ref_descriptions: list[str] = []
                 style_guide: str = ""
+                desc_result: dict = {}
                 try:
                     desc_result = await vertex_service.describe_and_embed(image_buffer, mime_type)
                     refs = find_similar_refs(desc_result["embedding"], 3)
@@ -1021,6 +1033,14 @@ async def create_campaign(
                 events.clear()
 
                 # Flex tree pipeline
+                image_description: str | None = desc_result.get("description") or None
+
+                all_no_go = (parsed_no_go or []) + [
+                    {"top": b.get("top", 0), "left": b.get("left", 0),
+                     "width": b.get("width", 0), "height": b.get("height", 0)}
+                    for b in (stroke_bboxes or [])
+                ]
+
                 try:
                     svg_overlay, flex_result, computed_boxes = await _step_flex_layout(
                         image_bytes=image_buffer, mime=mime_type,
@@ -1035,6 +1055,9 @@ async def create_campaign(
                         send_sse=send_sse,
                         ref_descriptions=ref_descriptions,
                         style_guide=style_guide,
+                        layout_strategy=layout_hint if layout_hint else None,
+                        no_go_zones=all_no_go or None,
+                        image_description=image_description,
                     )
                     analysis["svg_overlay"] = svg_overlay
                     flex_tree = flex_result.get("flexTree")
@@ -1072,6 +1095,7 @@ async def create_campaign(
             events.clear()
 
             # Refinement loop
+            layout_thought = flex_result.get("layoutThought") if flex_result else None
             try:
                 svg_overlay, last_critique = await _step_refinement_loop(
                     image_bytes=image_buffer, mime=mime_type,
@@ -1090,6 +1114,7 @@ async def create_campaign(
                     send_sse=send_sse,
                     ref_descriptions=ref_descriptions if mode != "only_bg_comp" else None,
                     style_guide=style_guide if mode != "only_bg_comp" else None,
+                    layout_thought=layout_thought if mode != "only_bg_comp" else None,
                 )
             except Exception as e:
                 send_sse("error", {

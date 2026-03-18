@@ -137,18 +137,27 @@ def _dict_to_flex_node(d: dict | FlexNode) -> FlexNode:
     )
 
 
+_MIN_ROOT_PADDING = 20
+
+
 def compute_flex_layout(root: FlexNode | dict, canvas_w: float, canvas_h: float) -> list[LayoutBox]:
     if isinstance(root, dict):
         root = _dict_to_flex_node(root)
+    if root.padding is None or root.padding < _MIN_ROOT_PADDING:
+        old = root.padding
+        root.padding = _MIN_ROOT_PADDING
+        if old is not None and old < _MIN_ROOT_PADDING:
+            print(f"[FlexLayout] Enforced min root padding: {old} → {_MIN_ROOT_PADDING}")
     if root.justifyContent is None and root.children:
         last = root.children[-1]
         if any(kw in (last.id or "").lower() for kw in _FOOTER_KEYWORDS):
             root.justifyContent = "space-between"
             print(f"[FlexLayout] Auto-set root justifyContent=space-between (last child '{last.id}' is footer)")
+    root_padding = root.padding or _MIN_ROOT_PADDING
     results: list[LayoutBox] = []
     _layout_node(root, 0, 0, canvas_w, canvas_h, results)
     _shrink_oversized_boxes(results, canvas_w, canvas_h)
-    _fix_overlapping_boxes(results, canvas_w, canvas_h)
+    _fix_overlapping_boxes(results, canvas_w, canvas_h, root_padding)
     return results
 
 
@@ -196,27 +205,34 @@ def _shrink_oversized_boxes(boxes: list[LayoutBox], canvas_w: float, canvas_h: f
 _FOOTER_KEYWORDS = {"footer", "disclaimer", "fineprint", "fine_print", "legal"}
 _FOOTER_MAX_RATIO = 0.10
 
-def _fix_overlapping_boxes(boxes: list[LayoutBox], canvas_w: float, canvas_h: float) -> None:
+def _fix_overlapping_boxes(boxes: list[LayoutBox], canvas_w: float, canvas_h: float, root_padding: int = 20) -> None:
     if len(boxes) < 2:
         return
+    pad = max(root_padding, _MIN_ROOT_PADDING)
     for b in boxes:
         if any(kw in (b.id or "").lower() for kw in _FOOTER_KEYWORDS):
             max_h = canvas_h * _FOOTER_MAX_RATIO
             if b.h > max_h:
                 print(f"[FlexLayout] Clamped footer '{b.id}' height {b.h:.0f} → {max_h:.0f}")
                 b.h = max_h
+    # Clamp all boxes within root padding bounds
+    for b in boxes:
+        if b.x < pad:
+            b.x = pad
+        if b.w > canvas_w - pad * 2:
+            b.w = canvas_w - pad * 2
     sorted_boxes = sorted(boxes, key=lambda b: b.y)
     last_bottom = sorted_boxes[-1].y + sorted_boxes[-1].h
     used_ratio = last_bottom / canvas_h if canvas_h > 0 else 1.0
     if used_ratio < 0.5 and len(sorted_boxes) >= 3:
         total_h = sum(b.h for b in sorted_boxes)
-        available = canvas_h * 0.9
+        available = canvas_h - pad * 2
         spacing = max(0, (available - total_h) / max(1, len(sorted_boxes) - 1))
-        cursor_y = canvas_h * 0.05
+        cursor_y = float(pad)
         for b in sorted_boxes:
             b.y = cursor_y
             cursor_y += b.h + spacing
-        print(f"[FlexLayout] Redistributed {len(sorted_boxes)} boxes across canvas (was {used_ratio:.0%} → ~90%)")
+        print(f"[FlexLayout] Redistributed {len(sorted_boxes)} boxes across canvas (was {used_ratio:.0%}, padding={pad})")
         return
     for i in range(1, len(sorted_boxes)):
         prev = sorted_boxes[i - 1]
@@ -225,10 +241,9 @@ def _fix_overlapping_boxes(boxes: list[LayoutBox], canvas_w: float, canvas_h: fl
         if curr.y < prev_bottom:
             curr.y = prev_bottom + 2
             print(f"[FlexLayout] Fixed overlap: pushed '{curr.id}' down to y={curr.y:.0f}")
-    bottom_padding = canvas_h * 0.02
     for b in boxes:
         if any(kw in (b.id or "").lower() for kw in _FOOTER_KEYWORDS):
-            target_y = canvas_h - b.h - bottom_padding
+            target_y = canvas_h - b.h - pad
             if target_y > b.y:
                 print(f"[FlexLayout] Pinned footer '{b.id}' to bottom: y={b.y:.0f} → {target_y:.0f}")
                 b.y = target_y

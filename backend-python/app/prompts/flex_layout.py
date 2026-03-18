@@ -5,6 +5,9 @@ def build_flex_layout_prompt(
     footer_section: str,
     canvas_size: dict,
     style_guide: str = "",
+    layout_strategy_section: str = "",
+    no_go_zones_section: str = "",
+    image_description_section: str = "",
 ) -> str:
     style_section = f"\n{style_guide}\n" if style_guide else ""
 
@@ -20,7 +23,7 @@ def build_flex_layout_prompt(
 
     return f"""You are a master of 2D graphic design and visual composition.
 
-{ref_section}{style_section}CAMPAIGN TEXT:
+{ref_section}{style_section}{image_description_section}{layout_strategy_section}{no_go_zones_section}CAMPAIGN TEXT:
 {target_text}
 
 {components_list}
