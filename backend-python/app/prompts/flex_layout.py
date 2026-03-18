@@ -62,6 +62,7 @@ Component leaf: {{"id":"...", "type":"component", "label":"must match available 
 
 RULES:
 - Every text line from the CAMPAIGN TEXT MUST appear as a text leaf.
+- Use ONLY the EXACT text from CAMPAIGN TEXT. Do NOT rephrase, annotate, or add words. For example, if the brief says "SCBSBUSD6M1" do NOT output "ชื่อกองคือ SCBSBUSD6M1". You may split or combine lines for layout purposes, but the WORDS must come verbatim from the brief.
 - ONLY create component leaves for labels listed in "Available die-cut components" above. If none are listed, use ZERO component nodes.
 - Do NOT invent component nodes for elements mentioned in the brief text (logos, mockups, etc.) unless they appear in the available components list.
 - Do NOT create text nodes for visual elements described in the brief (e.g. "Phone mockup", "logo", "badge", "image", "icon", "screenshot"). If the brief describes a visual element but no die-cut exists for it, SKIP it entirely — do NOT create a placeholder, description, or "[...]" bracket text for it.
