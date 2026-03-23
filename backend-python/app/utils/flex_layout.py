@@ -38,12 +38,13 @@ class FlexNode:
     gap: int | None = None
     padding: int | None = None
     justifyContent: Literal["start", "end", "center", "space-between", "space-evenly"] | None = None
+    alignItems: Literal["start", "end", "center", "stretch"] | None = None
 
 
 @dataclass
 class LayoutBox:
     id: str
-    type: Literal["text", "component"]
+    type: Literal["text", "component", "container"]
     x: float
     y: float
     w: float
@@ -118,6 +119,17 @@ def _dict_to_flex_node(d: dict | FlexNode) -> FlexNode:
         style = FlexNodeStyle(**filtered)
     elif isinstance(style_raw, FlexNodeStyle):
         style = style_raw
+    # Lift style-like properties from container level into style object
+    # AI often places backgroundColor, borderRadius, gradientOverlay at container level
+    # instead of inside the "style" dict -- merge them so the renderer sees them.
+    _LIFTABLE = set(FlexNodeStyle.__dataclass_fields__.keys())
+    for key in list(d.keys()):
+        if key in _LIFTABLE and key not in (style_raw or {}):
+            if style is None:
+                style = FlexNodeStyle()
+            if getattr(style, key) is None:
+                setattr(style, key, d[key])
+
     children_raw = d.get("children")
     children = None
     if isinstance(children_raw, list):
@@ -135,6 +147,7 @@ def _dict_to_flex_node(d: dict | FlexNode) -> FlexNode:
         gap=_safe_int(d.get("gap")),
         padding=_safe_int(d.get("padding")),
         justifyContent=d.get("justifyContent"),
+        alignItems=d.get("alignItems"),
     )
 
 
@@ -263,6 +276,16 @@ def _layout_node(node: FlexNode | dict, x: float, y: float, w: float, h: float, 
         ))
         return
 
+    # Emit a LayoutBox for containers with visual style (backgroundColor, gradientOverlay)
+    # so the SVG renderer draws a background rect before children
+    if node.style and (node.style.backgroundColor or node.style.gradientOverlay):
+        out.append(LayoutBox(
+            id=f"{node.id}-bg",
+            type="container",
+            x=x, y=y, w=w, h=h,
+            style=node.style,
+        ))
+
     children = node.children
     if not children:
         return
@@ -329,10 +352,27 @@ def _layout_node(node: FlexNode | dict, x: float, y: float, w: float, h: float, 
     for i, child in enumerate(children):
         child_main = child_sizes[i]
 
-        child_x = inner_x + cursor if is_row else inner_x
-        child_y = inner_y if is_row else inner_y + cursor
-        child_w = child_main if is_row else inner_w
-        child_h = inner_h if is_row else child_main
+        # Cross-axis sizing: respect child's explicit cross-axis dimension
+        cross_size = inner_h if is_row else inner_w
+        child_cross_pct = _parse_pct(child.height if is_row else child.width)
+        child_cross = cross_size * child_cross_pct if not math.isnan(child_cross_pct) else cross_size
+
+        # alignItems: position child on cross-axis
+        align = node.alignItems or "stretch"
+        if align == "stretch" or math.isnan(child_cross_pct):
+            cross_offset = 0.0
+            child_cross = cross_size  # stretch to fill
+        elif align == "center":
+            cross_offset = (cross_size - child_cross) / 2
+        elif align == "end":
+            cross_offset = cross_size - child_cross
+        else:  # start
+            cross_offset = 0.0
+
+        child_x = (inner_x + cursor) if is_row else (inner_x + cross_offset)
+        child_y = (inner_y + cross_offset) if is_row else (inner_y + cursor)
+        child_w = child_main if is_row else child_cross
+        child_h = child_cross if is_row else child_main
 
         _layout_node(child, child_x, child_y, child_w, child_h, out)
 

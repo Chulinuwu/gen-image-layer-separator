@@ -141,6 +141,9 @@ frontend/src/
 ### No post-processing hotfixes on AI layout output
 Do NOT use code to "fix" AI-generated layout after the fact (clamping positions, normalizing height%, scaling boxes, forcing elements into bounds). These hotfixes produce ugly results. If the AI output is wrong, fix the INPUT (prompt, data sent to AI, canvas dimensions) so the AI generates correct output in the first place. The flex layout engine should faithfully render what the AI decides -- it should not second-guess or modify the AI's decisions.
 
+### No image-specific hardcoding in prompts
+Prompt examples and instructions in `app/prompts/` must be GENERIC -- they should work for any input image, not just one specific test case. Do NOT put image-specific content (e.g. "port/logistics scene", "purple padlock", specific Thai text) in prompt examples. If the AI needs context about the current image, that comes from the pipeline data (image_description, layout_strategy, no_go_zones), not from hardcoded examples. Examples should illustrate the FORMAT and STRUCTURE of expected output, using placeholder descriptions like "body text section" or "a busy scene with objects".
+
 ## Debugging & Inspection
 
 ### AI Trace Logs

@@ -649,16 +649,20 @@ async def _step_flex_layout(
     content_h = round(canvas_h * (1 - footer_reserve_ratio))
 
     component_labels = [c["label"] for c in visual_components]
-    flex_result = await vertex_service.suggest_flex_layout(
-        image_bytes, mime, target_text, component_labels,
-        {"w": canvas_w, "h": content_h},  # AI sees only content area
-        ref_image_buffers, None,  # No footer sent to AI
-        ref_descriptions=ref_descriptions,
-        style_guide=style_guide,
-        layout_strategy=layout_strategy,
-        no_go_zones=no_go_zones,
-        image_description=image_description,
-    )
+    try:
+        flex_result = await vertex_service.suggest_flex_layout(
+            image_bytes, mime, target_text, component_labels,
+            {"w": canvas_w, "h": content_h},  # AI sees only content area
+            ref_image_buffers, None,  # No footer sent to AI
+            ref_descriptions=ref_descriptions,
+            style_guide=style_guide,
+            layout_strategy=layout_strategy,
+            no_go_zones=no_go_zones,
+            image_description=image_description,
+        )
+    except RuntimeError as err:
+        send_sse("error", {"error": str(err)})
+        return
 
     if flex_result.get("layoutThought"):
         log_event("Layout Design Reasoning", flex_result["layoutThought"][:1500])

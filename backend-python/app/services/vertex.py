@@ -27,7 +27,7 @@ from app.constants.pipeline import (
 )
 from app.constants.models import SAFETY_OFF, get_text_model, get_text_model_best
 from app.prompts.campaign_layout import build_campaign_layout_prompt
-from app.prompts.flex_layout import build_flex_layout_prompt
+from app.prompts.flex_layout import build_flex_thought_prompt, build_flex_tree_prompt
 from app.prompts.critique import build_critique_prompt
 from app.prompts.diecut import build_diecut_prompt
 from app.prompts.layout_strategy import build_layout_strategy_prompt
@@ -94,7 +94,7 @@ def _repair_json(raw: str) -> dict:
 # ---------------------------------------------------------------------------
 # Retry helper (module-level for testability)
 # ---------------------------------------------------------------------------
-async def with_retry(operation, retries: int = 3, delay: float = 2.0):
+async def with_retry(operation, retries: int = 3, delay: float = 2.0, label: str = ""):
     try:
         return await operation()
     except Exception as e:
@@ -103,9 +103,10 @@ async def with_retry(operation, retries: int = 3, delay: float = 2.0):
         is_timeout = "TIMEOUT" in msg.upper() or "ETIMEDOUT" in msg
         if (is_rate or is_timeout) and retries > 0:
             reason = "429 Resource exhausted" if is_rate else "Timeout"
-            print(f"⚠️ [GenAI] {reason}. Retrying in {delay}s... ({retries} left)")
+            tag = f" [{label}]" if label else ""
+            print(f"⚠️ [GenAI]{tag} {reason}. Retrying in {delay}s... ({retries} left)")
             await asyncio.sleep(delay)
-            return await with_retry(operation, retries - 1, delay * 2)
+            return await with_retry(operation, retries - 1, delay * 2, label=label)
         raise
 
 
@@ -164,14 +165,14 @@ class VertexService:
             model=model,
             contents=[{"role": "user", "parts": parts}],
             config=config,
-        ))
+        ), label=model)
 
     async def _generate_content_stream(self, model: str, parts: list, config: dict | None = None):
         return await with_retry(lambda: self.client.aio.models.generate_content_stream(
             model=model,
             contents=[{"role": "user", "parts": parts}],
             config=config,
-        ))
+        ), label=model)
 
     # ── Image Generation ────────────────────────────────────────────────
 
@@ -1309,39 +1310,49 @@ class VertexService:
                 "Use this description instead of re-analyzing the background from scratch.\n\n"
             )
 
-        prompt = build_flex_layout_prompt(
-            target_text, components_list, ref_section, footer_section, canvas_size,
+        # --- Call 1: Layout Thought (analyze image + plan treatments) ---
+        thought_prompt = build_flex_thought_prompt(
+            target_text, components_list, ref_section, canvas_size,
             style_guide=style_guide or "",
             layout_strategy_section=layout_strategy_section,
             no_go_zones_section=no_go_zones_section,
             image_description_section=image_description_section,
         )
 
-        parts = []
+        thought_parts = []
         if ref_images:
             for ref in ref_images:
-                parts.append(_inline_data(ref, "image/jpeg"))
-        parts.append(_inline_data(proc_buf, proc_mime))
-        parts.append({"text": prompt})
+                thought_parts.append(_inline_data(ref, "image/jpeg"))
+        thought_parts.append(_inline_data(proc_buf, proc_mime))
+        thought_parts.append({"text": thought_prompt})
 
-        print(f"[FlexLayout] Calling {model} (canvas: {canvas_size['w']}x{canvas_size['h']}, components: {len(component_labels)})")
+        print(f"[FlexLayout] Call 1: Thought ({model}, canvas: {canvas_size['w']}x{canvas_size['h']})")
 
         try:
-            response = await self._generate_content(model, parts, {"temperature": 0.7})
-            raw = response.text or ""
+            thought_response = await self._generate_content(model, thought_parts, {"temperature": 0.7})
+            layout_thought = (thought_response.text or "").strip()
 
-            thought_match = re.search(r"<layout_thought>([\s\S]*?)</layout_thought>", raw)
-            grouping_match = re.search(r"<grouping>([\s\S]*?)</grouping>", raw)
-            layout_thought = (thought_match.group(1).strip()) if thought_match else ""
-            grouping_text = (grouping_match.group(1).strip()) if grouping_match else ""
+            trace_ai("Flex Layout Thought", thought_prompt, layout_thought)
+            log_event("Layout Design Reasoning", layout_thought[:2000])
 
-            trace_ai("Flex Layout Raw", raw[:3000])
-            if layout_thought:
-                trace_ai("Flex Layout Thought", layout_thought[:2000])
+            # --- Call 2: Flex Tree JSON (use thought as context) ---
+            tree_prompt = build_flex_tree_prompt(
+                target_text, components_list, footer_section, canvas_size,
+                layout_thought=layout_thought,
+            )
 
-            json_str = re.sub(r"<layout_thought>[\s\S]*?</layout_thought>", "", raw)
-            json_str = re.sub(r"<grouping>[\s\S]*?</grouping>", "", json_str)
-            json_str = re.sub(r"```(?:json)?\s*", "", json_str)
+            tree_parts = []
+            tree_parts.append(_inline_data(proc_buf, proc_mime))
+            tree_parts.append({"text": tree_prompt})
+
+            print(f"[FlexLayout] Call 2: Flex Tree ({model}, thought: {len(layout_thought)} chars)")
+
+            tree_response = await self._generate_content(model, tree_parts, {"temperature": 0.4})
+            raw = tree_response.text or ""
+
+            trace_ai("Flex Layout Tree", tree_prompt, raw)
+
+            json_str = re.sub(r"```(?:json)?\s*", "", raw)
             json_str = re.sub(r"\s*```", "", json_str)
             json_str = json_str.strip()
 
@@ -1399,40 +1410,18 @@ class VertexService:
                 "campaign_vibe": parsed.get("campaign_vibe", "modern advertising"),
                 "background_description": parsed.get("background_description", "campaign background"),
                 "layoutThought": layout_thought,
-                "grouping": grouping_text,
                 "backgroundEffects": parsed.get("backgroundEffects", []),
             }
         except Exception as err:
-            print(f"[FlexLayout] Parse failed, using fallback: {err}")
-            text_lines = [l.strip() for l in target_text.split("\n") if l.strip()]
-            text_children = [
-                {"id": f"text-{i}", "type": "text", "text": line,
-                 "height": f"{80 // max(1, len(text_lines))}%",
-                 "style": {"fontSize": "large" if i == 0 else "medium", "fontWeight": "900" if i == 0 else "400",
-                           "color": "#FFFFFF", "strokeColor": "#000000", "strokeWidth": 2, "align": "center"}}
-                for i, line in enumerate(text_lines)
-            ]
-            comp_children = [
-                {"id": f"comp-{i}", "type": "component", "label": label,
-                 "height": f"{100 // max(1, len(component_labels))}%"}
-                for i, label in enumerate(component_labels)
-            ]
-            root_children = []
-            if text_children:
-                root_children.append({"id": "text-col", "direction": "column", "children": text_children,
-                                       "width": "60%" if comp_children else "100%"})
-            if comp_children:
-                root_children.append({"id": "comp-col", "direction": "column", "children": comp_children,
-                                       "width": "40%" if text_children else "100%"})
-            return {
-                "flexTree": {"id": "root", "direction": "row", "padding": 30, "gap": 20,
-                             "children": root_children or [{"id": "fb", "type": "text", "text": target_text,
-                                                            "style": {"fontSize": "large", "fontWeight": "700", "color": "#FFF"}}]},
-                "campaign_vibe": "default",
-                "background_description": "campaign background",
-                "layoutThought": "",
-                "grouping": "",
-            }
+            import traceback
+            print(f"[FlexLayout] Failed: {err}")
+            traceback.print_exc()
+            trace_ai("Flex Layout ERROR", str(err), traceback.format_exc())
+            msg = str(err)
+            is_rate = "429" in msg or "Resource exhausted" in msg
+            if is_rate:
+                raise RuntimeError("API rate limit (429). Please wait a moment and try again.") from err
+            raise
 
     # ── Describe & Embed ────────────────────────────────────────────────
 
