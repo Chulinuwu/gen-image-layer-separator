@@ -164,3 +164,56 @@ def test_gradient_overlay():
     assert "<linearGradient" in result.svg
     assert "stop-color" in result.svg
     assert "stop-opacity" in result.svg
+
+
+def test_full_quality_features():
+    """All visual quality features render together without conflict."""
+    boxes = [
+        LayoutBox(
+            id="bg-fade", type="text", x=0, y=300, w=500, h=200,
+            text="",
+            style=FlexNodeStyle(
+                gradientOverlay="to-bottom rgba(0,0,0,0) rgba(0,0,0,0.7)",
+            ),
+        ),
+        LayoutBox(
+            id="headline", type="text", x=50, y=50, w=400, h=80,
+            text="Big Sale",
+            style=FlexNodeStyle(
+                fontSize="xlarge", color="#FFFFFF", fontWeight="900",
+                textShadow="0px 0px 10px rgba(255,215,0,0.6), 2px 2px 4px rgba(0,0,0,0.5)",
+            ),
+        ),
+        LayoutBox(
+            id="product", type="component", x=150, y=150, w=200, h=200,
+            label="phone",
+        ),
+        LayoutBox(
+            id="cta", type="text", x=150, y=420, w=200, h=50,
+            text="Buy Now",
+            style=FlexNodeStyle(
+                fontSize="medium", color="#FFFFFF",
+                backgroundColor="#FF0000", borderRadius=8,
+            ),
+        ),
+    ]
+    result = build_flex_svg(FlexSVGInput(
+        boxes=boxes, canvas_w=500, canvas_h=500,
+        bg_image_url="https://example.com/bg.jpg",
+        component_images={"phone": "https://example.com/phone.png"},
+    ))
+
+    svg = result.svg
+    # Gradient overlay
+    assert "<linearGradient" in svg
+    # Multi-layer shadow (headline has 2 shadows)
+    assert svg.count("feDropShadow") >= 2
+    # Component shadow
+    assert "comp-shadow" in svg
+    # Valid SVG
+    assert svg.startswith("<svg")
+    assert svg.endswith("</svg>")
+    # All elements present
+    assert "Big Sale" in svg
+    assert "Buy Now" in svg
+    assert "phone.png" in svg
