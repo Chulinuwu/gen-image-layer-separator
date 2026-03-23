@@ -474,12 +474,14 @@ class VertexService:
         has_components: bool = True,
         style_guide: str | None = None,
         layout_thought: str | None = None,
+        contrast_data: str | None = None,
     ) -> dict:
         model = self._text_model()
         prompt = build_critique_prompt(
             target_text, style_only, has_components,
             style_guide=style_guide or "",
             layout_thought=layout_thought or "",
+            contrast_data=contrast_data or "",
         )
 
         try:

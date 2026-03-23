@@ -21,6 +21,7 @@ from app.utils.ai_logger import log_event, trace_ai
 from app.utils.flex_layout import compute_flex_layout
 from app.utils.ref_image_search import find_similar_refs, extract_style_guide
 from app.utils.safe_zones import BBox, compute_safe_zones
+from app.utils.contrast import check_text_contrast
 from app.utils.svg_builder import build_flex_svg, FlexSVGInput
 
 UPLOAD_DIR = Path(__file__).parent.parent.parent / "uploads"
@@ -642,7 +643,7 @@ async def _step_flex_layout(
     layout_strategy: dict | None = None,
     no_go_zones: list[dict] | None = None,
     image_description: str | None = None,
-) -> tuple[str, dict | None, list[dict]]:
+) -> tuple[str, dict | None, list[dict], list]:
     component_labels = [c["label"] for c in visual_components]
     flex_result = await vertex_service.suggest_flex_layout(
         image_bytes, mime, target_text, component_labels,
@@ -691,7 +692,7 @@ async def _step_flex_layout(
         "boxes": computed_boxes,
     })
 
-    return svg_result.svg, flex_result, computed_boxes
+    return svg_result.svg, flex_result, computed_boxes, flex_boxes
 
 
 async def _step_refinement_loop(
@@ -715,6 +716,7 @@ async def _step_refinement_loop(
     ref_descriptions: list[str] | None = None,
     style_guide: str | None = None,
     layout_thought: str | None = None,
+    flex_boxes: list | None = None,
 ) -> tuple[str, dict]:
     current_svg = svg_overlay
     last_critique: dict = {"status": "FAIL"}
@@ -758,12 +760,35 @@ async def _step_refinement_loop(
             "message": "Preview generated, checking for overlaps...",
         })
 
+        # Measure text contrast against the base image.
+        # NOTE: Intentionally conservative -- measures against original image WITHOUT
+        # gradient overlays. If a gradient overlay fixes contrast, the checker may still
+        # report a failure. Acceptable for v1.
+        contrast_summary = ""
+        current_boxes = flex_boxes or []
+        text_boxes_for_contrast = []
+        for b in current_boxes:
+            if b.type == "text" and b.style and b.style.color:
+                text_boxes_for_contrast.append({
+                    "id": b.id,
+                    "x": round(b.x), "y": round(b.y),
+                    "w": round(b.w), "h": round(b.h),
+                    "color": b.style.color,
+                })
+        if text_boxes_for_contrast:
+            contrast_results = check_text_contrast(image_bytes, text_boxes_for_contrast)
+            failing = [r for r in contrast_results if not r["pass_aa"]]
+            if failing:
+                lines = [f"  - {r['id']}: ratio {r['ratio']}:1 (fg={r['fg']}, bg={r['bg']}) FAIL AA" for r in failing]
+                contrast_summary = "CONTRAST FAILURES (WCAG AA < 4.5:1):\n" + "\n".join(lines)
+
         # AI critique
         critique = await vertex_service.critique_layout(
             image_bytes, preview_bytes, mime, target_text, False,
             has_components=bool(visual_components),
             style_guide=style_guide,
             layout_thought=layout_thought,
+            contrast_data=contrast_summary,
         )
         last_critique = critique
 
@@ -809,6 +834,7 @@ async def _step_refinement_loop(
             )
 
             refined_boxes = compute_flex_layout(refined_flex["flexTree"], canvas_w, canvas_h)
+            flex_boxes = refined_boxes
 
             comp_imgs = {}
             for vc in visual_components:
@@ -1041,8 +1067,9 @@ async def create_campaign(
                     for b in (stroke_bboxes or [])
                 ]
 
+                flex_boxes = []
                 try:
-                    svg_overlay, flex_result, computed_boxes = await _step_flex_layout(
+                    svg_overlay, flex_result, computed_boxes, flex_boxes = await _step_flex_layout(
                         image_bytes=image_buffer, mime=mime_type,
                         target_text=target_text,
                         visual_components=visual_components,
@@ -1115,6 +1142,7 @@ async def create_campaign(
                     ref_descriptions=ref_descriptions if mode != "only_bg_comp" else None,
                     style_guide=style_guide if mode != "only_bg_comp" else None,
                     layout_thought=layout_thought if mode != "only_bg_comp" else None,
+                    flex_boxes=flex_boxes if mode != "only_bg_comp" else None,
                 )
             except Exception as e:
                 send_sse("error", {

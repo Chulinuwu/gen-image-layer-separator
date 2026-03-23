@@ -4,6 +4,7 @@ def build_critique_prompt(
     has_components: bool = True,
     style_guide: str = "",
     layout_thought: str = "",
+    contrast_data: str = "",
 ) -> str:
     missing_note = "" if has_components else """
 IMPORTANT: This layout has NO die-cut visual components (logos, phone mockups, product photos, badges, icons).
@@ -24,10 +25,18 @@ If the text is readable, well-contrasted, and properly arranged — PASS it."""
         if style_guide else ""
     )
 
+    contrast_section = ""
+    if contrast_data:
+        contrast_section = f"""
+MEASURED CONTRAST DATA:
+{contrast_data}
+If any text has contrast ratio below 4.5:1, you MUST FAIL the layout and include "increase contrast" in actionable_steps.
+Suggest fixes: add darker backgroundColor, change text color, add strokeColor, or use gradientOverlay on the container."""
+
     return f"""You are the STRICTEST ART DIRECTOR in the advertising industry.
 IMAGE 1: ORIGINAL reference. IMAGE 2: PREVIEW with text overlays.
 AD BRIEF: "{target_text}"
-{missing_note}{layout_thought_section}{style_guide_section}
+{missing_note}{layout_thought_section}{style_guide_section}{contrast_section}
 CRITIQUE CRITERIA: Check text overlap with faces, readability, contrast, composition.
 {"Focus ONLY on visual style — positions verified by code." if style_only else "Check positions AND style."}
 
