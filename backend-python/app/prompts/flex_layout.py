@@ -85,7 +85,12 @@ RULES:
 - lineHeight: multiplier for line spacing (default 1.35). Use 1.0-1.2 for tight headers, 1.4-1.8 for body/footer.
 - letterSpacing: px between characters. Use 1-4 for premium headlines, -1 for tight body text. Default 0.
 - borderRadius: px for rounded corners on backgroundColor rects. Use for badges, tags, buttons.
-- textShadow: format "Xpx Ypx BLURpx COLOR" for drop shadow. Great for readability on busy backgrounds.
+- textShadow: CSS-like shadow. Supports MULTIPLE layers separated by comma:
+  - Subtle readability: "1px 1px 3px rgba(0,0,0,0.5)"
+  - Strong drop shadow: "2px 2px 6px rgba(0,0,0,0.8)"
+  - Glow effect (premium/promo): "0px 0px 10px rgba(255,215,0,0.6), 0px 0px 20px rgba(255,215,0,0.3)"
+  - Depth + glow: "0px 0px 8px rgba(255,255,255,0.4), 2px 2px 4px rgba(0,0,0,0.6)"
+  USE glow for hero/promo text to make it pop. USE multi-layer for depth.
 - opacity: 0.0-1.0 for transparency. Use for watermarks or subtle text.
 - margin: px inset from all sides of the node's allocated box. Use to add breathing room.
 - maxLines: limit text to N lines. Use for footer/disclaimer truncation.
