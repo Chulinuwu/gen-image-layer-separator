@@ -18,7 +18,7 @@ from app.constants.pipeline import (
 )
 from app.services.vertex import vertex_service
 from app.utils.ai_logger import log_event, trace_ai
-from app.utils.flex_layout import compute_flex_layout
+from app.utils.flex_layout import compute_flex_layout, LayoutBox, FlexNodeStyle
 from app.utils.ref_image_search import find_similar_refs, extract_style_guide
 from app.utils.safe_zones import BBox, compute_safe_zones
 from app.utils.contrast import check_text_contrast
@@ -644,11 +644,15 @@ async def _step_flex_layout(
     no_go_zones: list[dict] | None = None,
     image_description: str | None = None,
 ) -> tuple[str, dict | None, list[dict], list]:
+    # Reserve bottom 10% for footer (code-controlled, not AI)
+    footer_reserve_ratio = 0.10 if footer_text else 0.0
+    content_h = round(canvas_h * (1 - footer_reserve_ratio))
+
     component_labels = [c["label"] for c in visual_components]
     flex_result = await vertex_service.suggest_flex_layout(
         image_bytes, mime, target_text, component_labels,
-        {"w": canvas_w, "h": canvas_h},
-        ref_image_buffers, footer_text or None,
+        {"w": canvas_w, "h": content_h},  # AI sees only content area
+        ref_image_buffers, None,  # No footer sent to AI
         ref_descriptions=ref_descriptions,
         style_guide=style_guide,
         layout_strategy=layout_strategy,
@@ -659,7 +663,23 @@ async def _step_flex_layout(
     if flex_result.get("layoutThought"):
         log_event("Layout Design Reasoning", flex_result["layoutThought"][:1500])
 
-    flex_boxes = compute_flex_layout(flex_result["flexTree"], canvas_w, canvas_h)
+    flex_boxes = compute_flex_layout(flex_result["flexTree"], canvas_w, content_h)
+
+    # Add code-controlled footer box
+    if footer_text:
+        footer_y = content_h + 4
+        footer_h = canvas_h - footer_y - 10
+        flex_boxes.append(LayoutBox(
+            id="footer_text", type="text",
+            x=20, y=footer_y,
+            w=canvas_w - 40, h=max(40, footer_h),
+            text=footer_text,
+            style=FlexNodeStyle(
+                fontSize="10", fontWeight="400", color="#FFFFFF",
+                align="left", lineHeight=1.1, maxLines=6,
+            ),
+        ))
+
     computed_boxes = [
         {"id": b.id, "type": b.type, "x": round(b.x), "y": round(b.y),
          "w": round(b.w), "h": round(b.h), "text": b.text, "label": b.label}
@@ -677,12 +697,21 @@ async def _step_flex_layout(
         else None
     )
 
+    bg_effects = flex_result.get("backgroundEffects", []) if flex_result else []
+    # Auto-add bottom fade for footer readability
+    if footer_text:
+        bg_effects.append({
+            "type": "linear-fade", "from": "bottom",
+            "color": "rgba(0,0,0,0.7)", "size": "15%",
+        })
+
     svg_result = build_flex_svg(FlexSVGInput(
         boxes=flex_boxes,
         canvas_w=canvas_w,
-        canvas_h=canvas_h,
+        canvas_h=canvas_h,  # Full canvas for SVG
         bg_image_url=svg_bg_url,
         component_images=component_images,
+        background_effects=bg_effects if bg_effects else None,
     ))
 
     send_sse("debug", {
@@ -1068,6 +1097,7 @@ async def create_campaign(
                 ]
 
                 flex_boxes = []
+                computed_boxes = []
                 try:
                     svg_overlay, flex_result, computed_boxes, flex_boxes = await _step_flex_layout(
                         image_bytes=image_buffer, mime=mime_type,

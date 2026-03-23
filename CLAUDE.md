@@ -136,6 +136,11 @@ frontend/src/
 
 **State flow:** `App.vue` owns `sharedBackgroundUrl` and `sharedCampaignData`, passing them down as props.
 
+## Design Principles
+
+### No post-processing hotfixes on AI layout output
+Do NOT use code to "fix" AI-generated layout after the fact (clamping positions, normalizing height%, scaling boxes, forcing elements into bounds). These hotfixes produce ugly results. If the AI output is wrong, fix the INPUT (prompt, data sent to AI, canvas dimensions) so the AI generates correct output in the first place. The flex layout engine should faithfully render what the AI decides -- it should not second-guess or modify the AI's decisions.
+
 ## Debugging & Inspection
 
 ### AI Trace Logs

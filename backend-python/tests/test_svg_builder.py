@@ -217,3 +217,53 @@ def test_full_quality_features():
     assert "Big Sale" in svg
     assert "Buy Now" in svg
     assert "phone.png" in svg
+
+
+def test_linear_fade_bottom():
+    result = build_flex_svg(FlexSVGInput(
+        boxes=[], canvas_w=1000, canvas_h=1000,
+        bg_image_url="https://example.com/bg.jpg",
+        background_effects=[
+            {"type": "linear-fade", "from": "bottom", "color": "rgba(0,0,0,0.7)", "size": "40%"},
+        ],
+    ))
+    assert "<linearGradient" in result.svg
+    assert "bg-fade-0" in result.svg
+    assert 'stop-opacity="0.7"' in result.svg
+
+
+def test_linear_fade_right():
+    result = build_flex_svg(FlexSVGInput(
+        boxes=[], canvas_w=1000, canvas_h=1000,
+        background_effects=[
+            {"type": "linear-fade", "from": "right", "color": "rgba(0,0,0,0.5)", "size": "50%"},
+        ],
+    ))
+    assert "<linearGradient" in result.svg
+    assert 'x2="1"' in result.svg
+
+
+def test_radial_fade_vignette():
+    result = build_flex_svg(FlexSVGInput(
+        boxes=[], canvas_w=1000, canvas_h=1000,
+        background_effects=[
+            {"type": "radial-fade", "center": "50% 40%", "radius": "70%", "color": "rgba(0,0,0,0.4)"},
+        ],
+    ))
+    assert "<radialGradient" in result.svg
+    assert "bg-radial-0" in result.svg
+    assert 'cx="50%"' in result.svg
+    assert 'cy="40%"' in result.svg
+
+
+def test_multiple_background_effects():
+    result = build_flex_svg(FlexSVGInput(
+        boxes=[], canvas_w=1000, canvas_h=1000,
+        background_effects=[
+            {"type": "linear-fade", "from": "bottom", "color": "rgba(0,0,0,0.7)", "size": "40%"},
+            {"type": "radial-fade", "center": "50% 50%", "radius": "60%", "color": "rgba(0,0,0,0.3)"},
+        ],
+    ))
+    assert "bg-fade-0" in result.svg
+    assert "bg-radial-1" in result.svg
+    assert result.svg.count('<rect x="0" y="0"') >= 2

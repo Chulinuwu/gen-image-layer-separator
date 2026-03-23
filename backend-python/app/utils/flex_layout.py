@@ -149,16 +149,11 @@ def compute_flex_layout(root: FlexNode | dict, canvas_w: float, canvas_h: float)
         root.padding = _MIN_ROOT_PADDING
         if old is not None and old < _MIN_ROOT_PADDING:
             print(f"[FlexLayout] Enforced min root padding: {old} → {_MIN_ROOT_PADDING}")
-    if root.justifyContent is None and root.children:
-        last = root.children[-1]
-        if any(kw in (last.id or "").lower() for kw in _FOOTER_KEYWORDS):
-            root.justifyContent = "space-between"
-            print(f"[FlexLayout] Auto-set root justifyContent=space-between (last child '{last.id}' is footer)")
+    # No auto space-between -- AI controls justifyContent directly
     root_padding = root.padding or _MIN_ROOT_PADDING
     results: list[LayoutBox] = []
     _layout_node(root, 0, 0, canvas_w, canvas_h, results)
-    _shrink_oversized_boxes(results, canvas_w, canvas_h)
-    _fix_overlapping_boxes(results, canvas_w, canvas_h, root_padding)
+    # No post-processing hotfixes -- AI controls layout directly
     return results
 
 

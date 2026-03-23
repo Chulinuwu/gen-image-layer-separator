@@ -48,10 +48,10 @@ c) PLACEMENT — For EACH text element, decide:
    - WHERE on the image it goes (e.g. "top-left over the sky", "bottom-right over the road")
    - WHY that spot (e.g. "clean area, good contrast", "near related content")
    - WHAT readability treatment it needs based on what's behind it:
-     * Clean light area -> dark text + subtle textShadow
-     * Clean dark area -> light text + subtle textShadow
-     * Busy area -> gradientOverlay on container, OR backgroundColor, OR bold strokeColor
-   EVERY text node MUST have at least one readability treatment. No exceptions.
+     * Clean light area -> dark text + LIGHT shadow (e.g. "0px 0px 4px rgba(255,255,255,0.5)") or dark strokeColor
+     * Clean dark area -> light text + DARK shadow (e.g. "1px 1px 3px rgba(0,0,0,0.7)") or light strokeColor
+     * Busy area -> gradientOverlay/backgroundFade on container, OR backgroundColor, OR bold strokeColor with CONTRASTING color
+   CONTRAST RULE: shadow/stroke color must ALWAYS contrast with the text color. Dark text needs light shadow or dark stroke on light bg. Light text needs dark shadow. Same-color treatment (white text + white shadow, dark text + dark shadow) is USELESS and WRONG.
 
 d) HIERARCHY: Which text is the HERO (largest)? What's the reading order?
 
@@ -68,19 +68,20 @@ Your flex tree MUST reflect the placement decisions from Step 1.
 CRITICAL RULE: height% directly controls WHERE on the canvas the content appears.
 - If you decided "headline at the top over the sky (top 25%)" -> headline container height ~20%, placed first.
 - If the subject occupies the middle 30-50% of the image -> add an EMPTY SPACER container there to keep it clear.
-- If footer goes at the bottom -> footer is the last child.
+- Footer/disclaimer is handled separately by the system. Do NOT include footer text in your flex tree.
 
 Example — subject in center, text above and below:
 {{"id":"root", "direction":"column", "justifyContent":"start", "padding":20, "children":[
-  {{"id":"top-content", "direction":"column", "height":"30%", "children":[...]}},
-  {{"id":"spacer", "direction":"column", "height":"35%", "children":[]}},
-  {{"id":"bottom-content", "direction":"column", "height":"30%", "children":[...]}},
-  {{"id":"footer", "type":"text", "text":"...", "height":"5%", "style":{{...}}}}
+  {{"id":"top-content", "direction":"column", "height":"___", "children":[...]}},
+  {{"id":"spacer", "direction":"column", "height":"___", "children":[]}},
+  {{"id":"bottom-content", "direction":"column", "height":"___", "children":[...]}}
 ]}}
 
-The spacer is an EMPTY container that reserves space for the subject/visual. Use it to AVOID placing text over busy areas. Adjust spacer height based on where the subject is in the image.
+The spacer is an EMPTY container that reserves space for the subject/visual. Use it to AVOID placing text over busy areas.
 
-{{"flexTree": {{...}}, "campaign_vibe": "...", "background_description": "..."}}
+All direct children height% of root MUST total exactly 100%. Your output will be REJECTED if it exceeds 100%.
+
+{{"flexTree": {{...}}, "campaign_vibe": "...", "background_description": "...", "backgroundEffects": [...]}}
 
 FLEX TREE FORMAT:
 Container: {{"id":"...", "direction":"row|column", "justifyContent":"start|end|center|space-between|space-evenly", "children":[...], "height":"40%", "width":"60%", "gap":16, "padding":20}}
@@ -101,6 +102,18 @@ lineHeight: multiplier (1.0-1.2 for headers, 1.4-1.8 for body)
 letterSpacing: px (1-4 for premium headlines)
 opacity, margin, maxLines, borderRadius
 
+BACKGROUND EFFECTS (canvas-level, in "backgroundEffects" array):
+Use these to darken/lighten areas of the background image for text readability. Applied OVER the background, UNDER all content.
+- Linear fade from edge: {{"type": "linear-fade", "from": "bottom|top|left|right", "color": "rgba(0,0,0,0.7)", "size": "40%"}}
+  Example: darken bottom 40% for text readability.
+- Radial fade (vignette): {{"type": "radial-fade", "center": "50% 50%", "radius": "70%", "color": "rgba(0,0,0,0.4)"}}
+  Example: darken edges to focus attention on center subject.
+You can stack multiple effects. Use when the background is busy and text needs a clean area.
+Common patterns:
+  - Bottom scrim: linear-fade from bottom, 30-40%, rgba(0,0,0,0.6)
+  - Side darken for text column: linear-fade from left/right, 40-50%, rgba(0,0,0,0.5)
+  - Vignette for focus: radial-fade center 50% 50%, radius 60-80%, rgba(0,0,0,0.3-0.5)
+
 RULES:
 - Use ONLY the EXACT text from CAMPAIGN TEXT. Do NOT rephrase or add words.
 - If the brief contains positioning instructions (x%, y%, px sizes, font specs) — IGNORE them. YOU decide layout based on the IMAGE.
@@ -110,5 +123,5 @@ RULES:
 - Height% of each node should match its content — a single-line badge needs much less than a multi-line paragraph.
 - Use SPACER containers (empty children:[]) to reserve space for the subject/visual in the image. This is how you avoid placing text over busy areas.
 - CTA buttons: ALWAYS use backgroundColor with a brand color + contrasting text.
-- Footer/disclaimer: small height (3-5%), fontSize "xsmall" or 10-12px, lineHeight 1.1.
+- TOTAL HEIGHT: All direct children height% in root MUST add up to EXACTLY 100%. If they exceed 100%, content will overflow and overlap. Count before outputting.
 - Hero/promo = LARGEST element (fontSize "xlarge", fontWeight "900").{style_matching_rules}"""

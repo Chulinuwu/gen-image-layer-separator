@@ -54,6 +54,7 @@ class FlexSVGInput:
     canvas_h: int
     bg_image_url: str | None = None
     component_images: dict[str, str] | None = None
+    background_effects: list[dict] | None = None  # canvas-level fade/darken effects
 
 
 @dataclass
@@ -393,6 +394,77 @@ def _parse_gradient(spec: str, grad_id: str) -> tuple[str, str] | None:
     return defs_snippet, grad_id
 
 
+def _render_background_effects(effects: list[dict], cw: int, ch: int) -> tuple[list[str], list[str]]:
+    """Render canvas-level background effects (fades, vignettes).
+
+    Returns (defs_lines, rect_lines) to insert into SVG.
+    """
+    defs: list[str] = []
+    rects: list[str] = []
+
+    for i, fx in enumerate(effects):
+        fx_type = fx.get("type", "")
+        color = fx.get("color", "rgba(0,0,0,0.5)")
+
+        rgba = _re.match(r"rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)", color)
+        if rgba:
+            rgb = f"rgb({rgba.group(1)},{rgba.group(2)},{rgba.group(3)})"
+            opacity = rgba.group(4) or "1"
+        else:
+            rgb = color
+            opacity = "1"
+
+        if fx_type == "linear-fade":
+            grad_id = f"bg-fade-{i}"
+            direction = fx.get("from", "bottom")
+            size_pct = min(100, max(10, int(fx.get("size", "40").replace("%", ""))))
+
+            if direction == "bottom":
+                start_offset = f"{100 - size_pct}%"
+                coords = 'x1="0" y1="0" x2="0" y2="1"'
+            elif direction == "top":
+                start_offset = f"{size_pct}%"
+                coords = 'x1="0" y1="1" x2="0" y2="0"'
+            elif direction == "left":
+                start_offset = f"{size_pct}%"
+                coords = 'x1="1" y1="0" x2="0" y2="0"'
+            elif direction == "right":
+                start_offset = f"{100 - size_pct}%"
+                coords = 'x1="0" y1="0" x2="1" y2="0"'
+            else:
+                continue
+
+            defs.append(
+                f'    <linearGradient id="{grad_id}" {coords}>'
+                f'<stop offset="0%" stop-color="{rgb}" stop-opacity="0"/>'
+                f'<stop offset="{start_offset}" stop-color="{rgb}" stop-opacity="0"/>'
+                f'<stop offset="100%" stop-color="{rgb}" stop-opacity="{opacity}"/>'
+                f'</linearGradient>'
+            )
+            rects.append(f'  <rect x="0" y="0" width="{cw}" height="{ch}" fill="url(#{grad_id})"/>')
+
+        elif fx_type == "radial-fade":
+            grad_id = f"bg-radial-{i}"
+            center = fx.get("center", "50% 50%")
+            radius = fx.get("radius", "70%")
+
+            cx_str, cy_str = center.split()
+            cx = cx_str.replace("%", "")
+            cy = cy_str.replace("%", "")
+            r = radius.replace("%", "")
+
+            defs.append(
+                f'    <radialGradient id="{grad_id}" cx="{cx}%" cy="{cy}%" r="{r}%" fx="{cx}%" fy="{cy}%">'
+                f'<stop offset="0%" stop-color="{rgb}" stop-opacity="0"/>'
+                f'<stop offset="60%" stop-color="{rgb}" stop-opacity="0"/>'
+                f'<stop offset="100%" stop-color="{rgb}" stop-opacity="{opacity}"/>'
+                f'</radialGradient>'
+            )
+            rects.append(f'  <rect x="0" y="0" width="{cw}" height="{ch}" fill="url(#{grad_id})"/>')
+
+    return defs, rects
+
+
 def build_flex_svg(input: FlexSVGInput) -> FlexSVGResult:
     boxes = input.boxes
     cw, ch = input.canvas_w, input.canvas_h
@@ -408,10 +480,18 @@ def build_flex_svg(input: FlexSVGInput) -> FlexSVGResult:
             f'  <image href="{_escape_xml(input.bg_image_url)}" x="0" y="0" width="{cw}" height="{ch}" preserveAspectRatio="xMidYMid slice" />'
         )
 
+    # Background effects (canvas-level fades, vignettes)
+    bg_effect_defs: list[str] = []
+    bg_effect_rects: list[str] = []
+    if input.background_effects:
+        bg_effect_defs, bg_effect_rects = _render_background_effects(input.background_effects, cw, ch)
+
     font_css = _kanit_font_style()
     svg_lines.append("  <defs>")
     if font_css:
         svg_lines.append(f"    <style>{font_css}</style>")
+    for d in bg_effect_defs:
+        svg_lines.append(f"  {d.lstrip()}")
 
     all_text_elements: list[str] = []
     clip_idx = 0
@@ -437,6 +517,10 @@ def build_flex_svg(input: FlexSVGInput) -> FlexSVGResult:
                 gradient_overlays.append((box, grad_id))
 
     svg_lines.append("  </defs>")
+
+    # Background effects (full-canvas fades/vignettes, rendered right after bg image)
+    for r in bg_effect_rects:
+        svg_lines.append(r)
 
     # Background rects
     CTA_KEYWORDS = {"cta", "button", "btn"}

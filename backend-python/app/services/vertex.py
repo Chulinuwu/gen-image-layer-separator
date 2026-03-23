@@ -1335,6 +1335,7 @@ class VertexService:
             layout_thought = (thought_match.group(1).strip()) if thought_match else ""
             grouping_text = (grouping_match.group(1).strip()) if grouping_match else ""
 
+            trace_ai("Flex Layout Raw", raw[:3000])
             if layout_thought:
                 trace_ai("Flex Layout Thought", layout_thought[:2000])
 
@@ -1361,12 +1362,45 @@ class VertexService:
             if warnings:
                 print(f"[FlexLayout] Warnings: {warnings}")
 
+            # Validate root children height% totals <= 100%
+            tree = parsed["flexTree"]
+            if isinstance(tree.get("children"), list):
+                total_pct = 0
+                for child in tree["children"]:
+                    h = child.get("height", "")
+                    if isinstance(h, str) and h.endswith("%"):
+                        try:
+                            total_pct += float(h.replace("%", ""))
+                        except ValueError:
+                            pass
+                if total_pct > 105:  # 5% tolerance
+                    print(f"[FlexLayout] REJECTED: root children height% = {total_pct}% (exceeds 100%). Retrying...")
+                    retry_prompt = (
+                        f"Your previous flex tree was REJECTED because root children height% totaled {total_pct:.0f}% "
+                        f"which exceeds 100%. This causes content to overflow and overlap.\n"
+                        f"Fix the height percentages so they add up to exactly 100%, then output the corrected JSON.\n"
+                        f"Previous flex tree:\n{json.dumps(tree, ensure_ascii=False)}\n\n"
+                        f"Output ONLY the corrected JSON: {{\"flexTree\": {{...}}, \"campaign_vibe\": \"...\", \"background_description\": \"...\"}}"
+                    )
+                    retry_response = await self._generate_content(model, [parts[0], {"text": retry_prompt}] if len(parts) > 1 else [{"text": retry_prompt}], {"temperature": 0.3})
+                    retry_raw = retry_response.text or ""
+                    retry_json = re.sub(r"```(?:json)?\s*", "", retry_raw)
+                    retry_json = re.sub(r"\s*```", "", retry_json).strip()
+                    rs = retry_json.find("{")
+                    re_ = retry_json.rfind("}")
+                    if rs != -1 and re_ != -1:
+                        retry_parsed = json.loads(retry_json[rs:re_ + 1])
+                        if isinstance(retry_parsed.get("flexTree"), dict):
+                            parsed = retry_parsed
+                            print(f"[FlexLayout] Retry successful, using corrected flex tree")
+
             return {
                 "flexTree": parsed["flexTree"],
                 "campaign_vibe": parsed.get("campaign_vibe", "modern advertising"),
                 "background_description": parsed.get("background_description", "campaign background"),
                 "layoutThought": layout_thought,
                 "grouping": grouping_text,
+                "backgroundEffects": parsed.get("backgroundEffects", []),
             }
         except Exception as err:
             print(f"[FlexLayout] Parse failed, using fallback: {err}")

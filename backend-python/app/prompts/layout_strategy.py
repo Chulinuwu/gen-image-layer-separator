@@ -16,6 +16,14 @@ FIRST: Analyze the image.
 - Where are BUSY areas to avoid? (people, objects, details?)
 
 THEN: Plan the layout based on what you see AND the text brief.
+
+IMPORTANT RULES:
+- Text zones should be SPREAD across the canvas, not crammed into one small area.
+- Main content (headlines, body copy, section labels) should occupy the TOP 60% of the canvas. Do NOT push main content below 70%.
+- Only footer/disclaimer text goes in the bottom 10%.
+- If the subject blocks the middle, place content ABOVE the subject (in the sky/clean area) and use the area just below the subject for secondary content. Do NOT skip the upper area and put everything at the bottom.
+- Real advertisements spread content vertically with breathing room. A layout where all text is packed into the bottom 20% is ALWAYS wrong.
+- The bottom 10% of the canvas is RESERVED for footer/disclaimer (handled by the system). Do NOT place any content below top 85%. All your text_zones must have top + height <= 85.
 {comp_pos_block}
 TEXT SPACE ANALYSIS:
 - Text items: {text_lines_count} lines
