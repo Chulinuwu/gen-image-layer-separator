@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from dataclasses import dataclass, field
 from html import escape as html_escape
+import re as _re
 from pathlib import Path
 
 from app.utils.flex_layout import LayoutBox, FlexNodeStyle
@@ -323,6 +324,42 @@ def _render_text_box(box: LayoutBox, clip_id: str) -> tuple[list[str], list[str]
     return defs, elements
 
 
+def _parse_gradient(spec: str, grad_id: str) -> tuple[str, str] | None:
+    parts = spec.strip().split()
+    if len(parts) < 3:
+        return None
+    direction = parts[0]
+    start_color = parts[1]
+    end_color = " ".join(parts[2:])
+
+    coords = {
+        "to-bottom": 'x1="0" y1="0" x2="0" y2="1"',
+        "to-top":    'x1="0" y1="1" x2="0" y2="0"',
+        "to-right":  'x1="0" y1="0" x2="1" y2="0"',
+        "to-left":   'x1="1" y1="0" x2="0" y2="0"',
+    }.get(direction)
+    if not coords:
+        return None
+
+    def _stop(color: str, offset: str) -> str:
+        rgba = _re.match(
+            r"rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)", color
+        )
+        if rgba:
+            r, g, b = rgba.group(1), rgba.group(2), rgba.group(3)
+            a = rgba.group(4) or "1"
+            return f'<stop offset="{offset}" stop-color="rgb({r},{g},{b})" stop-opacity="{a}"/>'
+        return f'<stop offset="{offset}" stop-color="{_escape_xml(color)}" stop-opacity="1"/>'
+
+    defs_snippet = (
+        f'    <linearGradient id="{grad_id}" {coords}>'
+        f'{_stop(start_color, "0%")}'
+        f'{_stop(end_color, "100%")}'
+        f'</linearGradient>'
+    )
+    return defs_snippet, grad_id
+
+
 def build_flex_svg(input: FlexSVGInput) -> FlexSVGResult:
     boxes = input.boxes
     cw, ch = input.canvas_w, input.canvas_h
@@ -355,6 +392,17 @@ def build_flex_svg(input: FlexSVGInput) -> FlexSVGResult:
                 svg_lines.append(f"  {d.lstrip()}")
             all_text_elements.extend(box_elements)
 
+    # Gradient overlay defs
+    gradient_overlays: list[tuple] = []  # (box, grad_id)
+    for box in boxes:
+        if box.style and box.style.gradientOverlay:
+            grad_id = f"grad-{box.id}"
+            parsed = _parse_gradient(box.style.gradientOverlay, grad_id)
+            if parsed:
+                defs_snippet, _ = parsed
+                svg_lines.append(f"  {defs_snippet.lstrip()}")
+                gradient_overlays.append((box, grad_id))
+
     svg_lines.append("  </defs>")
 
     # Background rects
@@ -374,6 +422,13 @@ def build_flex_svg(input: FlexSVGInput) -> FlexSVGResult:
                 f'  <rect x="{box.x}" y="{box.y}" width="{box.w}" height="{box.h}"{rx_attr} '
                 f'fill="{_escape_xml(box.style.backgroundColor)}"{opacity_attr} />'
             )
+
+    # Gradient overlays (between background and content for readability)
+    for box, grad_id in gradient_overlays:
+        svg_lines.append(
+            f'  <rect x="{box.x}" y="{box.y}" width="{box.w}" height="{box.h}" '
+            f'fill="url(#{grad_id})"/>'
+        )
 
     # Component images
     comp_images = input.component_images or {}

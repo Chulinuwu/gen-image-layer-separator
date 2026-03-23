@@ -93,3 +93,23 @@ def test_max_lines():
     result = build_flex_svg(FlexSVGInput(boxes=[box], canvas_w=300, canvas_h=100))
     tspan_count = result.svg.count("<tspan")
     assert tspan_count <= 2
+
+
+def test_gradient_overlay():
+    boxes = [
+        LayoutBox(
+            id="header", type="text", x=0, y=0, w=500, h=100,
+            text="Hello",
+            style=FlexNodeStyle(
+                fontSize="large", color="#FFFFFF",
+                gradientOverlay="to-bottom rgba(0,0,0,0) rgba(0,0,0,0.7)",
+            ),
+        )
+    ]
+    result = build_flex_svg(FlexSVGInput(
+        boxes=boxes, canvas_w=500, canvas_h=500,
+        bg_image_url="https://example.com/bg.jpg",
+    ))
+    assert "<linearGradient" in result.svg
+    assert "stop-color" in result.svg
+    assert "stop-opacity" in result.svg

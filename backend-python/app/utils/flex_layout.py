@@ -21,6 +21,7 @@ class FlexNodeStyle:
     opacity: float | None = None
     margin: int | None = None
     maxLines: int | None = None
+    gradientOverlay: str | None = None  # "to-bottom rgba(0,0,0,0) rgba(0,0,0,0.7)"
 
 
 @dataclass

@@ -57,7 +57,7 @@ CRITICAL: Your JSON MUST reflect every style decision you made in STEP 1. If you
 
 FLEX TREE FORMAT:
 Container: {{"id":"...", "direction":"row|column", "justifyContent":"start|end|center|space-between|space-evenly", "children":[...], "height":"40%", "width":"60%", "gap":16, "padding":20}}
-Text leaf: {{"id":"...", "type":"text", "text":"...", "height":"30%", "style":{{"fontSize":"xlarge|large|medium|small|xsmall|<px number>", "fontWeight":"900|700|400", "color":"#FFD700", "strokeColor":"#000", "strokeWidth":2, "align":"center|left|right", "backgroundColor":"rgba(0,0,0,0.5)", "lineHeight":1.2, "letterSpacing":2, "borderRadius":12, "textShadow":"2px 2px 4px rgba(0,0,0,0.5)", "opacity":0.8, "margin":10, "maxLines":3}}}}
+Text leaf: {{"id":"...", "type":"text", "text":"...", "height":"30%", "style":{{"fontSize":"xlarge|large|medium|small|xsmall|<px number>", "fontWeight":"900|700|400", "color":"#FFD700", "strokeColor":"#000", "strokeWidth":2, "align":"center|left|right", "backgroundColor":"rgba(0,0,0,0.5)", "lineHeight":1.2, "letterSpacing":2, "borderRadius":12, "textShadow":"2px 2px 4px rgba(0,0,0,0.5)", "opacity":0.8, "margin":10, "maxLines":3, "gradientOverlay":"to-bottom rgba(0,0,0,0) rgba(0,0,0,0.7)"}}}}
 Component leaf: {{"id":"...", "type":"component", "label":"must match available labels", "height":"50%"}}
 
 RULES:
@@ -74,6 +74,12 @@ RULES:
 - Hero/promo number = LARGEST element (fontSize "xlarge", fontWeight "900").
 - Group related elements together. Use strokeColor for readability on busy backgrounds.
 - READABILITY: If text is placed over a busy or bright area of the background, ADD "backgroundColor" with a semi-transparent dark color (e.g. "rgba(0,0,0,0.5)") to ensure the text is readable.
+- GRADIENT OVERLAY: For text readability over busy or bright backgrounds, use "gradientOverlay" on the CONTAINER that holds the text.
+  - Bottom text over bright bg: "to-bottom rgba(0,0,0,0) rgba(0,0,0,0.7)" on the parent container
+  - Top text over bright bg: "to-top rgba(0,0,0,0) rgba(0,0,0,0.6)"
+  - This is PREFERRED over backgroundColor for large areas because it looks more natural and professional.
+  - Use backgroundColor (solid/semi-transparent) for small elements like CTA buttons and badges.
+  - gradientOverlay creates a smooth fade that blends with the image. backgroundColor creates a hard box.
 - CTA BUTTON: For call-to-action text, ALWAYS use "backgroundColor" with a solid brand color (e.g. "#4B0082", "#E040FB") to make it look like a clickable button. Use contrasting text color.
 - fontSize can be a named size (xlarge/large/medium/small/xsmall) OR a pixel number (e.g. 48, 24, 14). Use px for precise control.
 - lineHeight: multiplier for line spacing (default 1.35). Use 1.0-1.2 for tight headers, 1.4-1.8 for body/footer.
