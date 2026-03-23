@@ -290,19 +290,19 @@ class VertexService:
             result = {
                 "layout_concept": strategy.get("layout_concept", "default"),
                 "dominant_element": strategy.get("dominant_element", ""),
-                "text_hierarchy": strategy.get("text_hierarchy", []) if isinstance(strategy.get("text_hierarchy"), list) else [],
                 "composition_notes": strategy.get("composition_notes", ""),
-                "recommended_text_zone": strategy.get("recommended_text_zone", "left"),
+                "layout_type": strategy.get("layout_type", "single-column"),
+                "image_analysis": strategy.get("image_analysis", {}),
             }
-            if isinstance(strategy.get("text_zone"), dict):
-                result["text_zone"] = strategy["text_zone"]
+            if isinstance(strategy.get("text_zones"), list) and strategy["text_zones"]:
+                result["text_zones"] = strategy["text_zones"]
             if isinstance(strategy.get("component_layout"), list) and strategy["component_layout"]:
                 result["component_layout"] = strategy["component_layout"]
             return result
         except Exception as err:
             print(f"[Plan] Strategy planning failed: {err}")
-            return {"layout_concept": "default", "dominant_element": "", "text_hierarchy": [],
-                    "composition_notes": "", "recommended_text_zone": "left"}
+            return {"layout_concept": "default", "dominant_element": "",
+                    "composition_notes": "", "layout_type": "single-column"}
 
     async def suggest_campaign_layout(
         self,
@@ -355,7 +355,7 @@ class VertexService:
             hint_block = (
                 f'\nART DIRECTOR STRATEGY:\nConcept: {layout_hint["layout_concept"]}\n'
                 f'Dominant: "{layout_hint.get("dominant_element", "")}"\n'
-                f'Hierarchy: {" › ".join(layout_hint.get("text_hierarchy", []))}\n'
+                f'Layout type: {layout_hint.get("layout_type", "single-column")}\n'
                 f'Notes: {layout_hint.get("composition_notes", "")}\n'
             )
 
@@ -1254,15 +1254,25 @@ class VertexService:
 
         layout_strategy_section = ""
         if layout_strategy:
-            layout_strategy_section = (
-                "LAYOUT STRATEGY (from Art Director):\n"
-                f'- Concept: "{layout_strategy.get("layout_concept", "")}"\n'
-                f'- Dominant element: "{layout_strategy.get("dominant_element", "")}"\n'
-                f'- Recommended text zone: "{layout_strategy.get("recommended_text_zone", "")}"\n'
-                f"- Text hierarchy: {layout_strategy.get('text_hierarchy', [])}\n"
-                f'- Notes: "{layout_strategy.get("composition_notes", "")}"\n'
-                "Follow this strategy — do NOT contradict it.\n\n"
-            )
+            lines = [
+                "LAYOUT STRATEGY (from Art Director):",
+                f'- Concept: "{layout_strategy.get("layout_concept", "")}"',
+                f'- Dominant element: "{layout_strategy.get("dominant_element", "")}"',
+                f'- Layout type: "{layout_strategy.get("layout_type", "single-column")}"',
+                f'- Notes: "{layout_strategy.get("composition_notes", "")}"',
+            ]
+            img_analysis = layout_strategy.get("image_analysis", {})
+            if img_analysis:
+                lines.append(f'- Subject position: "{img_analysis.get("subject_position", "")}"')
+                lines.append(f'- Clean areas: {img_analysis.get("clean_areas", [])}')
+                lines.append(f'- Busy areas: {img_analysis.get("busy_areas", [])}')
+            text_zones = layout_strategy.get("text_zones", [])
+            if text_zones:
+                lines.append("- Text zones:")
+                for tz in text_zones:
+                    lines.append(f'  * {tz.get("zone", "")}: {tz.get("content", "")} (top:{tz.get("top", 0)} left:{tz.get("left", 0)} w:{tz.get("width", 0)} h:{tz.get("height", 0)})')
+            lines.append("Use this strategy as guidance for your placement decisions.\n")
+            layout_strategy_section = "\n".join(lines) + "\n"
 
         no_go_zones_section = ""
         if no_go_zones:
@@ -1270,7 +1280,27 @@ class VertexService:
                 f'- "Detected Subject" at [top: {z.get("top", 0)}, left: {z.get("left", 0)}, width: {z.get("width", 0)}, height: {z.get("height", 0)}]'
                 for z in no_go_zones
             )
-            no_go_zones_section = f"SUBJECT POSITIONS (avoid placing text here):\n{lines}\n\n"
+            no_go_zones_section = f"SUBJECT POSITIONS (avoid placing text here):\n{lines}\n"
+
+            # Compute safe zones from no-go zones and pass them as preferred text areas
+            from app.utils.safe_zones import BBox, compute_safe_zones
+            obstacles = [
+                BBox(
+                    top=z.get("top", 0), left=z.get("left", 0),
+                    width=z.get("width", 0), height=z.get("height", 0),
+                )
+                for z in no_go_zones
+            ]
+            safe = compute_safe_zones(obstacles)
+            if safe:
+                safe_lines = "\n".join(
+                    f'- Zone "{z.label}" at [top: {z.top:.0f}, left: {z.left:.0f}, width: {z.width:.0f}, height: {z.height:.0f}] (area: {z.area:.0f})'
+                    for z in safe[:5]
+                )
+                no_go_zones_section += f"\nSAFE ZONES (PREFERRED areas for text — these are clean/unobstructed):\n{safe_lines}\n"
+                no_go_zones_section += "PRIORITIZE placing text in these safe zones. The larger the area, the better the zone.\n\n"
+            else:
+                no_go_zones_section += "\n"
 
         image_description_section = ""
         if image_description:

@@ -21,7 +21,7 @@ def build_flex_layout_prompt(
   - Match the MOOD (premium, playful, tech-forward, etc.).
   - Do NOT copy text content from references — only copy their VISUAL STYLE."""
 
-    return f"""You are a master of 2D graphic design and visual composition.
+    return f"""You are a graphic designer. You LOOK at the background image first, then decide where text goes.
 
 {ref_section}{style_section}{image_description_section}{layout_strategy_section}{no_go_zones_section}CAMPAIGN TEXT:
 {target_text}
@@ -30,68 +30,85 @@ def build_flex_layout_prompt(
 {footer_section}
 CANVAS: {canvas_size["w"]}x{canvas_size["h"]}px
 
-STEP 1 — DEEP DESIGN THINKING in <layout_thought>...</layout_thought>
-You are the designer. Think deeply and make deliberate choices — do not leave any style decision to chance.
+Think like a real designer — image first, then text.
 
-a) CAMPAIGN VIBE: What feeling does this campaign convey? How should the typography and colors reflect that?
-b) VISUAL HIERARCHY: Which text is the HERO? Plan the reading order — what grabs attention 1st, 2nd, 3rd? How will font sizes create that hierarchy?
-c) BACKGROUND ANALYSIS: Look at the background image carefully. Where is it busy vs clean? Where are dark vs light areas? For each text node you plan to place, ask: "Will this text be readable HERE without any treatment?" If not, decide what treatment to use (textShadow, strokeColor, semi-transparent backgroundColor, or a combination).
-d) STYLE DECISIONS PER NODE: For EVERY text node, explicitly decide and write down:
-   - fontSize + fontWeight → proportional to its importance
-   - color → fits the vibe and contrasts with what's behind it
-   - readability treatment → textShadow / strokeColor / backgroundColor / none, and WHY
-   - spacing → letterSpacing for premium feel, lineHeight for density
-   - special treatment → borderRadius for badges, backgroundColor for CTAs/tags
-e) SIZE PROPORTIONS: Each node's height% should match its content. A single-line badge needs much less height than a multi-line paragraph. Ask yourself: "Is this box too tall for the text inside it?"
-f) REFERENCE STYLE: If references are provided, identify specific traits to borrow (color palette, text treatment style, spacing rhythm, typography choices) — don't just note them, USE them in your style decisions above.
+STEP 1 — LOOK AT THE IMAGE in <layout_thought>...</layout_thought>
 
-STEP 2 — ELEMENT GROUPING in <grouping>...</grouping>
-Group related text elements together. Think like a real designer:
-- Which elements belong together visually? (e.g. date + price + platform could be one row group)
-- Would placing some elements side-by-side (row) create a more interesting layout than stacking everything vertically?
-- Don't just list elements top-to-bottom — create STRUCTURE with nested containers.
-- A flat column of 8+ children is lazy design. Group into 3-4 logical sections with rows inside.
-STEP 3 — FLEX TREE JSON:
-CRITICAL: Your JSON MUST reflect every style decision you made in STEP 1. If you decided a node needs textShadow — put it in the style object. If you decided a node needs backgroundColor — put it in. Do NOT think about styles in STEP 1 and then output bare JSON with only fontSize and color. Every node's style object should contain ALL the properties you reasoned about.
+a) SCAN THE IMAGE: Describe what you see. Where is the subject? Where are CLEAN areas (sky, solid color, blur, empty space)? Where are BUSY areas (people, objects, details)?
+
+b) CHOOSE A LAYOUT STRATEGY based on what you see:
+   - Subject in center? -> Text at top + bottom, framing the subject.
+   - Subject on left? -> Text on right side.
+   - Subject at bottom? -> Text at top.
+   - Clean sky at top? -> Headlines go there.
+   - Busy everywhere? -> Use gradient overlay or semi-transparent background panels.
+   Write your strategy clearly: "I will place text in [area] because [reason]."
+
+c) PLACEMENT — For EACH text element, decide:
+   - WHERE on the image it goes (e.g. "top-left over the sky", "bottom-right over the road")
+   - WHY that spot (e.g. "clean area, good contrast", "near related content")
+   - WHAT readability treatment it needs based on what's behind it:
+     * Clean light area -> dark text + subtle textShadow
+     * Clean dark area -> light text + subtle textShadow
+     * Busy area -> gradientOverlay on container, OR backgroundColor, OR bold strokeColor
+   EVERY text node MUST have at least one readability treatment. No exceptions.
+
+d) HIERARCHY: Which text is the HERO (largest)? What's the reading order?
+
+STEP 2 — GROUPING in <grouping>...</grouping>
+Based on your placement decisions, group elements that are spatially near each other.
+- Elements in the same area of the image -> same container.
+- Two parallel sections (left/right, before/after)? -> Use a "row" container with two "column" children.
+- Don't stack everything in one flat column — create structure.
+
+STEP 3 — FLEX TREE JSON
+Translate your placement and grouping into a flex tree.
+Your flex tree MUST reflect the placement decisions from Step 1.
+
+CRITICAL RULE: height% directly controls WHERE on the canvas the content appears.
+- If you decided "headline at the top over the sky (top 25%)" -> headline container height ~20%, placed first.
+- If the subject occupies the middle 30-50% of the image -> add an EMPTY SPACER container there to keep it clear.
+- If footer goes at the bottom -> footer is the last child.
+
+Example — subject in center, text above and below:
+{{"id":"root", "direction":"column", "justifyContent":"start", "padding":20, "children":[
+  {{"id":"top-content", "direction":"column", "height":"30%", "children":[...]}},
+  {{"id":"spacer", "direction":"column", "height":"35%", "children":[]}},
+  {{"id":"bottom-content", "direction":"column", "height":"30%", "children":[...]}},
+  {{"id":"footer", "type":"text", "text":"...", "height":"5%", "style":{{...}}}}
+]}}
+
+The spacer is an EMPTY container that reserves space for the subject/visual. Use it to AVOID placing text over busy areas. Adjust spacer height based on where the subject is in the image.
+
 {{"flexTree": {{...}}, "campaign_vibe": "...", "background_description": "..."}}
 
 FLEX TREE FORMAT:
 Container: {{"id":"...", "direction":"row|column", "justifyContent":"start|end|center|space-between|space-evenly", "children":[...], "height":"40%", "width":"60%", "gap":16, "padding":20}}
-Text leaf: {{"id":"...", "type":"text", "text":"...", "height":"30%", "style":{{"fontSize":"xlarge|large|medium|small|xsmall|<px number>", "fontWeight":"900|700|400", "color":"#FFD700", "strokeColor":"#000", "strokeWidth":2, "align":"center|left|right", "backgroundColor":"rgba(0,0,0,0.5)", "lineHeight":1.2, "letterSpacing":2, "borderRadius":12, "textShadow":"2px 2px 4px rgba(0,0,0,0.5)", "opacity":0.8, "margin":10, "maxLines":3, "gradientOverlay":"to-bottom rgba(0,0,0,0) rgba(0,0,0,0.7)"}}}}
+Spacer: {{"id":"spacer", "direction":"column", "height":"30%", "children":[]}}
+Text leaf: {{"id":"...", "type":"text", "text":"...", "height":"30%", "style":{{...}}}}
 Component leaf: {{"id":"...", "type":"component", "label":"must match available labels", "height":"50%"}}
 
+STYLE PROPERTIES:
+fontSize: "xlarge|large|medium|small|xsmall" or px number (e.g. 48)
+fontWeight: "900|700|400"
+color: hex (e.g. "#FFFFFF")
+strokeColor + strokeWidth: text outline for readability
+backgroundColor: solid or rgba for panels/badges/CTAs (use borderRadius for rounded corners)
+textShadow: "Xpx Ypx BLURpx COLOR" — supports multiple layers with comma: "0px 0px 10px rgba(255,215,0,0.6), 2px 2px 4px rgba(0,0,0,0.5)"
+gradientOverlay: "to-bottom rgba(0,0,0,0) rgba(0,0,0,0.7)" — on CONTAINERS for natural readability fade
+align: "left|center|right"
+lineHeight: multiplier (1.0-1.2 for headers, 1.4-1.8 for body)
+letterSpacing: px (1-4 for premium headlines)
+opacity, margin, maxLines, borderRadius
+
 RULES:
-- Every text line from the CAMPAIGN TEXT MUST appear as a text leaf.
-- Use ONLY the EXACT text from CAMPAIGN TEXT. Do NOT rephrase, annotate, or add words. For example, if the brief says "SCBSBUSD6M1" do NOT output "ชื่อกองคือ SCBSBUSD6M1". You may split or combine lines for layout purposes, but the WORDS must come verbatim from the brief.
-- ONLY create component leaves for labels listed in "Available die-cut components" above. If none are listed, use ZERO component nodes.
-- Do NOT invent component nodes for elements mentioned in the brief text (logos, mockups, etc.) unless they appear in the available components list.
-- Do NOT create text nodes for visual elements described in the brief (e.g. "Phone mockup", "logo", "badge", "image", "icon", "screenshot"). If the brief describes a visual element but no die-cut exists for it, SKIP it entirely — do NOT create a placeholder, description, or "[...]" bracket text for it.
-- ONLY create text nodes for ACTUAL READABLE TEXT that should appear on the final design (headlines, subtext, fund names, dates, CTA text, disclaimers, etc.).
-- Root is always "column" with padding. Use "row" inside for horizontal groupings.
-- FULL CANVAS USAGE: Use the entire canvas height. Use justifyContent "space-between" on the ROOT container so content spreads from top to bottom with footer pinned at the bottom.
-- NO OVERLAPPING: Each child's height% must give it enough vertical space for its text. Headlines need at least 10-15%, body text 8-12%, footer 5-8%.
-- justifyContent: Controls distribution of children within a container. Use "space-between" for root (pushes footer to bottom). Use "center" to vertically center a group. Default is "start" (stack from top).
-- Hero/promo number = LARGEST element (fontSize "xlarge", fontWeight "900").
-- Group related elements together. Use strokeColor for readability on busy backgrounds.
-- READABILITY: If text is placed over a busy or bright area of the background, ADD "backgroundColor" with a semi-transparent dark color (e.g. "rgba(0,0,0,0.5)") to ensure the text is readable.
-- GRADIENT OVERLAY: For text readability over busy or bright backgrounds, use "gradientOverlay" on the CONTAINER that holds the text.
-  - Bottom text over bright bg: "to-bottom rgba(0,0,0,0) rgba(0,0,0,0.7)" on the parent container
-  - Top text over bright bg: "to-top rgba(0,0,0,0) rgba(0,0,0,0.6)"
-  - This is PREFERRED over backgroundColor for large areas because it looks more natural and professional.
-  - Use backgroundColor (solid/semi-transparent) for small elements like CTA buttons and badges.
-  - gradientOverlay creates a smooth fade that blends with the image. backgroundColor creates a hard box.
-- CTA BUTTON: For call-to-action text, ALWAYS use "backgroundColor" with a solid brand color (e.g. "#4B0082", "#E040FB") to make it look like a clickable button. Use contrasting text color.
-- fontSize can be a named size (xlarge/large/medium/small/xsmall) OR a pixel number (e.g. 48, 24, 14). Use px for precise control.
-- lineHeight: multiplier for line spacing (default 1.35). Use 1.0-1.2 for tight headers, 1.4-1.8 for body/footer.
-- letterSpacing: px between characters. Use 1-4 for premium headlines, -1 for tight body text. Default 0.
-- borderRadius: px for rounded corners on backgroundColor rects. Use for badges, tags, buttons.
-- textShadow: CSS-like shadow. Supports MULTIPLE layers separated by comma:
-  - Subtle readability: "1px 1px 3px rgba(0,0,0,0.5)"
-  - Strong drop shadow: "2px 2px 6px rgba(0,0,0,0.8)"
-  - Glow effect (premium/promo): "0px 0px 10px rgba(255,215,0,0.6), 0px 0px 20px rgba(255,215,0,0.3)"
-  - Depth + glow: "0px 0px 8px rgba(255,255,255,0.4), 2px 2px 4px rgba(0,0,0,0.6)"
-  USE glow for hero/promo text to make it pop. USE multi-layer for depth.
-- opacity: 0.0-1.0 for transparency. Use for watermarks or subtle text.
-- margin: px inset from all sides of the node's allocated box. Use to add breathing room.
-- maxLines: limit text to N lines. Use for footer/disclaimer truncation.
-- FOOTER/DISCLAIMER: Must have small height (3-5%), fontSize "xsmall" or 10-12px, and lineHeight 1.1. Footer should be compact, not take up large canvas space.{style_matching_rules}"""
+- Use ONLY the EXACT text from CAMPAIGN TEXT. Do NOT rephrase or add words.
+- If the brief contains positioning instructions (x%, y%, px sizes, font specs) — IGNORE them. YOU decide layout based on the IMAGE.
+- ONLY create component leaves for labels listed in available die-cut components. Do NOT invent components.
+- Do NOT create text nodes for visual elements described in the brief (mockups, logos, icons) unless they exist as die-cut components.
+- Root is always "column" with padding and justifyContent "start" (NOT "space-between" — you control placement with explicit height% and spacers).
+- Height% of each node should match its content — a single-line badge needs much less than a multi-line paragraph.
+- Use SPACER containers (empty children:[]) to reserve space for the subject/visual in the image. This is how you avoid placing text over busy areas.
+- CTA buttons: ALWAYS use backgroundColor with a brand color + contrasting text.
+- Footer/disclaimer: small height (3-5%), fontSize "xsmall" or 10-12px, lineHeight 1.1.
+- Hero/promo = LARGEST element (fontSize "xlarge", fontWeight "900").{style_matching_rules}"""

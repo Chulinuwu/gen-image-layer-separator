@@ -136,6 +136,22 @@ frontend/src/
 
 **State flow:** `App.vue` owns `sharedBackgroundUrl` and `sharedCampaignData`, passing them down as props.
 
+## Debugging & Inspection
+
+### AI Trace Logs
+All AI calls (layout reasoning, critique, diecut, etc.) are logged to `backend-python/logs/ai-trace.md`. Check here to inspect what the AI decided and why -- includes full prompts and raw responses. Look for "Flex Layout Thought" entries to see the AI's placement reasoning vs the actual flex tree it generated.
+
+### Campaign Pipeline Flow
+The campaign creation SSE endpoint (`create_campaign` in `controllers/image.py`) runs this pipeline:
+1. RMBG prescan -> foreground detection + bounding boxes
+2. Component placement -> AI identifies visual components
+3. Die-cut & inpaint -> extract components + clean background
+4. Layout strategy -> AI plans layout concept
+5. **Flex layout** -> AI generates flex tree (`prompts/flex_layout.py`) -> `compute_flex_layout()` converts to absolute positions -> `build_flex_svg()` renders SVG
+6. Refinement loop (optional) -> AI critique + re-layout
+
+To debug layout issues, check step 5 in the trace logs.
+
 ## Important Technical Notes
 
 ### Gemini Model Location

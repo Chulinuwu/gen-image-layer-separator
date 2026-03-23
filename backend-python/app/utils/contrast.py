@@ -18,11 +18,23 @@ def contrast_ratio(color1: tuple[int, int, int], color2: tuple[int, int, int]) -
     return (lighter + 0.05) / (darker + 0.05)
 
 
-def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+def _hex_to_rgb(hex_color: str) -> tuple[int, int, int] | None:
+    import re
+    hex_color = hex_color.strip()
+    # Handle rgb/rgba
+    m = re.match(r"rgba?\((\d+),\s*(\d+),\s*(\d+)", hex_color)
+    if m:
+        return int(m.group(1)), int(m.group(2)), int(m.group(3))
+    # Handle hex
     h = hex_color.lstrip("#")
     if len(h) == 3:
         h = h[0] * 2 + h[1] * 2 + h[2] * 2
-    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    if len(h) < 6:
+        return None
+    try:
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except ValueError:
+        return None
 
 
 def _sample_avg_color(img: Image.Image, x: int, y: int, w: int, h: int) -> tuple[int, int, int]:
@@ -50,6 +62,8 @@ def check_text_contrast(
     results = []
     for box in text_boxes:
         fg = _hex_to_rgb(box["color"])
+        if fg is None:
+            continue
         bg = _sample_avg_color(
             img,
             int(box["x"]), int(box["y"]),
