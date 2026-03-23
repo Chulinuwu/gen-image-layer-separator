@@ -231,6 +231,24 @@ def _resolve_font_size(style: FlexNodeStyle, box_h: float) -> int:
     return max(12, round(box_h * ratio))
 
 
+def _parse_text_shadows(shadow_str: str) -> list[dict]:
+    shadows = []
+    parts = _re.split(r",\s*(?=-?[\d])", shadow_str)
+    for part in parts:
+        part = part.strip()
+        match = _re.match(
+            r"(-?[\d.]+)px\s+(-?[\d.]+)px\s+([\d.]+)px\s+(.*)", part
+        )
+        if match:
+            shadows.append({
+                "dx": match.group(1),
+                "dy": match.group(2),
+                "blur": match.group(3),
+                "color": match.group(4).strip(),
+            })
+    return shadows
+
+
 def _render_text_box(box: LayoutBox, clip_id: str) -> tuple[list[str], list[str]]:
     defs: list[str] = []
     elements: list[str] = []
@@ -283,14 +301,29 @@ def _render_text_box(box: LayoutBox, clip_id: str) -> tuple[list[str], list[str]
     shadow_filter_id = ""
     if style.textShadow:
         shadow_filter_id = f"shadow-{clip_id}"
-        parts = style.textShadow.split()
-        dx = parts[0].replace("px", "") if len(parts) > 0 else "2"
-        dy = parts[1].replace("px", "") if len(parts) > 1 else "2"
-        blur = parts[2].replace("px", "") if len(parts) > 2 else "3"
-        shadow_color = parts[3] if len(parts) > 3 else "rgba(0,0,0,0.5)"
-        defs.append(f'    <filter id="{shadow_filter_id}">')
-        defs.append(f'      <feDropShadow dx="{dx}" dy="{dy}" stdDeviation="{blur}" flood-color="{shadow_color}" flood-opacity="0.5" />')
-        defs.append(f'    </filter>')
+        parsed_shadows = _parse_text_shadows(style.textShadow)
+        if parsed_shadows:
+            drops = ""
+            for s in parsed_shadows:
+                flood_opacity = "0.5"
+                flood_color = s["color"]
+                rgba = _re.match(
+                    r"rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)",
+                    s["color"],
+                )
+                if rgba:
+                    flood_color = f"rgb({rgba.group(1)},{rgba.group(2)},{rgba.group(3)})"
+                    flood_opacity = rgba.group(4) or "1"
+                drops += (
+                    f'<feDropShadow dx="{s["dx"]}" dy="{s["dy"]}" '
+                    f'stdDeviation="{s["blur"]}" '
+                    f'flood-color="{flood_color}" flood-opacity="{flood_opacity}"/>'
+                )
+            defs.append(f'    <filter id="{shadow_filter_id}">')
+            defs.append(f"      {drops}")
+            defs.append(f"    </filter>")
+        else:
+            shadow_filter_id = ""
 
     stroke_attrs = ""
     if style.strokeColor:
@@ -430,17 +463,26 @@ def build_flex_svg(input: FlexSVGInput) -> FlexSVGResult:
             f'fill="url(#{grad_id})"/>'
         )
 
-    # Component images
+    # Component images with automatic drop shadow
     comp_images = input.component_images or {}
     for box in boxes:
         if box.type == "component":
             img_url = comp_images.get(box.label or "", "")
             if img_url:
+                shadow_id = f"comp-shadow-{box.id}"
                 svg_lines.append(
-                    f'  <image id="{_escape_xml(box.id)}" data-role="component" data-label="{_escape_xml(box.label or "")}" '
+                    f'  <filter id="{shadow_id}" x="-10%" y="-10%" width="130%" height="130%">'
+                    f'<feDropShadow dx="3" dy="5" stdDeviation="6" '
+                    f'flood-color="rgb(0,0,0)" flood-opacity="0.35"/>'
+                    f'</filter>'
+                )
+                svg_lines.append(
+                    f'  <image id="{_escape_xml(box.id)}" data-role="component" '
+                    f'data-label="{_escape_xml(box.label or "")}" '
                     f'href="{_escape_xml(img_url)}" '
                     f'x="{box.x}" y="{box.y}" width="{box.w}" height="{box.h}" '
-                    f'preserveAspectRatio="xMidYMid meet" />'
+                    f'preserveAspectRatio="xMidYMid meet" '
+                    f'filter="url(#{shadow_id})"/>'
                 )
 
     # Text elements

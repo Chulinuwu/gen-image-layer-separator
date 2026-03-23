@@ -78,6 +78,22 @@ def test_border_radius_on_any_node():
     assert 'rx="12"' in result.svg
 
 
+def test_component_drop_shadow():
+    boxes = [
+        LayoutBox(
+            id="product", type="component", x=100, y=100, w=200, h=200,
+            label="phone",
+        )
+    ]
+    result = build_flex_svg(FlexSVGInput(
+        boxes=boxes, canvas_w=500, canvas_h=500,
+        component_images={"phone": "https://example.com/phone.png"},
+    ))
+    assert "comp-shadow" in result.svg
+    assert "feDropShadow" in result.svg
+    assert 'filter="url(#comp-shadow' in result.svg
+
+
 def test_text_shadow():
     box = LayoutBox(id="t", type="text", x=0, y=0, w=400, h=100, text="Shadow",
                     style=FlexNodeStyle(fontSize="large", textShadow="2px 2px 4px rgba(0,0,0,0.5)",
@@ -93,6 +109,41 @@ def test_max_lines():
     result = build_flex_svg(FlexSVGInput(boxes=[box], canvas_w=300, canvas_h=100))
     tspan_count = result.svg.count("<tspan")
     assert tspan_count <= 2
+
+
+def test_multi_layer_shadow():
+    boxes = [
+        LayoutBox(
+            id="glow-text", type="text", x=0, y=0, w=500, h=100,
+            text="Glow",
+            style=FlexNodeStyle(
+                fontSize="large", color="#FFFFFF",
+                textShadow="0px 0px 8px rgba(255,215,0,0.8), 0px 2px 4px rgba(0,0,0,0.5)",
+            ),
+        )
+    ]
+    result = build_flex_svg(FlexSVGInput(
+        boxes=boxes, canvas_w=500, canvas_h=500,
+    ))
+    assert result.svg.count("feDropShadow") == 2
+
+
+def test_glow_shadow():
+    boxes = [
+        LayoutBox(
+            id="glow", type="text", x=0, y=0, w=500, h=100,
+            text="Glow",
+            style=FlexNodeStyle(
+                fontSize="large", color="#FFFFFF",
+                textShadow="0px 0px 12px rgba(255,255,255,0.6)",
+            ),
+        )
+    ]
+    result = build_flex_svg(FlexSVGInput(
+        boxes=boxes, canvas_w=500, canvas_h=500,
+    ))
+    assert "feDropShadow" in result.svg
+    assert 'stdDeviation="12"' in result.svg
 
 
 def test_gradient_overlay():
