@@ -1473,5 +1473,48 @@ class VertexService:
         trace_ai("Text Zone Planner", prompt, raw)
         return data
 
+    async def validate_bg_constraints(
+        self,
+        image_buffer: bytes,
+        text_zones: list[dict],
+    ) -> dict:
+        if not text_zones:
+            return {"result": "PASS"}
+
+        proc_buf, proc_mime = _resize_for_processing(image_buffer, STRATEGY_RESIZE_W, STRATEGY_RESIZE_QUALITY)
+        model = self._text_model()
+
+        zones_desc = "; ".join(
+            f"{z.get('role', 'text')} at {z.get('region', 'unknown')} ({z.get('height_pct', '?')}% height)"
+            for z in text_zones
+        )
+        prompt = (
+            f"You are a background image quality checker for advertisement layouts.\n\n"
+            f"The following text zones need clean, uncluttered background areas:\n{zones_desc}\n\n"
+            f"Examine the image and determine if each text zone has a sufficiently clean and uncluttered "
+            f"area (low visual complexity, good contrast potential) for legible text overlay.\n\n"
+            f"Respond ONLY with valid JSON in this exact format:\n"
+            f'{{"result": "PASS", "suggestions": "..."}}\n'
+            f"or\n"
+            f'{{"result": "FAIL", "suggestions": "brief description of what needs to change"}}\n\n'
+            f"Use FAIL only if text zones are clearly blocked by busy patterns or high-contrast objects. "
+            f"When in doubt, use PASS."
+        )
+
+        try:
+            response = await self._generate_content(
+                model,
+                [_inline_data(proc_buf, proc_mime), {"text": prompt}],
+                {"temperature": 0.3},
+            )
+            raw = (response.text or "").strip()
+            trace_ai("BG Constraints Validation", prompt, raw)
+            data = _repair_json(_clean_json(raw))
+            if data.get("result") not in ("PASS", "FAIL"):
+                return {"result": "PASS"}
+            return data
+        except Exception:
+            return {"result": "PASS"}
+
 
 vertex_service = VertexService()
