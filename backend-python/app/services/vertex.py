@@ -14,7 +14,7 @@ from google.genai import types as genai_types
 from google.oauth2 import service_account
 
 from app.config import get_settings
-from app.utils.ai_logger import trace_ai
+from app.utils.ai_logger import trace_ai, log_event
 from app.utils.flex_layout import FlexNode
 from app.constants.pipeline import (
     PROCESSING_MAX_W, PROCESSING_QUALITY, STRATEGY_RESIZE_W, STRATEGY_RESIZE_QUALITY,

@@ -88,6 +88,16 @@ CAMPAIGN TEXT:
 {footer_section}
 CANVAS: {canvas_size["w"]}x{canvas_size["h"]}px
 
+TEXT SIZING REFERENCE (Kanit font, approximate height per line including line spacing):
+  fontSize 48+ -> ~65px per line
+  fontSize 42  -> ~55px per line
+  fontSize 30  -> ~42px per line
+  fontSize 24  -> ~34px per line
+  fontSize 18  -> ~26px per line
+Use this to calculate height%: (lines * px_per_line + padding) / {canvas_size["h"]} * 100.
+Example: 3 lines at fontSize 18 with lineHeight 1.4 = 3 * 26 * 1.4 = ~110px. On a {canvas_size["h"]}px canvas = {round(110 / canvas_size["h"] * 100)}%.
+Always add ~20px padding per container. If text doesn't fit the box, it gets CLIPPED -- so size generously.
+
 YOUR TASK: Translate the design plan above into a flex tree JSON. Every treatment decision in the plan (backgroundColor, textShadow, gradientOverlay, strokeColor, etc.) MUST appear in the flex tree output. Do NOT skip any treatments.
 
 Output ONLY the JSON object:
@@ -116,11 +126,16 @@ BACKGROUND EFFECTS (canvas-level, in "backgroundEffects" array):
 - Linear fade: {{"type": "linear-fade", "from": "bottom|top|left|right", "color": "rgba(0,0,0,0.7)", "size": "40%"}}
 - Radial fade: {{"type": "radial-fade", "center": "50% 50%", "radius": "70%", "color": "rgba(0,0,0,0.4)"}}
 
+SIZING RULES:
+- EVERY container and text node MUST have an explicit height% (except children inside a row container, which need width% instead).
+- Nodes without height% will split remaining space equally, which causes text boxes to be too small or too large. ALWAYS specify height%.
+- Size proportional to content: a single-line title needs ~5-8%, a 3-line body paragraph needs ~12-18%, a spacer over the subject needs 30-50%.
+- Before outputting, verify: do any text nodes share unsized space? If yes, add explicit height% to each.
+
 RULES:
 - Use ONLY the EXACT text from CAMPAIGN TEXT. Do NOT rephrase or add words.
 - ONLY create component leaves for labels listed in available die-cut components.
 - Root is always "column" with padding and justifyContent "start".
-- Height% of each node should match its content.
 - Use SPACER containers (empty children:[]) to reserve space for the subject/visual.
 - TOTAL HEIGHT: All direct children height% in root MUST add up to EXACTLY 100%.
 - Footer/disclaimer is handled separately by the system. Do NOT include footer text.

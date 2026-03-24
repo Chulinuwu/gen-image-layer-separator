@@ -266,15 +266,8 @@ def _render_text_box(box: LayoutBox, clip_id: str) -> tuple[list[str], list[str]
     box_padding = 20 if style.backgroundColor else 4
     max_text_width = box.w - box_padding * 2
 
-    start_font = _resolve_font_size(style, box.h)
-    min_font = max(12, round(start_font * 0.15))
-
-    font_size = max(min_font, start_font)
+    font_size = _resolve_font_size(style, box.h)
     wrapped = wrap_text(text, max_text_width, font_size, font_weight)
-
-    while wrapped.total_height > box.h * 0.95 and font_size > min_font:
-        font_size = max(min_font, round(font_size * 0.9))
-        wrapped = wrap_text(text, max_text_width, font_size, font_weight)
 
     if style.maxLines and len(wrapped.lines) > style.maxLines:
         wrapped = type(wrapped)(
