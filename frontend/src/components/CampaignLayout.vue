@@ -1,11 +1,15 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick } from "vue";
+import { ref, computed, onMounted, watch, nextTick } from "vue";
 import AIRefinementPreview from "./AIRefinementPreview.vue";
 
 const props = defineProps({
   initialBackgroundUrl: String,
+  initialTextBrief: String,
+  initialTextZones: { type: Array, default: () => [] },
 });
 const emit = defineEmits(["created", "proceed"]);
+
+const integratedTextZones = ref<any[]>([]);
 
 const targetText = ref("SUMMER SALE 50%");
 const loading = ref(false);
@@ -51,6 +55,20 @@ onMounted(async () => {
       console.error("Failed to load initial background:", err);
     }
   }
+  if (props.initialTextBrief) {
+    targetText.value = props.initialTextBrief;
+  }
+  if (props.initialTextZones && (props.initialTextZones as any[]).length > 0) {
+    integratedTextZones.value = props.initialTextZones as any[];
+  }
+});
+
+watch(() => props.initialTextBrief, (val) => {
+  if (val) targetText.value = val;
+});
+
+watch(() => props.initialTextZones, (val) => {
+  if (val && (val as any[]).length > 0) integratedTextZones.value = val as any[];
 });
 
 const onFileChange = (e: any) => {
@@ -77,6 +95,9 @@ const createCampaign = async () => {
   formData.append("image", selectedFile.value);
   formData.append("text", targetText.value);
   formData.append("mode", mode.value);
+  if (integratedTextZones.value.length > 0) {
+    formData.append("textZoneHints", JSON.stringify(integratedTextZones.value));
+  }
 
   console.log("Opening refinement view...");
   showRefinement.value = true;
@@ -201,7 +222,12 @@ const useGeneratedBg = () => {
         </div>
 
         <div class="mb-4">
-          <label class="label">Campaign Text Brief</label>
+          <label class="label">
+            Campaign Text Brief
+            <span v-if="integratedTextZones.length > 0" class="zone-hint-badge">
+              {{ integratedTextZones.length }} zone hint{{ integratedTextZones.length !== 1 ? 's' : '' }} active
+            </span>
+          </label>
           <textarea
             v-model="targetText"
             placeholder="Paste your ad brief, headlines, bullet points, or fine print here..."
@@ -654,5 +680,17 @@ textarea {
   max-width: 100%;
   border: 2px solid var(--border);
   border-radius: 8px;
+}
+
+.zone-hint-badge {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: #dbeafe;
+  color: #1d4ed8;
+  padding: 2px 8px;
+  border-radius: 12px;
+  vertical-align: middle;
 }
 </style>
