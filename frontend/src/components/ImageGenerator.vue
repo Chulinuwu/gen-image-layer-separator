@@ -6,37 +6,60 @@ const aspectRatio = ref("4:3");
 const loading = ref(false);
 const result = ref<any>(null);
 const error = ref("");
+const integratedMode = ref(false);
+const textBrief = ref("");
 
-const emit = defineEmits(["generated", "proceed"]);
+const API_BASE = "http://localhost:5001";
+
+const emit = defineEmits(["generated", "integrated-generated", "proceed"]);
 
 const generateImage = async () => {
   loading.value = true;
   error.value = "";
   result.value = null;
 
-  console.log("[Frontend] Generating image with aspect_ratio:", aspectRatio.value);
-
   try {
-    const formData = new FormData();
-    formData.append("prompt", prompt.value);
-    formData.append("aspect_ratio", aspectRatio.value);
+    if (integratedMode.value && textBrief.value.trim()) {
+      const response = await fetch(`${API_BASE}/api/image/generate-integrated`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text_brief: textBrief.value,
+          visual_concept: prompt.value,
+          aspect_ratio: aspectRatio.value,
+        }),
+      });
 
-    console.log("[Frontend] FormData contents:", {
-      prompt: prompt.value,
-      aspect_ratio: aspectRatio.value
-    });
-
-    const response = await fetch("http://localhost:5001/api/image/generate", {
-      method: "POST",
-      body: formData,
-    });
-
-    const data = await response.json();
-    if (data.success) {
-      result.value = data.data;
-      emit("generated", data.data.imageUrl);
+      const data = await response.json();
+      if (data.success) {
+        result.value = { imageUrl: data.data.imageUrl, text: data.data.text };
+        emit("generated", data.data.imageUrl);
+        emit("integrated-generated", {
+          url: data.data.imageUrl,
+          textBrief: textBrief.value,
+          textZones: data.data.textZones || [],
+          bgConstraints: data.data.bgConstraints || "",
+        });
+      } else {
+        error.value = data.error || "Failed to generate integrated image";
+      }
     } else {
-      error.value = data.error || "Failed to generate image";
+      const formData = new FormData();
+      formData.append("prompt", prompt.value);
+      formData.append("aspect_ratio", aspectRatio.value);
+
+      const response = await fetch(`${API_BASE}/api/image/generate`, {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        result.value = data.data;
+        emit("generated", data.data.imageUrl);
+      } else {
+        error.value = data.error || "Failed to generate image";
+      }
     }
   } catch (err: any) {
     error.value = err.message;
@@ -78,8 +101,24 @@ const goToCampaign = () => {
       </select>
     </div>
 
+    <div class="mb-4">
+      <label class="integrated-toggle">
+        <input type="checkbox" v-model="integratedMode" />
+        Integrated Mode (plan text layout with background)
+      </label>
+    </div>
+
+    <div v-if="integratedMode" class="mb-4">
+      <label class="label">Ad Text Brief</label>
+      <textarea
+        v-model="textBrief"
+        rows="4"
+        placeholder="Paste your ad copy, headlines, and key messages here..."
+      ></textarea>
+    </div>
+
     <button :disabled="loading" @click="generateImage">
-      {{ loading ? "Generating..." : "Generate Image" }}
+      {{ loading ? "Generating..." : integratedMode ? "Generate + Plan Layout" : "Generate Image" }}
     </button>
 
     <div v-if="error" class="error mt-4">{{ error }}</div>
@@ -87,13 +126,13 @@ const goToCampaign = () => {
     <div v-if="result" class="result mt-4">
       <h3>Result</h3>
       <div class="image-container">
-        <img :src="`http://localhost:5001${result.imageUrl}`" alt="Generated" />
+        <img :src="`${API_BASE}${result.imageUrl}`" alt="Generated" />
       </div>
       <p class="mt-4">{{ result.text }}</p>
 
       <div class="flex gap-4">
         <a
-          :href="`http://localhost:5001${result.imageUrl}`"
+          :href="`${API_BASE}${result.imageUrl}`"
           target="_blank"
           class="btn-link"
           >Open Full Image</a
@@ -171,5 +210,21 @@ const goToCampaign = () => {
   outline: none;
   border-color: #2563eb;
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.integrated-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.integrated-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
 }
 </style>
