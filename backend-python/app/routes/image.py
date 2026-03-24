@@ -83,6 +83,7 @@ async def route_create_campaign(
     text: str | None = Form(None),
     mode: str = Form(""),
     noGoZones: str | None = Form(None),
+    textZoneHints: str | None = Form(None),
 ):
     body = None
     if not image or not image.size:
@@ -90,7 +91,7 @@ async def route_create_campaign(
             body = await request.json()
         except Exception:
             pass
-    return await create_campaign(request, image, background, text, mode, noGoZones, body)
+    return await create_campaign(request, image, background, text, mode, noGoZones, body, textZoneHints)
 
 
 @router.post("/generate-integrated")

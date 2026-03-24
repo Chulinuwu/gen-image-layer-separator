@@ -51,3 +51,16 @@ def test_generate_integrated_missing_visual_concept(mock_vs, client):
     })
     assert resp.status_code == 400
     assert "visual_concept" in resp.json()["error"].lower()
+
+
+def test_create_campaign_accepts_text_zone_hints_no_422(client):
+    hints = '[{"role": "headline", "region": "top-center", "height_pct": 25, "description": "clear sky"}]'
+    resp = client.post(
+        "/api/image/create-campaign",
+        data={
+            "text": "SUMMER SALE",
+            "textZoneHints": hints,
+        },
+    )
+    # Should not be 422 (unprocessable entity) -- field is accepted by FastAPI
+    assert resp.status_code != 422

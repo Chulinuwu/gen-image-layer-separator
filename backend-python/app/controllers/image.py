@@ -677,6 +677,7 @@ async def _step_flex_layout(
     layout_strategy: dict | None = None,
     no_go_zones: list[dict] | None = None,
     image_description: str | None = None,
+    zone_hints: list[dict] | None = None,
 ) -> tuple[str, dict | None, list[dict], list]:
     # Reserve bottom 10% for footer (code-controlled, not AI)
     footer_reserve_ratio = 0.10 if footer_text else 0.0
@@ -693,6 +694,7 @@ async def _step_flex_layout(
             layout_strategy=layout_strategy,
             no_go_zones=no_go_zones,
             image_description=image_description,
+            zone_hints=zone_hints,
         )
     except RuntimeError as err:
         send_sse("error", {"error": str(err)})
@@ -956,6 +958,7 @@ async def create_campaign(
     mode: str,
     no_go_zones_raw: str | None,
     body: dict | None,
+    text_zone_hints_raw: str | None = None,
 ):
     async def event_generator():
         events: list[str] = []
@@ -998,6 +1001,15 @@ async def create_campaign(
                     parsed_no_go = json.loads(no_go_zones_raw) if isinstance(no_go_zones_raw, str) else no_go_zones_raw
                 except Exception:
                     pass
+
+            # Parse text zone hints
+            text_zone_hints: list[dict] = []
+            raw_hints = text_zone_hints_raw or (body.get("textZoneHints") if body else None)
+            if raw_hints:
+                try:
+                    text_zone_hints = json.loads(raw_hints) if isinstance(raw_hints, str) else raw_hints
+                except Exception:
+                    text_zone_hints = []
 
             # Save reference image
             ref_url = _save_upload(image_buffer, "ref")
@@ -1068,6 +1080,7 @@ async def create_campaign(
                         image_buffer, mime_type, target_text,
                         [c["label"] for c in visual_components],
                         current_positions,
+                        text_zone_hints=text_zone_hints or None,
                     )
                     # Apply plan's component positions
                     if layout_hint.get("component_layout"):
@@ -1153,6 +1166,7 @@ async def create_campaign(
                         layout_strategy=layout_hint if layout_hint else None,
                         no_go_zones=all_no_go or None,
                         image_description=image_description,
+                        zone_hints=text_zone_hints or None,
                     )
                     analysis["svg_overlay"] = svg_overlay
                     flex_tree = flex_result.get("flexTree")
