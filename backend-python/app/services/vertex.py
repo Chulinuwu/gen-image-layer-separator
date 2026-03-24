@@ -1448,5 +1448,26 @@ class VertexService:
             embedding = list(embed_resp.embeddings[0].values)
         return {"description": description, "embedding": embedding}
 
+    async def plan_text_zones(
+        self,
+        text_brief: str,
+        visual_concept: str,
+        aspect_ratio: str,
+    ) -> dict:
+        from app.prompts.text_zone_planner import build_text_zone_prompt
+        model = self._text_model()
+        prompt = build_text_zone_prompt(text_brief, visual_concept, aspect_ratio)
+        print(f"[TextZonePlanner] Calling {model}")
+        response = await self._generate_content(model, [{"text": prompt}], {"temperature": 0.5})
+        raw = (response.text or "").strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+        data = json.loads(raw)
+        trace_ai("Text Zone Planner", prompt, raw)
+        return data
+
 
 vertex_service = VertexService()
