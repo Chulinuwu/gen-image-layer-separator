@@ -9,6 +9,9 @@ const activeTab = ref("generate");
 // Shared Assets State
 const sharedBackgroundUrl = ref<string | undefined>(undefined);
 const sharedCampaignData = ref<any>(null);
+const sharedTextBrief = ref<string | undefined>(undefined);
+const sharedTextZones = ref<any[]>([]);
+const sharedBgConstraints = ref<string | undefined>(undefined);
 
 const onBackgroundGenerated = (url: string) => {
   sharedBackgroundUrl.value = url;
@@ -16,6 +19,13 @@ const onBackgroundGenerated = (url: string) => {
 
 const onCampaignCreated = (data: any) => {
   sharedCampaignData.value = data;
+};
+
+const onIntegratedGenerated = (payload: { url: string; textBrief: string; textZones: any[]; bgConstraints: string }) => {
+  sharedBackgroundUrl.value = payload.url;
+  sharedTextBrief.value = payload.textBrief;
+  sharedTextZones.value = payload.textZones;
+  sharedBgConstraints.value = payload.bgConstraints;
 };
 </script>
 
@@ -50,11 +60,14 @@ const onCampaignCreated = (data: any) => {
       <ImageGenerator
         v-if="activeTab === 'generate'"
         @generated="onBackgroundGenerated"
+        @integrated-generated="onIntegratedGenerated"
         @proceed="activeTab = 'campaign'"
       />
       <CampaignLayout
         v-if="activeTab === 'campaign'"
         :initialBackgroundUrl="sharedBackgroundUrl"
+        :initialTextBrief="sharedTextBrief"
+        :initialTextZones="sharedTextZones"
         @created="onCampaignCreated"
         @proceed="activeTab = 'editor'"
       />
