@@ -340,33 +340,11 @@ async def generate_integrated(request: Request):
     bg_constraints = plan.get("bg_constraints", "")
     text_zones = plan.get("text_zones", [])
 
-    enriched_prompt = f"{visual_concept}. {bg_constraints}" if bg_constraints else visual_concept
+    cohesion = "The entire image must look like ONE cohesive photograph with smooth, natural transitions between all elements. No hard edges, no collage effect, no pasted-on sections."
+    enriched_prompt = f"{visual_concept}. {cohesion} {bg_constraints}" if bg_constraints else visual_concept
 
-    max_retries = 2
-    result = None
-    validation_result = {"result": "PASS"}
-    current_prompt = enriched_prompt
-
-    for attempt in range(max_retries + 1):
-        print(f"[generate_integrated] Image generation attempt {attempt + 1}/{max_retries + 1}")
-        result = await vertex_service.generate_image(prompt=current_prompt, aspect_ratio=aspect_ratio)
-
-        if not result.get("buffer"):
-            break
-
-        validation_result = await vertex_service.validate_bg_constraints(result["buffer"], text_zones)
-        print(f"[generate_integrated] Validation attempt {attempt + 1}: {validation_result.get('result')}")
-
-        if validation_result.get("result") == "PASS":
-            break
-
-        if attempt < max_retries:
-            suggestions = validation_result.get("suggestions", "")
-            current_prompt = (
-                f"{enriched_prompt}. "
-                f"IMPORTANT: ensure clean uncluttered areas for text overlays. {suggestions}"
-            )
-            print(f"[generate_integrated] Retrying with stronger prompt due to validation FAIL")
+    # Generate BG with enriched prompt (no validation/retry for now)
+    result = await vertex_service.generate_image(prompt=enriched_prompt, aspect_ratio=aspect_ratio)
 
     if not result or not result.get("buffer"):
         return JSONResponse(
@@ -381,7 +359,7 @@ async def generate_integrated(request: Request):
             "imageUrl": url,
             "textZones": text_zones,
             "bgConstraints": bg_constraints,
-            "validationResult": validation_result.get("result", "PASS"),
+            "validationResult": "SKIPPED",
         },
     })
 
@@ -1302,6 +1280,293 @@ async def create_campaign(
                     "critiqueIterations": analysis.get("critique_iterations"),
                     "finalCritiqueStatus": analysis.get("final_critique_status"),
                     "finalCritiqueFeedback": analysis.get("final_critique_feedback"),
+                },
+            })
+            for e in events:
+                yield e
+
+        except Exception as error:
+            send_sse("error", {"error": str(error)})
+            for e in events:
+                yield e
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
+
+
+async def create_campaign_integrated(request: Request, body: dict):
+    async def event_generator():
+        events: list[str] = []
+
+        def send_sse(event: str, data: dict):
+            events.append(f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n")
+
+        try:
+            text_brief = body.get("text_brief")
+            visual_concept = body.get("visual_concept")
+            aspect_ratio = body.get("aspect_ratio", "3:4")
+            footer_text = body.get("footer_text", "")
+
+            if not text_brief:
+                send_sse("error", {"error": "text_brief is required"})
+                for e in events:
+                    yield e
+                return
+            if not visual_concept:
+                send_sse("error", {"error": "visual_concept is required"})
+                for e in events:
+                    yield e
+                return
+
+            # Step 1: Plan text zones
+            send_sse("progress", {"step": "planning_zones", "message": "Planning text zones..."})
+            for e in events:
+                yield e
+            events.clear()
+
+            plan = await vertex_service.plan_text_zones(text_brief, visual_concept, aspect_ratio)
+            bg_constraints = plan.get("bg_constraints", "")
+            text_zones = plan.get("text_zones", [])
+
+            send_sse("progress", {
+                "step": "zones_planned",
+                "message": f"Planned {len(text_zones)} text zones",
+                "textZones": text_zones,
+                "bgConstraints": bg_constraints,
+            })
+            for e in events:
+                yield e
+            events.clear()
+
+            # Step 2: Generate BG image
+            send_sse("progress", {"step": "generating_bg", "message": "Generating background image..."})
+            for e in events:
+                yield e
+            events.clear()
+
+            cohesion = "The entire image must look like ONE cohesive photograph with smooth, natural transitions between all elements. No hard edges, no collage effect, no pasted-on sections."
+            enriched_prompt = f"{visual_concept}. {cohesion} {bg_constraints}" if bg_constraints else visual_concept
+
+            result = await vertex_service.generate_image(prompt=enriched_prompt, aspect_ratio=aspect_ratio)
+            if not result or not result.get("buffer"):
+                send_sse("error", {"error": "Failed to generate background image"})
+                for e in events:
+                    yield e
+                return
+
+            image_buffer = result["buffer"]
+            mime_type = "image/png"
+            bg_url = _save_upload(image_buffer, "integrated-bg")
+
+            send_sse("progress", {"step": "bg_generated", "message": "Background generated", "imageUrl": bg_url})
+            for e in events:
+                yield e
+            events.clear()
+
+            # Step 3: Describe image + reference lookup
+            img = Image.open(BytesIO(image_buffer))
+            canvas_w, canvas_h = img.size
+            origin = f"{request.url.scheme}://{request.headers.get('host', 'localhost:5001')}"
+
+            ref_image_buffers: list[bytes] = []
+            ref_descriptions: list[str] = []
+            style_guide: str = ""
+            desc_result: dict = {}
+            image_description: str | None = None
+            try:
+                desc_result = await vertex_service.describe_and_embed(image_buffer, mime_type)
+                image_description = desc_result.get("description")
+                refs = find_similar_refs(desc_result["embedding"], 3)
+                if refs:
+                    ref_image_buffers = [Path(r["filepath"]).read_bytes() for r in refs]
+                    ref_descriptions = [r["description"] for r in refs]
+                    style_guide = extract_style_guide(refs)
+            except Exception as e:
+                print(f"[Integrated] Reference image search failed: {e}")
+
+            # Footer text from file if not provided
+            if not footer_text:
+                footer_path = Path(__file__).parent.parent.parent / "assets" / "Ref_Footer" / "footer.txt"
+                try:
+                    if footer_path.exists():
+                        footer_text = footer_path.read_text().strip()
+                except Exception:
+                    pass
+
+            # Step 4: Plan layout strategy
+            send_sse("progress", {"step": "planning_strategy", "message": "AI is planning layout strategy..."})
+            for e in events:
+                yield e
+            events.clear()
+
+            layout_hint: dict = {}
+            try:
+                layout_hint = await vertex_service.plan_layout_strategy(
+                    image_buffer, mime_type, text_brief,
+                    [],  # no component labels
+                    [],  # no current positions
+                    text_zone_hints=text_zones or None,
+                )
+                send_sse("progress", {
+                    "step": "strategy_planned",
+                    "message": f'Layout strategy: "{layout_hint.get("layout_concept", "")}"',
+                })
+            except Exception as e:
+                print(f"[Integrated] Plan phase failed: {e}")
+
+            for e in events:
+                yield e
+            events.clear()
+
+            # Step 5: Flex layout (thought + tree -> compute -> SVG)
+            send_sse("progress", {"step": "generating_layout", "message": "AI is generating layout..."})
+            for e in events:
+                yield e
+            events.clear()
+
+            visual_components: list[dict] = []
+            component_suggestions: list[dict] = []
+            svg_overlay = ""
+            flex_tree = None
+            flex_result: dict | None = None
+            computed_boxes: list[dict] = []
+            flex_boxes: list = []
+
+            try:
+                svg_overlay, flex_result, computed_boxes, flex_boxes = await _step_flex_layout(
+                    image_bytes=image_buffer, mime=mime_type,
+                    target_text=text_brief,
+                    visual_components=visual_components,
+                    canvas_w=canvas_w, canvas_h=canvas_h,
+                    ref_image_buffers=ref_image_buffers,
+                    footer_text=footer_text or None,
+                    generated_bg_url=bg_url,
+                    ref_image_url=bg_url,
+                    origin=origin,
+                    send_sse=send_sse,
+                    ref_descriptions=ref_descriptions,
+                    style_guide=style_guide,
+                    layout_strategy=layout_hint if layout_hint else None,
+                    no_go_zones=None,
+                    image_description=image_description,
+                    zone_hints=text_zones or None,
+                )
+                flex_tree = flex_result.get("flexTree") if flex_result else None
+            except Exception as e:
+                import traceback; traceback.print_exc()
+                print(f"[Integrated] Layout pipeline failed: {e}")
+
+            for e in events:
+                yield e
+            events.clear()
+
+            send_sse("progress", {
+                "step": "layout_generated",
+                "message": "Layout generated",
+            })
+
+            # Send initial layout
+            send_sse("iteration_end", {
+                "iteration": 0,
+                "message": "Initial layout mapped to canvas.",
+                "svg_overlay": svg_overlay,
+                "componentCount": 0,
+                "components": [],
+                "visualComponents": [],
+                "flexTree": flex_tree,
+                "computedBoxes": computed_boxes,
+                "canvasSize": {"w": canvas_w, "h": canvas_h},
+            })
+            for e in events:
+                yield e
+            events.clear()
+
+            # Step 6: Critique (one pass)
+            analysis = {
+                "svg_overlay": svg_overlay,
+                "flexTree": flex_tree,
+                "background_description": flex_result.get("background_description") if flex_result else "",
+                "campaign_vibe": flex_result.get("campaign_vibe") if flex_result else "",
+            }
+            layout_thought = flex_result.get("layoutThought") if flex_result else None
+
+            try:
+                svg_overlay, last_critique = await _step_refinement_loop(
+                    image_bytes=image_buffer, mime=mime_type,
+                    target_text=text_brief,
+                    svg_overlay=svg_overlay,
+                    visual_components=visual_components,
+                    component_suggestions=component_suggestions,
+                    analysis=analysis,
+                    canvas_w=canvas_w, canvas_h=canvas_h,
+                    ref_image_buffers=ref_image_buffers,
+                    footer_text=footer_text or None,
+                    generated_bg_url=bg_url,
+                    ref_image_url=bg_url,
+                    origin=origin,
+                    mode="",
+                    send_sse=send_sse,
+                    max_iter=1,
+                    ref_descriptions=ref_descriptions,
+                    style_guide=style_guide,
+                    layout_thought=layout_thought,
+                    flex_boxes=flex_boxes,
+                )
+            except Exception as e:
+                send_sse("error", {
+                    "step": "refinement_loop",
+                    "message": "Feedback loop failed, continuing with initial layout",
+                    "error": str(e),
+                })
+
+            for e in events:
+                yield e
+            events.clear()
+
+            # Extract text layers from flex tree
+            text_layers = []
+            if flex_tree:
+                def _extract_text_nodes(node):
+                    if not isinstance(node, dict):
+                        return
+                    if node.get("type") == "text" and node.get("text"):
+                        text_layers.append({
+                            "text": node["text"],
+                            "position": {
+                                "top": node.get("top", 0),
+                                "left": node.get("left", 0),
+                                "width": node.get("width", 0),
+                                "height": node.get("height", 0),
+                            },
+                            "style": node.get("style", {}),
+                        })
+                    for child in node.get("children", []):
+                        _extract_text_nodes(child)
+                _extract_text_nodes(flex_tree)
+
+            # Final result
+            send_sse("done", {
+                "success": True,
+                "data": {
+                    "referenceImage": bg_url,
+                    "backgroundDescription": analysis.get("background_description", ""),
+                    "generatedBackgroundImageUrl": bg_url,
+                    "campaignVibe": analysis.get("campaign_vibe", ""),
+                    "svg_overlay": svg_overlay,
+                    "flexTree": flex_tree,
+                    "computedBoxes": computed_boxes,
+                    "canvasSize": {"w": canvas_w, "h": canvas_h},
+                    "textLayers": text_layers,
+                    "visualComponents": [],
+                    "stackImageUrls": [],
+                    "critiqueIterations": analysis.get("critique_iterations"),
+                    "finalCritiqueStatus": analysis.get("final_critique_status"),
+                    "finalCritiqueFeedback": analysis.get("final_critique_feedback"),
+                    "textZones": text_zones,
+                    "bgConstraints": bg_constraints,
                 },
             })
             for e in events:

@@ -2,6 +2,7 @@ from fastapi import APIRouter, File, Form, Request, UploadFile
 
 from app.controllers.image import (
     create_campaign,
+    create_campaign_integrated,
     export_svg_handler,
     generate_and_separate,
     generate_integrated,
@@ -97,6 +98,12 @@ async def route_create_campaign(
 @router.post("/generate-integrated")
 async def route_generate_integrated(request: Request):
     return await generate_integrated(request)
+
+
+@router.post("/create-campaign-integrated")
+async def route_create_campaign_integrated(request: Request):
+    body = await request.json()
+    return await create_campaign_integrated(request, body)
 
 
 @router.post("/export-svg")
