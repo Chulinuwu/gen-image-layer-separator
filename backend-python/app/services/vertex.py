@@ -258,6 +258,7 @@ class VertexService:
         target_text: str,
         component_labels: list[str],
         component_positions: list[dict] | None = None,
+        text_zone_hints: list[dict] | None = None,
     ) -> dict:
         proc_buf, proc_mime = _resize_for_processing(image_buffer, STRATEGY_RESIZE_W, STRATEGY_RESIZE_QUALITY)
         model = self._text_model()
@@ -280,6 +281,7 @@ class VertexService:
         prompt = build_layout_strategy_prompt(
             target_text, comp_pos_block, components_available,
             len(text_lines), has_promo, est_text_h, comp_pct,
+            text_zone_hints=text_zone_hints,
         )
 
         try:
@@ -1231,6 +1233,7 @@ class VertexService:
         layout_strategy: dict | None = None,
         no_go_zones: list[dict] | None = None,
         image_description: str | None = None,
+        zone_hints: list[dict] | None = None,
     ) -> dict:
         proc_buf, proc_mime = _resize_for_processing(image_buffer)
         model = self._text_model_best()
@@ -1317,6 +1320,7 @@ class VertexService:
             layout_strategy_section=layout_strategy_section,
             no_go_zones_section=no_go_zones_section,
             image_description_section=image_description_section,
+            zone_hints=zone_hints,
         )
 
         thought_parts = []

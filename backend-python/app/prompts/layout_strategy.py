@@ -6,7 +6,18 @@ def build_layout_strategy_prompt(
     has_promo: bool,
     est_text_h: int,
     comp_pct: int,
+    text_zone_hints: list[dict] | None = None,
 ) -> str:
+    zone_hints_section = ""
+    if text_zone_hints:
+        lines = ["PRE-PLANNED TEXT ZONES (from background generation):"]
+        lines.append("The background image was generated with these clean zones designed specifically for text.")
+        lines.append("PRIORITIZE placing text elements in these pre-designed zones.")
+        for z in text_zone_hints:
+            lines.append(f'  - {z.get("role", "text")}: region "{z.get("region", "")}", {z.get("height_pct", 0)}% height, background: "{z.get("description", "")}"')
+        lines.append("")
+        zone_hints_section = "\n".join(lines) + "\n"
+
     return f"""You are a senior Thai advertising Art Director at a top Bangkok agency.
 Look at the background image carefully. Output a LAYOUT STRATEGY in JSON only.
 
@@ -17,7 +28,7 @@ FIRST: Analyze the image.
 
 THEN: Plan the layout based on what you see AND the text brief.
 
-IMPORTANT RULES:
+{zone_hints_section}IMPORTANT RULES:
 - Text zones should be SPREAD across the canvas, not crammed into one small area.
 - Main content (headlines, body copy, section labels) should occupy the TOP 60% of the canvas. Do NOT push main content below 70%.
 - Only footer/disclaimer text goes in the bottom 10%.
