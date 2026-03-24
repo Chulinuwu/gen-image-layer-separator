@@ -341,9 +341,34 @@ async def generate_integrated(request: Request):
     text_zones = plan.get("text_zones", [])
 
     enriched_prompt = f"{visual_concept}. {bg_constraints}" if bg_constraints else visual_concept
-    result = await vertex_service.generate_image(prompt=enriched_prompt, aspect_ratio=aspect_ratio)
 
-    if not result.get("buffer"):
+    max_retries = 2
+    result = None
+    validation_result = {"result": "PASS"}
+    current_prompt = enriched_prompt
+
+    for attempt in range(max_retries + 1):
+        print(f"[generate_integrated] Image generation attempt {attempt + 1}/{max_retries + 1}")
+        result = await vertex_service.generate_image(prompt=current_prompt, aspect_ratio=aspect_ratio)
+
+        if not result.get("buffer"):
+            break
+
+        validation_result = await vertex_service.validate_bg_constraints(result["buffer"], text_zones)
+        print(f"[generate_integrated] Validation attempt {attempt + 1}: {validation_result.get('result')}")
+
+        if validation_result.get("result") == "PASS":
+            break
+
+        if attempt < max_retries:
+            suggestions = validation_result.get("suggestions", "")
+            current_prompt = (
+                f"{enriched_prompt}. "
+                f"IMPORTANT: ensure clean uncluttered areas for text overlays. {suggestions}"
+            )
+            print(f"[generate_integrated] Retrying with stronger prompt due to validation FAIL")
+
+    if not result or not result.get("buffer"):
         return JSONResponse(
             {"success": False, "message": "Failed to generate image buffer"},
             status_code=500,
@@ -356,6 +381,7 @@ async def generate_integrated(request: Request):
             "imageUrl": url,
             "textZones": text_zones,
             "bgConstraints": bg_constraints,
+            "validationResult": validation_result.get("result", "PASS"),
         },
     })
 

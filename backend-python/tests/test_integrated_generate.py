@@ -14,6 +14,7 @@ def test_generate_integrated_happy_path(mock_vs, client):
         "text": "ok",
         "prompt": "enriched prompt",
     })
+    mock_vs.validate_bg_constraints = AsyncMock(return_value={"result": "PASS"})
 
     resp = client.post("/api/image/generate-integrated", json={
         "text_brief": "SUMMER SALE 50% OFF",
@@ -64,3 +65,58 @@ def test_create_campaign_accepts_text_zone_hints_no_422(client):
     )
     # Should not be 422 (unprocessable entity) -- field is accepted by FastAPI
     assert resp.status_code != 422
+
+
+@patch("app.controllers.image.vertex_service")
+def test_generate_integrated_retries_on_validation_fail(mock_vs, client):
+    mock_vs.plan_text_zones = AsyncMock(return_value={
+        "text_zones": [{"role": "headline", "region": "top-center", "height_pct": 25}],
+        "bg_constraints": "Leave top clear.",
+    })
+    mock_vs.generate_image = AsyncMock(return_value={
+        "buffer": b"\x89PNG fake image data",
+        "text": "ok",
+        "prompt": "enriched prompt",
+    })
+    # First call fails validation, second passes
+    mock_vs.validate_bg_constraints = AsyncMock(side_effect=[
+        {"result": "FAIL", "suggestions": "top area is too cluttered"},
+        {"result": "PASS"},
+    ])
+
+    resp = client.post("/api/image/generate-integrated", json={
+        "text_brief": "SUMMER SALE 50% OFF",
+        "visual_concept": "a beach scene at sunset",
+        "aspect_ratio": "3:4",
+    })
+
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+    assert mock_vs.generate_image.call_count == 2
+
+
+@patch("app.controllers.image.vertex_service")
+def test_generate_integrated_gives_up_after_max_retries(mock_vs, client):
+    mock_vs.plan_text_zones = AsyncMock(return_value={
+        "text_zones": [{"role": "headline", "region": "top-center", "height_pct": 25}],
+        "bg_constraints": "Leave top clear.",
+    })
+    mock_vs.generate_image = AsyncMock(return_value={
+        "buffer": b"\x89PNG fake image data",
+        "text": "ok",
+        "prompt": "enriched prompt",
+    })
+    # Always fails validation
+    mock_vs.validate_bg_constraints = AsyncMock(return_value={
+        "result": "FAIL", "suggestions": "busy pattern everywhere",
+    })
+
+    resp = client.post("/api/image/generate-integrated", json={
+        "text_brief": "SUMMER SALE 50% OFF",
+        "visual_concept": "a beach scene at sunset",
+        "aspect_ratio": "3:4",
+    })
+
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+    assert mock_vs.generate_image.call_count == 3  # initial + 2 retries
