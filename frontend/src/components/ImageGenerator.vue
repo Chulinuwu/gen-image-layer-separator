@@ -1,70 +1,190 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, computed } from "vue";
 
 const prompt = ref("An office group photo of people looking stressed");
-const aspectRatio = ref("4:3");
+const aspectRatio = ref("3:4");
 const loading = ref(false);
 const result = ref<any>(null);
 const error = ref("");
-const integratedMode = ref(false);
+const generationMode = ref("normal");
 const textBrief = ref("");
+const footerText = ref("");
+const progressSteps = ref<string[]>([]);
+const campaignResult = ref<any>(null);
+
+const showTextInputs = computed(() => generationMode.value === "integrated" || generationMode.value === "full-campaign");
 
 const API_BASE = "http://localhost:5001";
 
-const emit = defineEmits(["generated", "integrated-generated", "proceed"]);
+const emit = defineEmits(["generated", "integrated-generated", "campaign-created", "proceed"]);
+
+const buttonLabel = computed(() => {
+  if (loading.value) return "Generating...";
+  if (generationMode.value === "full-campaign") return "Generate Full Campaign";
+  if (generationMode.value === "integrated") return "Generate + Plan Layout";
+  return "Generate Image";
+});
 
 const generateImage = async () => {
   loading.value = true;
   error.value = "";
   result.value = null;
+  campaignResult.value = null;
+  progressSteps.value = [];
 
   try {
-    if (integratedMode.value && textBrief.value.trim()) {
-      const response = await fetch(`${API_BASE}/api/image/generate-integrated`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text_brief: textBrief.value,
-          visual_concept: prompt.value,
-          aspect_ratio: aspectRatio.value,
-        }),
-      });
-
-      const data = await response.json();
-      if (data.success) {
-        result.value = { imageUrl: data.data.imageUrl, text: data.data.text };
-        emit("generated", data.data.imageUrl);
-        emit("integrated-generated", {
-          url: data.data.imageUrl,
-          textBrief: textBrief.value,
-          textZones: data.data.textZones || [],
-          bgConstraints: data.data.bgConstraints || "",
-        });
-      } else {
-        error.value = data.error || "Failed to generate integrated image";
-      }
+    if (generationMode.value === "full-campaign" && textBrief.value.trim()) {
+      await runFullCampaign();
+    } else if (generationMode.value === "integrated" && textBrief.value.trim()) {
+      await runIntegrated();
     } else {
-      const formData = new FormData();
-      formData.append("prompt", prompt.value);
-      formData.append("aspect_ratio", aspectRatio.value);
-
-      const response = await fetch(`${API_BASE}/api/image/generate`, {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await response.json();
-      if (data.success) {
-        result.value = data.data;
-        emit("generated", data.data.imageUrl);
-      } else {
-        error.value = data.error || "Failed to generate image";
-      }
+      await runNormal();
     }
   } catch (err: any) {
     error.value = err.message;
   } finally {
     loading.value = false;
+  }
+};
+
+const runNormal = async () => {
+  const formData = new FormData();
+  formData.append("prompt", prompt.value);
+  formData.append("aspect_ratio", aspectRatio.value);
+
+  const response = await fetch(`${API_BASE}/api/image/generate`, {
+    method: "POST",
+    body: formData,
+  });
+
+  const data = await response.json();
+  if (data.success) {
+    result.value = data.data;
+    emit("generated", data.data.imageUrl);
+  } else {
+    error.value = data.error || "Failed to generate image";
+  }
+};
+
+const runIntegrated = async () => {
+  const response = await fetch(`${API_BASE}/api/image/generate-integrated`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      text_brief: textBrief.value,
+      visual_concept: prompt.value,
+      aspect_ratio: aspectRatio.value,
+    }),
+  });
+
+  const data = await response.json();
+  if (data.success) {
+    result.value = { imageUrl: data.data.imageUrl, text: data.data.text };
+    emit("generated", data.data.imageUrl);
+    emit("integrated-generated", {
+      url: data.data.imageUrl,
+      textBrief: textBrief.value,
+      textZones: data.data.textZones || [],
+      bgConstraints: data.data.bgConstraints || "",
+    });
+  } else {
+    error.value = data.error || "Failed to generate integrated image";
+  }
+};
+
+const runFullCampaign = async () => {
+  const response = await fetch(`${API_BASE}/api/image/create-campaign-integrated`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      text_brief: textBrief.value,
+      visual_concept: prompt.value,
+      aspect_ratio: aspectRatio.value,
+      footer_text: footerText.value || undefined,
+    }),
+  });
+
+  if (!response.ok) {
+    const errData = await response.json().catch(() => ({ error: "Connection failed" }));
+    throw new Error(errData.error || `Server error: ${response.status}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("Response body is not readable");
+
+  const decoder = new TextDecoder();
+  let partialData = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const chunk = decoder.decode(value, { stream: true });
+    partialData += chunk;
+
+    const parts = partialData.split("\n\n");
+    partialData = parts.pop() || "";
+
+    for (const part of parts) {
+      if (!part.trim()) continue;
+      const lines = part.split("\n");
+      let eventType = "message";
+      let eventData = "";
+      for (const line of lines) {
+        if (line.startsWith("event:")) eventType = line.replace("event:", "").trim();
+        else if (line.startsWith("data:")) eventData = line.replace("data:", "").trim();
+      }
+      if (eventData) {
+        try {
+          const data = JSON.parse(eventData);
+          handleFullCampaignSSE(eventType, data);
+        } catch (e) {
+          // skip unparseable events
+        }
+      }
+    }
+  }
+};
+
+const handleFullCampaignSSE = (event: string, data: any) => {
+  switch (event) {
+    case "progress":
+      progressSteps.value.push(data.message || data.step);
+      if (data.imageUrl) {
+        result.value = { imageUrl: data.imageUrl };
+        emit("generated", data.imageUrl);
+      }
+      break;
+    case "iteration_end":
+      // intermediate layout update
+      break;
+    case "critique_complete":
+      progressSteps.value.push(
+        data.status === "PASS"
+          ? `Layout approved (confidence: ${Math.round((data.confidence || 0.5) * 100)}%)`
+          : `Issues found: ${data.feedback || ""}`
+      );
+      break;
+    case "done":
+      if (data.success && data.data) {
+        campaignResult.value = data.data;
+        if (data.data.generatedBackgroundImageUrl) {
+          result.value = { imageUrl: data.data.generatedBackgroundImageUrl };
+          emit("generated", data.data.generatedBackgroundImageUrl);
+        }
+        emit("integrated-generated", {
+          url: data.data.generatedBackgroundImageUrl || data.data.referenceImage,
+          textBrief: textBrief.value,
+          textZones: data.data.textZones || [],
+          bgConstraints: data.data.bgConstraints || "",
+        });
+        emit("campaign-created", data.data);
+        progressSteps.value.push("Campaign complete!");
+      }
+      break;
+    case "error":
+      error.value = data.error || data.message || "Campaign generation failed";
+      break;
   }
 };
 
@@ -102,13 +222,15 @@ const goToCampaign = () => {
     </div>
 
     <div class="mb-4">
-      <label class="integrated-toggle">
-        <input type="checkbox" v-model="integratedMode" />
-        Integrated Mode (plan text layout with background)
-      </label>
+      <label class="label">Generation Mode</label>
+      <select v-model="generationMode" class="select-input">
+        <option value="normal">Normal (BG only)</option>
+        <option value="integrated">Integrated (BG + text zone planning)</option>
+        <option value="full-campaign">Full Campaign (BG + layout + SVG render)</option>
+      </select>
     </div>
 
-    <div v-if="integratedMode" class="mb-4">
+    <div v-if="showTextInputs" class="mb-4">
       <label class="label">Ad Text Brief</label>
       <textarea
         v-model="textBrief"
@@ -117,9 +239,25 @@ const goToCampaign = () => {
       ></textarea>
     </div>
 
+    <div v-if="generationMode === 'full-campaign'" class="mb-4">
+      <label class="label">Footer Text (optional)</label>
+      <input
+        v-model="footerText"
+        type="text"
+        class="text-input"
+        placeholder="Disclaimer or fine print..."
+      />
+    </div>
+
     <button :disabled="loading" @click="generateImage">
-      {{ loading ? "Generating..." : integratedMode ? "Generate + Plan Layout" : "Generate Image" }}
+      {{ buttonLabel }}
     </button>
+
+    <div v-if="progressSteps.length" class="progress-log mt-4">
+      <div v-for="(step, idx) in progressSteps" :key="idx" class="progress-step">
+        {{ step }}
+      </div>
+    </div>
 
     <div v-if="error" class="error mt-4">{{ error }}</div>
 
@@ -128,9 +266,17 @@ const goToCampaign = () => {
       <div class="image-container">
         <img :src="`${API_BASE}${result.imageUrl}`" alt="Generated" />
       </div>
-      <p class="mt-4">{{ result.text }}</p>
+      <p v-if="result.text" class="mt-4">{{ result.text }}</p>
 
-      <div class="flex gap-4">
+      <div v-if="campaignResult && campaignResult.svg_overlay" class="mt-4">
+        <h4>Campaign Preview</h4>
+        <div class="image-container campaign-preview">
+          <img :src="`${API_BASE}${result.imageUrl}`" alt="Background" />
+          <div class="svg-overlay" v-html="campaignResult.svg_overlay"></div>
+        </div>
+      </div>
+
+      <div class="flex gap-4 mt-4">
         <a
           :href="`${API_BASE}${result.imageUrl}`"
           target="_blank"
@@ -138,7 +284,7 @@ const goToCampaign = () => {
           >Open Full Image</a
         >
         <button @click="goToCampaign" class="btn-primary mini">
-          Next: Layout & Text &rarr;
+          Next: Layout &amp; Text &rarr;
         </button>
       </div>
     </div>
@@ -166,12 +312,27 @@ const goToCampaign = () => {
   overflow: hidden;
   border: 1px solid var(--border);
   background: #eee;
+  position: relative;
 }
 
 .image-container img {
   width: 100%;
   height: auto;
   display: block;
+}
+
+.campaign-preview .svg-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.campaign-preview .svg-overlay :deep(svg) {
+  width: 100%;
+  height: 100%;
 }
 
 .btn-primary.mini {
@@ -212,19 +373,38 @@ const goToCampaign = () => {
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 
-.integrated-toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 600;
-  font-size: 0.9rem;
-  cursor: pointer;
-  user-select: none;
+.text-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.95rem;
+  background-color: white;
 }
 
-.integrated-toggle input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-  cursor: pointer;
+.text-input:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.progress-log {
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.progress-step {
+  font-size: 0.85rem;
+  color: #475569;
+  padding: 4px 0;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.progress-step:last-child {
+  border-bottom: none;
 }
 </style>

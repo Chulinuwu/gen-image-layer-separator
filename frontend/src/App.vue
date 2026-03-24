@@ -61,6 +61,7 @@ const onIntegratedGenerated = (payload: { url: string; textBrief: string; textZo
         v-if="activeTab === 'generate'"
         @generated="onBackgroundGenerated"
         @integrated-generated="onIntegratedGenerated"
+        @campaign-created="onCampaignCreated"
         @proceed="activeTab = 'campaign'"
       />
       <CampaignLayout
