@@ -7,6 +7,7 @@ def build_flex_thought_prompt(
     layout_strategy_section: str = "",
     no_go_zones_section: str = "",
     image_description_section: str = "",
+    zone_hints: list[dict] | None = None,
 ) -> str:
     style_section = f"\n{style_guide}\n" if style_guide else ""
 
@@ -20,11 +21,20 @@ STYLE MATCHING: Reference images and their style guide are provided above. Your 
 - Do NOT copy text content from references -- only copy their VISUAL STYLE.
 """
 
+    zone_hints_section = ""
+    if zone_hints:
+        lines = ["PRE-PLANNED ZONES (background was generated with these clean areas):"]
+        for z in zone_hints:
+            lines.append(f'  - {z.get("role", "text")} zone: region "{z.get("region", "")}", approx {z.get("height_pct", 0)}% of frame height, background type: "{z.get("description", "")}"')
+        lines.append("Use these zones as your PRIMARY text placement targets. They are already clean in the background.")
+        lines.append("")
+        zone_hints_section = "\n".join(lines) + "\n"
+
     return f"""You are a graphic designer planning a text layout over a background image.
 Your job is to ANALYZE the image and PLAN where each text element goes, with specific readability treatments.
 Do NOT output any JSON or flex tree. Only output your analysis and plan.
 
-{ref_section}{style_section}{image_description_section}{layout_strategy_section}{no_go_zones_section}CAMPAIGN TEXT:
+{ref_section}{style_section}{image_description_section}{layout_strategy_section}{no_go_zones_section}{zone_hints_section}CAMPAIGN TEXT:
 {target_text}
 
 {components_list}
