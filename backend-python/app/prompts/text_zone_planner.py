@@ -26,7 +26,13 @@ RULES:
 - Zones should NOT overlap significantly.
 - Consider the aspect ratio: tall (portrait) images have more vertical stack room; wide images favor side-by-side.
 - The bottom 10% of the frame is reserved for footer/disclaimer -- do NOT allocate zones there.
-- Describe each zone so the image generator will produce a NATURAL scene element in that area (sky, gradient, blur, solid surface).
+
+CRITICAL -- NATURAL BLENDING:
+- Clean zones must be described as NATURAL parts of the scene -- NOT as blank rectangles or pasted-on patches.
+- Good: "the sky naturally extends across the upper portion with soft clouds" or "the scene fades into soft bokeh/blur on the left side"
+- Bad: "leave a blank rectangle at the top" or "clear empty area in the corner"
+- The bg_constraints should read like a photographer's composition note, NOT a layout grid.
+- The image must look like ONE cohesive photograph, not a collage with text zones cut out.
 
 OUTPUT JSON only (no markdown, no explanation):
 {{
@@ -35,15 +41,15 @@ OUTPUT JSON only (no markdown, no explanation):
       "role": "headline",
       "region": "top-center",
       "height_pct": 25,
-      "description": "clean open sky or softly blurred background area"
+      "description": "open sky with soft gradient, naturally uncluttered"
     }},
     {{
       "role": "body",
       "region": "bottom-left",
       "height_pct": 20,
-      "description": "soft gradient fade to dark, suitable for light text"
+      "description": "scene fades into soft dark tones, naturally less detailed"
     }}
   ],
-  "bg_constraints": "natural language spatial constraints to append to the image generation prompt, e.g.: Leave the top 25% of the frame as clear open sky or a softly blurred neutral area suitable for a headline. The bottom-left 20% should have a soft dark gradient or shadowed surface for body text. Place the main subject in the center-right."
+  "bg_constraints": "Compose the scene so that the upper portion naturally features open sky or atmosphere with minimal objects, creating a calm area suitable for overlay text. The main subject should be positioned in the center or lower-center. Let the scene naturally fade or simplify toward the edges where text will be placed -- do NOT create obvious blank patches or sharp boundaries."
 }}
 """
