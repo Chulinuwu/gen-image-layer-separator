@@ -326,6 +326,40 @@ async def generate_and_separate(
     })
 
 
+async def generate_integrated(request: Request):
+    body = await request.json()
+    text_brief = body.get("text_brief")
+    visual_concept = body.get("visual_concept")
+    if not text_brief:
+        return JSONResponse({"error": "text_brief is required"}, status_code=400)
+    if not visual_concept:
+        return JSONResponse({"error": "visual_concept is required"}, status_code=400)
+    aspect_ratio = body.get("aspect_ratio", "3:4")
+
+    plan = await vertex_service.plan_text_zones(text_brief, visual_concept, aspect_ratio)
+    bg_constraints = plan.get("bg_constraints", "")
+    text_zones = plan.get("text_zones", [])
+
+    enriched_prompt = f"{visual_concept}. {bg_constraints}" if bg_constraints else visual_concept
+    result = await vertex_service.generate_image(prompt=enriched_prompt, aspect_ratio=aspect_ratio)
+
+    if not result.get("buffer"):
+        return JSONResponse(
+            {"success": False, "message": "Failed to generate image buffer"},
+            status_code=500,
+        )
+
+    url = _save_upload(result["buffer"], "generated")
+    return JSONResponse({
+        "success": True,
+        "data": {
+            "imageUrl": url,
+            "textZones": text_zones,
+            "bgConstraints": bg_constraints,
+        },
+    })
+
+
 async def suggest_campaign(
     request: Request,
     image: UploadFile | None,

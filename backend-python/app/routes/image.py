@@ -4,6 +4,7 @@ from app.controllers.image import (
     create_campaign,
     export_svg_handler,
     generate_and_separate,
+    generate_integrated,
     process_image,
     render_campaign,
     suggest_campaign,
@@ -90,6 +91,11 @@ async def route_create_campaign(
         except Exception:
             pass
     return await create_campaign(request, image, background, text, mode, noGoZones, body)
+
+
+@router.post("/generate-integrated")
+async def route_generate_integrated(request: Request):
+    return await generate_integrated(request)
 
 
 @router.post("/export-svg")
