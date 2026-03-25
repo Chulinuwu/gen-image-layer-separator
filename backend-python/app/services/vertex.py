@@ -1328,6 +1328,14 @@ class VertexService:
             for ref in ref_images:
                 thought_parts.append(_inline_data(ref, "image/jpeg"))
         thought_parts.append(_inline_data(proc_buf, proc_mime))
+
+        from app.utils.brightness_map import generate_brightness_heatmap
+        try:
+            heatmap_buf = generate_brightness_heatmap(image_buffer)
+            thought_parts.append(_inline_data(heatmap_buf, "image/jpeg"))
+        except Exception as e:
+            print(f"[FlexLayout] Heatmap generation failed, skipping: {e}")
+
         thought_parts.append({"text": thought_prompt})
 
         print(f"[FlexLayout] Call 1: Thought ({model}, canvas: {canvas_size['w']}x{canvas_size['h']})")

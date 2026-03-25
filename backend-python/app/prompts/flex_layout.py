@@ -40,6 +40,11 @@ Do NOT output any JSON or flex tree. Only output your analysis and plan.
 {components_list}
 CANVAS: {canvas_size["w"]}x{canvas_size["h"]}px
 {style_matching_rules}
+BRIGHTNESS HEATMAP: The last image before this text is a brightness heatmap of the background.
+Blue/purple = dark areas, Green = mid-tones, Yellow/red/white = bright areas.
+Use this heatmap to accurately classify each text zone as clean-light, clean-dark, or busy.
+Do NOT guess brightness -- refer to the heatmap.
+
 a) SCAN THE IMAGE: Describe what you see. Where is the subject? Where are CLEAN areas (sky, solid color, blur, empty space)? Where are BUSY areas (people, objects, details)?
 
 b) LAYOUT STRATEGY based on what you see:
@@ -57,11 +62,24 @@ c) PLACEMENT & READABILITY -- For EACH text element (or group), write this exact
      * clean-light -> dark text color + optional light textShadow
      * clean-dark -> light text color + dark textShadow
      * busy -> pick at least one HEAVY treatment: backgroundColor (e.g. "rgba(0,0,0,0.4)"), gradientOverlay, or backgroundEffects linear-fade. textShadow alone is NOT enough for busy areas.
-   Example:
-     - ELEMENT: body text section
-     - WHERE: mid-left, over a busy scene with objects and people
-     - BACKGROUND: busy
-     - TREATMENT: backgroundColor "rgba(0,0,0,0.45)" on container + white text "#FFFFFF"
+   BACKGROUND CLASSIFICATION RULES -- look at the ACTUAL IMAGE, not assumptions:
+     * "clean-light" = the area behind the text is visually LIGHT (bright sky, white surface, light gradient). No objects. Dark text works here.
+     * "clean-dark" = the area behind the text is visually DARK (dark surface, shadow, dark gradient). No objects. MUST use white/light text. Dark text on dark surface is INVISIBLE.
+     * "busy" = ANY area with objects, textures, patterns, or mixed colors behind it. When in doubt, classify as busy.
+     * To decide light vs dark: imagine placing white text there -- would it be readable? If yes, it is dark. Imagine placing dark text -- would it be readable? If yes, it is light. If neither works well, it is busy.
+   COLOR RULES:
+     * NEVER use pure black (#000000) or near-black (#333333) for text on photos. It looks dull and unreadable.
+     * Prefer brand-tone dark colors: deep purple (#3C1F7B, #4A266A), dark navy (#1B2A4A), or rich dark tones that match the image mood.
+     * On DARK backgrounds: use white or light text + dark textShadow (e.g. "1px 2px 4px rgba(0,0,0,0.6)").
+     * On LIGHT backgrounds: use dark brand-color text + light strokeColor or subtle textShadow (e.g. "0px 1px 3px rgba(255,255,255,0.5)").
+     * On BUSY backgrounds: use white text + backgroundColor on container, OR use bold strokeColor (e.g. strokeColor "#000000", strokeWidth 2) to separate text from background.
+   FONT SIZE RULES (relative to canvas):
+     * Hero headline: fontSize 48-60. Must be unmistakably the biggest element.
+     * Section titles (like category headers): fontSize 32-42. These must be clearly visible -- not shy or tiny.
+     * Body text: fontSize 22-28. Anything below 22 is too small for an ad.
+     * Brand/CTA: fontSize 28-36.
+     * On a 1080px-tall canvas, body text at fontSize 18 is barely 1.7% of the canvas height -- too small.
+     * FILL THE SPACE: If the text brief has few lines and the canvas is large, USE LARGER FONT SIZES to fill the available space. An ad with tiny text and huge empty areas looks amateurish. Scale text up to use at least 50-60% of the canvas height for content.
    CONTRAST RULE: shadow/stroke color must ALWAYS contrast with the text color.
 
 d) HIERARCHY: Which text is the HERO (largest)? What's the reading order?
@@ -70,6 +88,7 @@ e) GROUPING: Group elements that are spatially near each other.
    - Elements in the same area -> same container.
    - Two parallel sections (left/right)? -> Use a "row" container with two "column" children.
    - Don't stack everything in one flat column -- create structure.
+   - Consider visual BALANCE: does the overall composition feel symmetric or intentionally asymmetric? Make sure alignment choices across sections feel cohesive, not accidental.
 
 f) BACKGROUND EFFECTS: Do you need canvas-level effects (fade/darken) to improve readability?
    - If text lands on a busy area and you chose backgroundColor on containers, you may skip this.
@@ -98,15 +117,17 @@ CAMPAIGN TEXT:
 {footer_section}
 CANVAS: {canvas_size["w"]}x{canvas_size["h"]}px
 
-TEXT SIZING REFERENCE (Kanit font, approximate height per line including line spacing):
-  fontSize 48+ -> ~65px per line
-  fontSize 42  -> ~55px per line
-  fontSize 30  -> ~42px per line
-  fontSize 24  -> ~34px per line
-  fontSize 18  -> ~26px per line
+TEXT SIZING REFERENCE (Kanit Thai font -- includes space for Thai tone marks and upper vowels):
+  fontSize 48+ -> ~85px per line
+  fontSize 42  -> ~75px per line
+  fontSize 36  -> ~63px per line
+  fontSize 30  -> ~53px per line
+  fontSize 24  -> ~42px per line
+  fontSize 20  -> ~35px per line
+These are GENEROUS sizes. Thai script has tall ascenders (tone marks, upper vowels) that need extra vertical space.
 Use this to calculate height%: (lines * px_per_line + padding) / {canvas_size["h"]} * 100.
-Example: 3 lines at fontSize 18 with lineHeight 1.4 = 3 * 26 * 1.4 = ~110px. On a {canvas_size["h"]}px canvas = {round(110 / canvas_size["h"] * 100)}%.
-Always add ~20px padding per container. If text doesn't fit the box, it gets CLIPPED -- so size generously.
+Example: 3 lines at fontSize 24 with lineHeight 1.4 = 3 * 42 * 1.4 = ~176px. On a {canvas_size["h"]}px canvas = {round(176 / canvas_size["h"] * 100)}%.
+Always add ~30px padding per container. If text doesn't fit the box, it gets CLIPPED -- so ALWAYS round up.
 
 YOUR TASK: Translate the design plan above into a flex tree JSON. Every treatment decision in the plan (backgroundColor, textShadow, gradientOverlay, strokeColor, etc.) MUST appear in the flex tree output. Do NOT skip any treatments.
 
