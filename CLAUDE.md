@@ -144,6 +144,9 @@ Do NOT use code to "fix" AI-generated layout after the fact (clamping positions,
 ### No image-specific hardcoding in prompts
 Prompt examples and instructions in `app/prompts/` must be GENERIC -- they should work for any input image, not just one specific test case. Do NOT put image-specific content (e.g. "port/logistics scene", "purple padlock", specific Thai text) in prompt examples. If the AI needs context about the current image, that comes from the pipeline data (image_description, layout_strategy, no_go_zones), not from hardcoded examples. Examples should illustrate the FORMAT and STRUCTURE of expected output, using placeholder descriptions like "body text section" or "a busy scene with objects".
 
+### Prompt rules must be universal design principles, not image-specific
+Rules in prompts (e.g. background classification, font size minimums, color guidelines) must apply to ALL images universally. They are graphic design best practices, not fixes for one test case. Valid rules teach the AI HOW to decide, not WHAT to decide. Example: "look at the actual brightness of the area to classify light vs dark" (teaches reasoning) is good. "Asphalt is always dark" (hardcodes a surface type) is bad -- it doesn't scale to beaches, forests, or other scenes. The AI should observe the image and decide, not follow a lookup table of surface types.
+
 ## Debugging & Inspection
 
 ### AI Trace Logs

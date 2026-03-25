@@ -11,6 +11,8 @@ const textBrief = ref("");
 const footerText = ref("");
 const progressSteps = ref<string[]>([]);
 const campaignResult = ref<any>(null);
+const showBbox = ref(false);
+const previewContainer = ref<HTMLElement | null>(null);
 
 const showTextInputs = computed(() => generationMode.value === "integrated" || generationMode.value === "full-campaign");
 
@@ -165,6 +167,10 @@ const handleFullCampaignSSE = (event: string, data: any) => {
           : `Issues found: ${data.feedback || ""}`
       );
       break;
+    case "error":
+      progressSteps.value.push(`Error: ${data.error || data.message || "Unknown error"}`);
+      error.value = data.error || data.message || "Pipeline error";
+      break;
     case "done":
       if (data.success && data.data) {
         campaignResult.value = data.data;
@@ -255,7 +261,19 @@ const goToCampaign = () => {
 
     <div v-if="progressSteps.length" class="progress-log mt-4">
       <div v-for="(step, idx) in progressSteps" :key="idx" class="progress-step">
+        <span class="step-icon">{{ idx === progressSteps.length - 1 && loading ? '...' : 'OK' }}</span>
         {{ step }}
+      </div>
+      <div v-if="loading && result && !campaignResult" class="generating-hint">
+        Generating layout on this background...
+      </div>
+    </div>
+
+    <div v-if="loading && result && !campaignResult" class="preview-during-loading mt-4">
+      <h4>Background Preview (layout in progress...)</h4>
+      <div class="image-container">
+        <img :src="`${API_BASE}${result.imageUrl}`" alt="BG Preview" style="opacity: 0.7" />
+        <div class="loading-overlay">Generating text layout...</div>
       </div>
     </div>
 
@@ -269,10 +287,30 @@ const goToCampaign = () => {
       <p v-if="result.text" class="mt-4">{{ result.text }}</p>
 
       <div v-if="campaignResult && campaignResult.svg_overlay" class="mt-4">
-        <h4>Campaign Preview</h4>
-        <div class="image-container campaign-preview">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+          <h4 style="margin:0">Campaign Preview</h4>
+          <button class="bbox-toggle" :class="{ active: showBbox }" @click="showBbox = !showBbox">
+            {{ showBbox ? 'BBOX ON' : 'BBOX OFF' }}
+          </button>
+        </div>
+        <div class="image-container campaign-preview" ref="previewContainer">
           <img :src="`${API_BASE}${result.imageUrl}`" alt="Background" />
           <div class="svg-overlay" v-html="campaignResult.svg_overlay"></div>
+          <template v-if="showBbox && campaignResult.computedBoxes && campaignResult.canvasSize">
+            <div
+              v-for="box in campaignResult.computedBoxes"
+              :key="box.id"
+              class="debug-bbox"
+              :style="{
+                left: (box.x / campaignResult.canvasSize.w * 100) + '%',
+                top: (box.y / campaignResult.canvasSize.h * 100) + '%',
+                width: (box.w / campaignResult.canvasSize.w * 100) + '%',
+                height: (box.h / campaignResult.canvasSize.h * 100) + '%',
+              }"
+            >
+              <span class="bbox-label">{{ box.id }} ({{ box.type }})</span>
+            </div>
+          </template>
         </div>
       </div>
 
@@ -406,5 +444,77 @@ const goToCampaign = () => {
 
 .progress-step:last-child {
   border-bottom: none;
+}
+.step-icon {
+  margin-right: 6px;
+}
+.generating-hint {
+  font-size: 0.8rem;
+  color: #6366f1;
+  padding: 6px 0;
+  animation: pulse 1.5s infinite;
+}
+.preview-during-loading {
+  position: relative;
+}
+.preview-during-loading .image-container {
+  position: relative;
+}
+.loading-overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(0,0,0,0.6);
+  color: white;
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  animation: pulse 1.5s infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+.campaign-preview {
+  position: relative;
+}
+.campaign-preview .svg-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.bbox-toggle {
+  font-size: 0.75rem;
+  padding: 4px 10px;
+  border: 1px solid #94a3b8;
+  border-radius: 4px;
+  background: #f1f5f9;
+  cursor: pointer;
+}
+.bbox-toggle.active {
+  background: #1e293b;
+  color: white;
+  border-color: #1e293b;
+}
+.debug-bbox {
+  position: absolute;
+  border: 1.5px dashed #3b82f6;
+  pointer-events: none;
+  box-sizing: border-box;
+}
+.bbox-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  background: #3b82f6;
+  color: white;
+  font-size: 0.6rem;
+  padding: 1px 4px;
+  border-radius: 0 0 3px 0;
+  white-space: nowrap;
 }
 </style>

@@ -10,6 +10,16 @@ from app.utils.flex_layout import LayoutBox, FlexNodeStyle
 from app.utils.text_measure import measure_text, wrap_text, auto_fit_font_size
 
 
+def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+    h = hex_color.lstrip("#")
+    if len(h) == 3:
+        h = h[0]*2 + h[1]*2 + h[2]*2
+    try:
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except (ValueError, IndexError):
+        return 128, 128, 128
+
+
 def _kanit_font_style() -> str:
     font_dir = Path(__file__).parent.parent.parent / "assets" / "fonts"
     style = ""
@@ -267,7 +277,18 @@ def _render_text_box(box: LayoutBox, clip_id: str) -> tuple[list[str], list[str]
     max_text_width = box.w - box_padding * 2
 
     font_size = _resolve_font_size(style, box.h)
+    lh_mult = style.lineHeight or 1.35
+    min_fs = 12
+
     wrapped = wrap_text(text, max_text_width, font_size, font_weight)
+    line_height = font_size * lh_mult
+    total_text_height = len(wrapped.lines) * line_height
+
+    while total_text_height > box.h and font_size > min_fs:
+        font_size = max(min_fs, font_size - 2)
+        wrapped = wrap_text(text, max_text_width, font_size, font_weight)
+        line_height = font_size * lh_mult
+        total_text_height = len(wrapped.lines) * line_height
 
     if style.maxLines and len(wrapped.lines) > style.maxLines:
         wrapped = type(wrapped)(
@@ -275,10 +296,8 @@ def _render_text_box(box: LayoutBox, clip_id: str) -> tuple[list[str], list[str]
             line_height=wrapped.line_height,
             total_height=wrapped.line_height * style.maxLines,
         )
+        total_text_height = len(wrapped.lines) * line_height
 
-    lh_mult = style.lineHeight or 1.35
-    line_height = font_size * lh_mult
-    total_text_height = len(wrapped.lines) * line_height
     offset_y = max(0, (box.h - total_text_height) / 2)
 
     if align == "center":
@@ -321,8 +340,17 @@ def _render_text_box(box: LayoutBox, clip_id: str) -> tuple[list[str], list[str]
 
     stroke_attrs = ""
     if style.strokeColor:
-        sw = style.strokeWidth or 2
-        stroke_attrs = f' stroke="{_escape_xml(style.strokeColor)}" stroke-width="{sw}" paint-order="stroke"'
+        sr, sg, sb = _hex_to_rgb(style.strokeColor)
+        stroke_lum = 0.299 * sr + 0.587 * sg + 0.114 * sb
+        if stroke_lum < 200:
+            sw = style.strokeWidth or max(3, round(font_size * 0.08))
+            stroke_attrs = f' stroke="{_escape_xml(style.strokeColor)}" stroke-width="{sw}" stroke-linejoin="round" paint-order="stroke"'
+    else:
+        r, g, b = _hex_to_rgb(color)
+        luminance = 0.299 * r + 0.587 * g + 0.114 * b
+        auto_width = max(5, round(font_size * 0.18))
+        if luminance < 128:
+            stroke_attrs = f' stroke="#FFFFFF" stroke-width="{auto_width}" stroke-linejoin="round" paint-order="stroke"'
 
     extra_attrs = ""
     if style.letterSpacing:
