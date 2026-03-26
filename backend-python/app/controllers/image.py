@@ -663,6 +663,53 @@ async def _step_diecut_and_inpaint(
     return visual_components, generated_bg_url, stack_urls, stroke_bboxes
 
 
+async def warp_preview(request: Request):
+    body = await request.json()
+    text = body.get("text", "")
+    font_size = float(body.get("fontSize", 48))
+    font_weight = str(body.get("fontWeight", "700"))
+    color = body.get("color", "#FFFFFF")
+    warp_type = body.get("warpType", "none")
+    warp_intensity = float(body.get("warpIntensity", 0))
+    h_distortion = float(body.get("warpHDistortion", 0))
+    v_distortion = float(body.get("warpVDistortion", 0))
+    stroke_color = body.get("strokeColor")
+    stroke_width = float(body.get("strokeWidth", 0)) if body.get("strokeWidth") else None
+    letter_spacing = float(body.get("letterSpacing", 0))
+
+    if not text or warp_type == "none":
+        return {"success": False, "error": "No text or warp type"}
+
+    try:
+        from app.utils.text_warp import render_warped_text, WarpConfig
+        warp_config = WarpConfig(
+            warp_type=warp_type,
+            intensity=warp_intensity,
+            h_distortion=h_distortion,
+            v_distortion=v_distortion,
+        )
+        svg, width, height = render_warped_text(
+            text=text,
+            font_size=font_size,
+            font_weight=font_weight,
+            color=color,
+            warp_config=warp_config,
+            letter_spacing=letter_spacing,
+            stroke_color=stroke_color,
+            stroke_width=stroke_width,
+        )
+        return {
+            "success": True,
+            "data": {
+                "svg": svg,
+                "width": round(width, 2),
+                "height": round(height, 2),
+            },
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 async def _step_flex_layout(
     image_bytes: bytes,
     mime: str,
@@ -682,6 +729,7 @@ async def _step_flex_layout(
     no_go_zones: list[dict] | None = None,
     image_description: str | None = None,
     zone_hints: list[dict] | None = None,
+    output_format: str = "standard",
 ) -> tuple[str, dict | None, list[dict], list]:
     # Reserve bottom 10% for footer (code-controlled, not AI)
     footer_reserve_ratio = 0.10 if footer_text else 0.0
@@ -699,6 +747,7 @@ async def _step_flex_layout(
             no_go_zones=no_go_zones,
             image_description=image_description,
             zone_hints=zone_hints,
+            output_format=output_format,
         )
     except RuntimeError as err:
         send_sse("error", {"error": str(err)})
@@ -994,12 +1043,14 @@ async def create_campaign(
 
         try:
             # Parse inputs
+            output_format = "standard"
             if body and body.get("image"):
                 image_buffer, mime_type = _decode_base64_image(body["image"])
                 target_text = body.get("text") or text
                 nonlocal mode, no_go_zones_raw
                 mode = body.get("mode", mode or "")
                 no_go_zones_raw = body.get("noGoZones", no_go_zones_raw)
+                output_format = body.get("outputFormat", "standard")
             elif image and image.size:
                 image_buffer = await _read_upload(image)
                 mime_type = image.content_type or "image/png"
@@ -1194,6 +1245,7 @@ async def create_campaign(
                         no_go_zones=all_no_go or None,
                         image_description=image_description,
                         zone_hints=text_zone_hints or None,
+                        output_format=output_format,
                     )
                     analysis["svg_overlay"] = svg_overlay
                     flex_tree = flex_result.get("flexTree")
@@ -1304,6 +1356,7 @@ async def create_campaign(
                     "finalCritiqueStatus": analysis.get("final_critique_status"),
                     "finalCritiqueFeedback": analysis.get("final_critique_feedback"),
                     "backgroundEffects": bg_effects_result,
+                    "outputFormat": output_format,
                 },
             })
             for e in events:
@@ -1333,6 +1386,7 @@ async def create_campaign_integrated(request: Request, body: dict):
             visual_concept = body.get("visual_concept")
             aspect_ratio = body.get("aspect_ratio", "3:4")
             footer_text = body.get("footer_text", "")
+            output_format = body.get("outputFormat", "standard")
 
             if not text_brief:
                 send_sse("error", {"error": "text_brief is required"})
@@ -1478,6 +1532,7 @@ async def create_campaign_integrated(request: Request, body: dict):
                     no_go_zones=None,
                     image_description=image_description,
                     zone_hints=text_zones or None,
+                    output_format=output_format,
                 )
                 flex_tree = flex_result.get("flexTree") if flex_result else None
             except Exception as e:
@@ -1593,6 +1648,7 @@ async def create_campaign_integrated(request: Request, body: dict):
                     "textZones": text_zones,
                     "bgConstraints": bg_constraints,
                     "backgroundEffects": bg_effects_result,
+                    "outputFormat": output_format,
                 },
             })
             for e in events:

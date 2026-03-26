@@ -9,6 +9,7 @@ from app.controllers.image import (
     process_image,
     render_campaign,
     suggest_campaign,
+    warp_preview,
 )
 
 router = APIRouter()
@@ -104,6 +105,11 @@ async def route_generate_integrated(request: Request):
 async def route_create_campaign_integrated(request: Request):
     body = await request.json()
     return await create_campaign_integrated(request, body)
+
+
+@router.post("/warp-preview")
+async def route_warp_preview(request: Request):
+    return await warp_preview(request)
 
 
 @router.post("/export-svg")

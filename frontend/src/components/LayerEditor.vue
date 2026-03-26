@@ -198,6 +198,7 @@ watch(
     if (newLayers.length > 0) {
       svgOverlay.value = "";
       layers.value = newLayers;
+      updateWarpPreviews();
     } else if (data.svg_overlay && data.svg_overlay.length > 50) {
       svgOverlay.value = data.svg_overlay;
       layers.value = [];
@@ -235,6 +236,68 @@ const snapGuides = ref<{ type: 'h' | 'v'; pos: number }[]>([]);
 const SNAP_THRESHOLD = 1;
 const focusedLayerId = ref<number | null>(null);
 const textRefs = ref<Record<number, HTMLElement>>({});
+const warpCache = ref<Record<string, string>>({});
+const warpPreviews = ref<Record<number, string>>({});
+
+const fetchWarpPreview = async (layer: any): Promise<string> => {
+  if (!layer.style?.warpType || layer.style.warpType === 'none' || !layer.style.warpIntensity) return '';
+  const key = JSON.stringify({
+    text: layer.content,
+    warpType: layer.style.warpType,
+    warpIntensity: layer.style.warpIntensity,
+    warpHDistortion: layer.style.warpHDistortion || 0,
+    warpVDistortion: layer.style.warpVDistortion || 0,
+    fontSize: layer.style.font_size_normalized || 40,
+    fontWeight: layer.style.font_weight || '700',
+    color: layer.style.color_hex || '#FFFFFF',
+    strokeColor: layer.style.stroke_hex,
+    strokeWidth: layer.style.stroke_width,
+  });
+  if (warpCache.value[key]) return warpCache.value[key];
+  try {
+    const resp = await fetch('http://localhost:5001/api/image/warp-preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: layer.content,
+        fontSize: (layer.style.font_size_normalized || 40) / 1000 * 1080,
+        fontWeight: layer.style.font_weight || '700',
+        color: layer.style.color_hex || '#FFFFFF',
+        warpType: layer.style.warpType,
+        warpIntensity: layer.style.warpIntensity,
+        warpHDistortion: layer.style.warpHDistortion || 0,
+        warpVDistortion: layer.style.warpVDistortion || 0,
+        strokeColor: layer.style.stroke_hex || null,
+        strokeWidth: layer.style.stroke_width || null,
+        letterSpacing: layer.style.letter_spacing || 0,
+      }),
+    });
+    const data = await resp.json();
+    if (data.success && data.data.svg) {
+      const svgStr = `<svg viewBox="0 0 ${data.data.width} ${data.data.height}" xmlns="http://www.w3.org/2000/svg">${data.data.svg}</svg>`;
+      warpCache.value[key] = svgStr;
+      return svgStr;
+    }
+  } catch (e) {
+    console.error('Warp preview fetch failed:', e);
+  }
+  return '';
+};
+
+let warpDebounce: ReturnType<typeof setTimeout> | null = null;
+const updateWarpPreviews = () => {
+  if (warpDebounce) clearTimeout(warpDebounce);
+  warpDebounce = setTimeout(async () => {
+    for (const layer of layers.value) {
+      if (layer.style?.warpType && layer.style.warpType !== 'none' && layer.style.warpIntensity) {
+        const svg = await fetchWarpPreview(layer);
+        if (svg) warpPreviews.value[layer.id] = svg;
+      } else {
+        delete warpPreviews.value[layer.id];
+      }
+    }
+  }, 300);
+};
 
 const selectedLayer = computed(() => {
   if (selectedLayerId.value === null) return null;
@@ -298,6 +361,7 @@ watch(
         }
       }
     });
+    updateWarpPreviews();
   },
   { deep: true },
 );
@@ -1112,6 +1176,41 @@ const downloadAsSvg = async () => {
       }
     } else {
       const fontSize = (l.style.font_size_normalized || 40) / 1000 * width;
+
+      // Warp effect: fetch warped SVG from backend and embed it
+      if (l.style?.warpType && l.style.warpType !== 'none' && l.style.warpIntensity) {
+        try {
+          const warpResp = await fetch('http://localhost:5001/api/image/warp-preview', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              text: l.content,
+              fontSize: fontSize,
+              fontWeight: l.style.font_weight || '700',
+              color: l.style.color_hex || '#FFFFFF',
+              warpType: l.style.warpType,
+              warpIntensity: l.style.warpIntensity,
+              warpHDistortion: l.style.warpHDistortion || 0,
+              warpVDistortion: l.style.warpVDistortion || 0,
+              strokeColor: l.style.stroke_hex || null,
+              strokeWidth: l.style.stroke_width || null,
+              letterSpacing: l.style.letter_spacing || 0,
+            }),
+          });
+          const warpData = await warpResp.json();
+          if (warpData.success && warpData.data.svg) {
+            const ww = warpData.data.width;
+            const wh = warpData.data.height;
+            const wx = x + (w - ww) / 2;
+            const wy = y + h * 0.75;
+            body += `<g transform="translate(${wx.toFixed(1)},${wy.toFixed(1)})">${warpData.data.svg}</g>`;
+            continue;
+          }
+        } catch (e) {
+          console.error('SVG export warp failed:', e);
+        }
+      }
+
       const fontFamily = l.style.font_family || 'Kanit';
       const fontWeight = l.style.font_weight || '700';
       const fillColor = l.style.color_hex || '#FFFFFF';
@@ -1588,6 +1687,12 @@ onUnmounted(() => {
                 class="component-img"
                 draggable="false"
               />
+              <div
+                v-else-if="layer.type === 'text' && warpPreviews[layer.id]"
+                class="warp-preview"
+                v-html="warpPreviews[layer.id]"
+                :title="`Warp: ${layer.style.warpType} ${layer.style.warpIntensity}%`"
+              ></div>
               <span
                 v-else
                 :ref="(el) => { if (el) textRefs[layer.id] = el as HTMLElement; }"
@@ -2446,6 +2551,15 @@ onUnmounted(() => {
   min-width: 20px;
   outline: none;
   display: inline-block;
+}
+.warp-preview {
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.warp-preview svg {
+  width: 100%;
+  height: 100%;
 }
 
 /* ---- Selection outline + handles ---- */

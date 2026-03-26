@@ -97,6 +97,7 @@ const createCampaign = async () => {
   formData.append("image", selectedFile.value);
   formData.append("text", targetText.value);
   formData.append("mode", mode.value);
+  formData.append("outputFormat", props.outputFormat || "standard");
   if (integratedTextZones.value.length > 0) {
     formData.append("textZoneHints", JSON.stringify(integratedTextZones.value));
   }

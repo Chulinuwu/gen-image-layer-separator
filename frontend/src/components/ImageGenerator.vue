@@ -109,6 +109,7 @@ const runFullCampaign = async () => {
       visual_concept: prompt.value,
       aspect_ratio: aspectRatio.value,
       footer_text: footerText.value || undefined,
+      outputFormat: props.outputFormat || "standard",
     }),
   });
 

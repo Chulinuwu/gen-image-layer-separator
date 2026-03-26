@@ -1234,6 +1234,7 @@ class VertexService:
         no_go_zones: list[dict] | None = None,
         image_description: str | None = None,
         zone_hints: list[dict] | None = None,
+        output_format: str = "standard",
     ) -> dict:
         proc_buf, proc_mime = _resize_for_processing(image_buffer)
         model = self._text_model_best()
@@ -1351,6 +1352,7 @@ class VertexService:
             tree_prompt = build_flex_tree_prompt(
                 target_text, components_list, footer_section, canvas_size,
                 layout_thought=layout_thought,
+                output_format=output_format,
             )
 
             tree_parts = []
