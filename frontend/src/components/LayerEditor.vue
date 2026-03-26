@@ -2,11 +2,13 @@
 import { ref, reactive, watch, computed, onMounted, onUnmounted } from "vue";
 import createDOMPurify from "dompurify";
 import CustomDropdown from "./CustomDropdown.vue";
+import CustomInput from "./CustomInput.vue";
 const DOMPurify = createDOMPurify(window);
 
 const props = defineProps({
   initialBackground: String,
   campaignData: Object as () => any,
+  outputFormat: { type: String, default: 'standard' },
 });
 
 const loading = ref(false);
@@ -132,6 +134,11 @@ watch(
               rotation: 0,
               z_index: 15,
               visible: true,
+              skewX: 0,
+              skewY: 0,
+              perspective: 0,
+              rotateX: 0,
+              rotateY: 0,
             });
           }
         } else if (box.type === 'text' && box.text) {
@@ -171,6 +178,11 @@ watch(
               shadow: s.textShadow || 'subtle',
               align: s.align || 'center',
               background_color: s.backgroundColor || undefined,
+              skewX: s.skewX || 0,
+              skewY: s.skewY || 0,
+              perspective: s.perspective || 0,
+              rotateX: s.rotateX || 0,
+              rotateY: s.rotateY || 0,
             },
           });
         }
@@ -474,6 +486,11 @@ const renderOnClient = async (): Promise<Blob | null> => {
     ctx.save();
     ctx.translate(x + w / 2, y + h / 2);
     ctx.rotate((rotation * Math.PI) / 180);
+    const skX = l.style?.skewX || l.skewX || 0;
+    const skY = l.style?.skewY || l.skewY || 0;
+    if (skX || skY) {
+      ctx.transform(1, Math.tan(skY * Math.PI / 180), Math.tan(skX * Math.PI / 180), 1, 0, 0);
+    }
     ctx.translate(-(x + w / 2), -(y + h / 2));
 
     if (l.type === "image") {
@@ -1067,7 +1084,14 @@ const downloadAsSvg = async () => {
     const w = (l.w / 100) * width;
     const h = (l.h / 100) * height;
     const rotation = l.rotation || 0;
-    const rotateStr = rotation ? `rotate(${rotation}, ${x + w / 2}, ${y + h / 2})` : '';
+    const transforms: string[] = [];
+    if (rotation) transforms.push(`rotate(${rotation}, ${x + w / 2}, ${y + h / 2})`);
+    if (l.style?.skewX) transforms.push(`skewX(${l.style.skewX})`);
+    else if (l.skewX) transforms.push(`skewX(${l.skewX})`);
+    if (l.style?.skewY) transforms.push(`skewY(${l.style.skewY})`);
+    else if (l.skewY) transforms.push(`skewY(${l.skewY})`);
+    // Note: perspective/rotateX/rotateY are CSS-only (3D), not supported in SVG
+    const transformStr = transforms.length ? transforms.join(' ') : '';
 
     if (l.type === "image") {
       try {
@@ -1078,7 +1102,7 @@ const downloadAsSvg = async () => {
           reader.onloadend = () => resolve(reader.result);
           reader.readAsDataURL(blob);
         });
-        body += `<image href="${base64Img}" width="${w}" height="${h}" x="${x}" y="${y}"${rotateStr ? ` transform="${rotateStr}"` : ''} />`;
+        body += `<image href="${base64Img}" width="${w}" height="${h}" x="${x}" y="${y}"${transformStr ? ` transform="${transformStr}"` : ''} />`;
       } catch (e) {
         console.error("SVG Export: Failed to embed component image", e);
       }
@@ -1098,7 +1122,7 @@ const downloadAsSvg = async () => {
       const shadowId = makeShadowFilter(l.style.shadow);
 
       if (l.style.background_color) {
-        body += `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="4" fill="${l.style.background_color}"${rotateStr ? ` transform="${rotateStr}"` : ''} />`;
+        body += `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="4" fill="${l.style.background_color}"${transformStr ? ` transform="${transformStr}"` : ''} />`;
       }
 
       const strokeAttrs = (l.style.stroke_hex && l.style.stroke_width)
@@ -1146,7 +1170,7 @@ const downloadAsSvg = async () => {
       const fontStr = `${fontWeight} ${fontSize}px ${fontFamily}, sans-serif`;
       const lines = wrapText(l.content || '', w, fontStr);
 
-      body += `<text x="${textX}" y="${y + fontSize * 0.85}" fill="${fillColor}" font-family="${fontFamily}, sans-serif" font-size="${fontSize}px" font-weight="${fontWeight}" text-anchor="${textAnchor}" letter-spacing="${letterSpacing}px"${strokeAttrs}${filterAttr}${rotateStr ? ` transform="${rotateStr}"` : ''}>`;
+      body += `<text x="${textX}" y="${y + fontSize * 0.85}" fill="${fillColor}" font-family="${fontFamily}, sans-serif" font-size="${fontSize}px" font-weight="${fontWeight}" text-anchor="${textAnchor}" letter-spacing="${letterSpacing}px"${strokeAttrs}${filterAttr}${transformStr ? ` transform="${transformStr}"` : ''}>`;
 
       lines.forEach((line: string, i: number) => {
         if (i === 0) {
@@ -1180,6 +1204,7 @@ const expandedSections = reactive<Record<string, boolean>>({
   text: true,
   appearance: true,
   effects: false,
+  transform3d: false,
 });
 
 const toggleSection = (key: string) => {
@@ -1369,6 +1394,14 @@ onUnmounted(() => {
         >
           Export SVG
         </button>
+        <button
+          v-if="layers.length && props.outputFormat === 'psd-3d'"
+          class="toolbar-btn toolbar-btn-psd"
+          title="PSD export coming soon"
+          disabled
+        >
+          Export PSD
+        </button>
       </div>
     </div>
 
@@ -1389,11 +1422,11 @@ onUnmounted(() => {
             </div>
             <div class="input-group">
               <label class="input-label">Hint Text</label>
-              <input
+              <CustomInput
                 v-model="hintText"
-                type="text"
                 placeholder="e.g. SUMMER SALE 50%"
-                class="text-input"
+                theme="dark"
+                size="sm"
               />
             </div>
             <button
@@ -1504,7 +1537,14 @@ onUnmounted(() => {
                       left: layer.x + '%',
                       width: layer.w + '%',
                       height: layer.h + '%',
-                      transform: `rotate(${layer.rotation || 0}deg)`,
+                      transform: [
+                        layer.perspective ? `perspective(${layer.perspective}px)` : '',
+                        `rotate(${layer.rotation || 0}deg)`,
+                        layer.skewX ? `skewX(${layer.skewX}deg)` : '',
+                        layer.skewY ? `skewY(${layer.skewY}deg)` : '',
+                        layer.rotateX ? `rotateX(${layer.rotateX}deg)` : '',
+                        layer.rotateY ? `rotateY(${layer.rotateY}deg)` : '',
+                      ].filter(Boolean).join(' '),
                       zIndex: layer.z_index,
                     }
                   : {
@@ -1523,7 +1563,14 @@ onUnmounted(() => {
                         ? `${layer.style.stroke_width || 1}px ${layer.style.stroke_hex}`
                         : undefined,
                       paintOrder: layer.style.stroke_hex ? 'stroke fill' : undefined,
-                      transform: `rotate(${layer.rotation || 0}deg)`,
+                      transform: [
+                        layer.style.perspective ? `perspective(${layer.style.perspective}px)` : '',
+                        `rotate(${layer.rotation || 0}deg)`,
+                        layer.style.skewX ? `skewX(${layer.style.skewX}deg)` : '',
+                        layer.style.skewY ? `skewY(${layer.style.skewY}deg)` : '',
+                        layer.style.rotateX ? `rotateX(${layer.style.rotateX}deg)` : '',
+                        layer.style.rotateY ? `rotateY(${layer.style.rotateY}deg)` : '',
+                      ].filter(Boolean).join(' '),
                       zIndex: layer.z_index,
                     }
               "
@@ -1666,6 +1713,67 @@ onUnmounted(() => {
                     :value="getMultiProp(l => l.z_index).value"
                     :placeholder="getMultiProp(l => l.z_index).mixed ? 'Mixed' : ''"
                     @input="setMultiProp((l, v) => l.z_index = v, Number(($event.target as HTMLInputElement).value))"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Transform Effects section -->
+          <div class="props-section">
+            <div class="props-section-header" @click="toggleSection('transform3d')">
+              <span>Transform Effects</span>
+              <span class="chevron" :class="{ open: expandedSections.transform3d }">&#9662;</span>
+            </div>
+            <div v-show="expandedSections.transform3d" class="props-section-body">
+              <div class="props-grid">
+                <div class="props-field">
+                  <label>Skew X</label>
+                  <input
+                    type="number" step="1"
+                    :value="getMultiProp(l => l.style?.skewX ?? l.skewX ?? 0).value"
+                    :placeholder="getMultiProp(l => l.style?.skewX ?? l.skewX).mixed ? 'Mixed' : ''"
+                    @input="selectedLayers.forEach(l => { if (l.style) l.style.skewX = Number(($event.target as HTMLInputElement).value); else l.skewX = Number(($event.target as HTMLInputElement).value); })"
+                  />
+                </div>
+                <div class="props-field">
+                  <label>Skew Y</label>
+                  <input
+                    type="number" step="1"
+                    :value="getMultiProp(l => l.style?.skewY ?? l.skewY ?? 0).value"
+                    :placeholder="getMultiProp(l => l.style?.skewY ?? l.skewY).mixed ? 'Mixed' : ''"
+                    @input="selectedLayers.forEach(l => { if (l.style) l.style.skewY = Number(($event.target as HTMLInputElement).value); else l.skewY = Number(($event.target as HTMLInputElement).value); })"
+                  />
+                </div>
+              </div>
+              <div class="props-grid">
+                <div class="props-field">
+                  <label>Perspective</label>
+                  <input
+                    type="number" step="50"
+                    :value="getMultiProp(l => l.style?.perspective ?? l.perspective ?? 0).value"
+                    :placeholder="getMultiProp(l => l.style?.perspective ?? l.perspective).mixed ? 'Mixed' : ''"
+                    @input="selectedLayers.forEach(l => { if (l.style) l.style.perspective = Number(($event.target as HTMLInputElement).value); else l.perspective = Number(($event.target as HTMLInputElement).value); })"
+                  />
+                </div>
+              </div>
+              <div class="props-grid">
+                <div class="props-field">
+                  <label>Rotate X</label>
+                  <input
+                    type="number" step="5"
+                    :value="getMultiProp(l => l.style?.rotateX ?? l.rotateX ?? 0).value"
+                    :placeholder="getMultiProp(l => l.style?.rotateX ?? l.rotateX).mixed ? 'Mixed' : ''"
+                    @input="selectedLayers.forEach(l => { if (l.style) l.style.rotateX = Number(($event.target as HTMLInputElement).value); else l.rotateX = Number(($event.target as HTMLInputElement).value); })"
+                  />
+                </div>
+                <div class="props-field">
+                  <label>Rotate Y</label>
+                  <input
+                    type="number" step="5"
+                    :value="getMultiProp(l => l.style?.rotateY ?? l.rotateY ?? 0).value"
+                    :placeholder="getMultiProp(l => l.style?.rotateY ?? l.rotateY).mixed ? 'Mixed' : ''"
+                    @input="selectedLayers.forEach(l => { if (l.style) l.style.rotateY = Number(($event.target as HTMLInputElement).value); else l.rotateY = Number(($event.target as HTMLInputElement).value); })"
                   />
                 </div>
               </div>
@@ -1964,6 +2072,18 @@ onUnmounted(() => {
 }
 .toolbar-btn-export:hover {
   background: #047857;
+}
+.toolbar-btn-psd {
+  background: #7c3aed;
+  color: white;
+  border: none;
+  padding: 0 14px;
+  height: 32px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 /* ---- Studio body (3-panel) ---- */
