@@ -152,6 +152,7 @@ align: "left|center|right"
 lineHeight: multiplier (1.0-1.2 for headers, 1.4-1.8 for body)
 letterSpacing: px (1-4 for premium headlines)
 opacity, margin, maxLines, borderRadius
+skewX, skewY, perspective, rotateX, rotateY
 
 BACKGROUND EFFECTS (canvas-level, in "backgroundEffects" array):
 - Linear fade: {{"type": "linear-fade", "from": "bottom|top|left|right", "color": "rgba(0,0,0,0.7)", "size": "40%"}}
@@ -171,4 +172,11 @@ RULES:
 - Use SPACER containers (empty children:[]) to reserve space for the subject/visual.
 - TOTAL HEIGHT: All direct children height% in root MUST add up to EXACTLY 100%.
 - Footer/disclaimer is handled separately by the system. Do NOT include footer text.
+- TRANSFORM EFFECTS (use sparingly for emphasis):
+  - skewX/skewY: Tilt text diagonally (range -20 to 20 degrees). Use for dynamic/energetic feel. Works in SVG and PSD.
+  - perspective + rotateX/rotateY: 3D rotation effect (PSD export only). perspective: 300-800px, rotateX/rotateY: -30 to 30 degrees.
+  - Example dynamic headline: style {{"fontSize":"xlarge", "fontWeight":"900", "color":"#FFFFFF", "skewX":-5}}
+  - Example 3D card effect: style {{"fontSize":"large", "perspective":500, "rotateY":15}}
+  - Do NOT apply transforms to body text or small text. Only headlines and accent text.
+  - Do NOT combine skew with 3D rotation on the same node.
 - Hero/promo = LARGEST element (fontSize "xlarge", fontWeight "900")."""

@@ -363,19 +363,32 @@ def _render_text_box(box: LayoutBox, clip_id: str) -> tuple[list[str], list[str]
     metrics = measure_text(text, font_size, font_weight)
     baseline_y = box.y + offset_y + metrics.ascent
 
+    skew_transforms = []
+    if style.skewX:
+        skew_transforms.append(f"skewX({style.skewX})")
+    if style.skewY:
+        skew_transforms.append(f"skewY({style.skewY})")
+    skew_wrap = bool(skew_transforms)
+    if skew_wrap:
+        elements.append(f'  <g transform="{" ".join(skew_transforms)}">')
+
+    indent = "    " if skew_wrap else "  "
+    inner_indent = "      " if skew_wrap else "    "
     elements.append(
-        f'  <text id="{_escape_xml(box.id)}" data-role="text" clip-path="url(#{clip_id})" '
+        f'{indent}<text id="{_escape_xml(box.id)}" data-role="text" clip-path="url(#{clip_id})" '
         f'font-family="Kanit, sans-serif" font-size="{font_size}" font-weight="{font_weight}" '
         f'fill="{_escape_xml(color)}"{stroke_attrs}{extra_attrs} text-anchor="{anchor}">'
     )
 
     for i, line in enumerate(wrapped.lines):
         if i == 0:
-            elements.append(f'    <tspan x="{text_x}" y="{baseline_y}">{_escape_xml(line)}</tspan>')
+            elements.append(f'{inner_indent}<tspan x="{text_x}" y="{baseline_y}">{_escape_xml(line)}</tspan>')
         else:
-            elements.append(f'    <tspan x="{text_x}" dy="{line_height}">{_escape_xml(line)}</tspan>')
+            elements.append(f'{inner_indent}<tspan x="{text_x}" dy="{line_height}">{_escape_xml(line)}</tspan>')
 
-    elements.append("  </text>")
+    elements.append(f"{indent}</text>")
+    if skew_wrap:
+        elements.append("  </g>")
     return defs, elements
 
 

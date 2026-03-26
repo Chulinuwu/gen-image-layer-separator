@@ -739,6 +739,11 @@ async def _step_flex_layout(
              "letterSpacing": b.style.letterSpacing,
              "textShadow": b.style.textShadow,
              "opacity": b.style.opacity,
+             "skewX": b.style.skewX,
+             "skewY": b.style.skewY,
+             "perspective": b.style.perspective,
+             "rotateX": b.style.rotateX,
+             "rotateY": b.style.rotateY,
          } if b.style else None}
         for b in flex_boxes
     ]

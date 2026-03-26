@@ -22,6 +22,11 @@ class FlexNodeStyle:
     margin: int | None = None
     maxLines: int | None = None
     gradientOverlay: str | None = None  # "to-bottom rgba(0,0,0,0) rgba(0,0,0,0.7)"
+    skewX: float | None = None       # degrees
+    skewY: float | None = None       # degrees
+    perspective: float | None = None  # px distance
+    rotateX: float | None = None     # degrees (3D tilt forward/back)
+    rotateY: float | None = None     # degrees (3D tilt left/right)
 
 
 @dataclass
