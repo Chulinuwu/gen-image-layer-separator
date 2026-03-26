@@ -58,14 +58,15 @@ const onIntegratedGenerated = (payload: { url: string; textBrief: string; textZo
 
     <main>
       <ImageGenerator
-        v-if="activeTab === 'generate'"
+        v-show="activeTab === 'generate'"
         @generated="onBackgroundGenerated"
         @integrated-generated="onIntegratedGenerated"
         @campaign-created="onCampaignCreated"
         @proceed="activeTab = 'campaign'"
+        @proceed-editor="activeTab = 'editor'"
       />
       <CampaignLayout
-        v-if="activeTab === 'campaign'"
+        v-show="activeTab === 'campaign'"
         :initialBackgroundUrl="sharedBackgroundUrl"
         :initialTextBrief="sharedTextBrief"
         :initialTextZones="sharedTextZones"
@@ -73,7 +74,7 @@ const onIntegratedGenerated = (payload: { url: string; textBrief: string; textZo
         @proceed="activeTab = 'editor'"
       />
       <LayerEditor
-        v-if="activeTab === 'editor'"
+        v-show="activeTab === 'editor'"
         :initialBackground="sharedBackgroundUrl"
         :campaignData="sharedCampaignData"
       />

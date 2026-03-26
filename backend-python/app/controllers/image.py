@@ -726,7 +726,20 @@ async def _step_flex_layout(
 
     computed_boxes = [
         {"id": b.id, "type": b.type, "x": round(b.x), "y": round(b.y),
-         "w": round(b.w), "h": round(b.h), "text": b.text, "label": b.label}
+         "w": round(b.w), "h": round(b.h), "text": b.text, "label": b.label,
+         "style": {
+             "fontSize": b.style.fontSize,
+             "fontWeight": b.style.fontWeight,
+             "color": b.style.color,
+             "strokeColor": b.style.strokeColor,
+             "strokeWidth": b.style.strokeWidth,
+             "align": b.style.align,
+             "backgroundColor": b.style.backgroundColor,
+             "lineHeight": b.style.lineHeight,
+             "letterSpacing": b.style.letterSpacing,
+             "textShadow": b.style.textShadow,
+             "opacity": b.style.opacity,
+         } if b.style else None}
         for b in flex_boxes
     ]
 
@@ -765,7 +778,7 @@ async def _step_flex_layout(
         "boxes": computed_boxes,
     })
 
-    return svg_result.svg, flex_result, computed_boxes, flex_boxes
+    return svg_result.svg, flex_result, computed_boxes, flex_boxes, bg_effects
 
 
 async def _step_refinement_loop(
@@ -1153,8 +1166,9 @@ async def create_campaign(
 
                 flex_boxes = []
                 computed_boxes = []
+                bg_effects_result: list = []
                 try:
-                    svg_overlay, flex_result, computed_boxes, flex_boxes = await _step_flex_layout(
+                    svg_overlay, flex_result, computed_boxes, flex_boxes, bg_effects_result = await _step_flex_layout(
                         image_bytes=image_buffer, mime=mime_type,
                         target_text=target_text,
                         visual_components=visual_components,
@@ -1280,6 +1294,7 @@ async def create_campaign(
                     "critiqueIterations": analysis.get("critique_iterations"),
                     "finalCritiqueStatus": analysis.get("final_critique_status"),
                     "finalCritiqueFeedback": analysis.get("final_critique_feedback"),
+                    "backgroundEffects": bg_effects_result,
                 },
             })
             for e in events:
@@ -1434,9 +1449,10 @@ async def create_campaign_integrated(request: Request, body: dict):
             flex_result: dict | None = None
             computed_boxes: list[dict] = []
             flex_boxes: list = []
+            bg_effects_result: list = []
 
             try:
-                svg_overlay, flex_result, computed_boxes, flex_boxes = await _step_flex_layout(
+                svg_overlay, flex_result, computed_boxes, flex_boxes, bg_effects_result = await _step_flex_layout(
                     image_bytes=image_buffer, mime=mime_type,
                     target_text=text_brief,
                     visual_components=visual_components,
@@ -1567,6 +1583,7 @@ async def create_campaign_integrated(request: Request, body: dict):
                     "finalCritiqueFeedback": analysis.get("final_critique_feedback"),
                     "textZones": text_zones,
                     "bgConstraints": bg_constraints,
+                    "backgroundEffects": bg_effects_result,
                 },
             })
             for e in events:

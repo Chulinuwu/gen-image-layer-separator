@@ -18,7 +18,7 @@ const showTextInputs = computed(() => generationMode.value === "integrated" || g
 
 const API_BASE = "http://localhost:5001";
 
-const emit = defineEmits(["generated", "integrated-generated", "campaign-created", "proceed"]);
+const emit = defineEmits(["generated", "integrated-generated", "campaign-created", "proceed", "proceed-editor"]);
 
 const buttonLabel = computed(() => {
   if (loading.value) return "Generating...";
@@ -321,8 +321,11 @@ const goToCampaign = () => {
           class="btn-link"
           >Open Full Image</a
         >
-        <button @click="goToCampaign" class="btn-primary mini">
+        <button v-if="!campaignResult" @click="goToCampaign" class="btn-primary mini">
           Next: Layout &amp; Text &rarr;
+        </button>
+        <button v-if="campaignResult" @click="emit('proceed-editor')" class="btn-primary mini">
+          Edit Layers &rarr;
         </button>
       </div>
     </div>

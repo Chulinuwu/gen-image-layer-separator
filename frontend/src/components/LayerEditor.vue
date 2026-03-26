@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, watch, computed } from "vue";
+import { ref, reactive, watch, computed, onMounted, onUnmounted } from "vue";
 import createDOMPurify from "dompurify";
 const DOMPurify = createDOMPurify(window);
 
@@ -19,197 +19,40 @@ const bgPreviewUrl = ref<string | null>(null);
 const canvasContainer = ref<HTMLElement | null>(null);
 const editorCanvasEl = ref<HTMLElement | null>(null);
 
-// Force canvas aspect-ratio to match the loaded BG image — must match preview exactly
 const onEditorImageLoad = (e: Event) => {
   const img = e.target as HTMLImageElement;
   if (img.naturalWidth && img.naturalHeight && editorCanvasEl.value) {
     const ratio = `${img.naturalWidth} / ${img.naturalHeight}`;
     editorCanvasEl.value.style.aspectRatio = ratio;
-    const rect = editorCanvasEl.value.getBoundingClientRect();
-    console.log(`[Editor] BG image natural: ${img.naturalWidth}x${img.naturalHeight}, container: ${Math.round(rect.width)}x${Math.round(rect.height)}, aspect-ratio: ${ratio}`);
   }
 };
+
 const renderedImage = ref<string | null>(null);
 const hintText = ref("");
-const renderMode = ref("ai"); // 'ai' or 'simple'
+const renderMode = ref("ai");
+const zoomLevel = ref(100);
 
-// SVG overlay mode — set when campaignData has svg_overlay
 const svgOverlay = ref<string>("");
+const backgroundEffects = ref<any[]>([]);
 const hasSvgOverlay = computed(() => !!svgOverlay.value && svgOverlay.value.length > 50);
 const sanitizedEditorSvgOverlay = computed(() => {
   if (!svgOverlay.value) return "";
   return DOMPurify.sanitize(svgOverlay.value, {
     USE_PROFILES: { svg: true, svgFilters: true },
     ADD_TAGS: [
-      "svg",
-      "g",
-      "text",
-      "tspan",
-      "rect",
-      "defs",
-      "filter",
-      "feDropShadow",
-      "image",
-      "style",
-      "clipPath",
+      "svg", "g", "text", "tspan", "rect", "defs", "filter",
+      "feDropShadow", "image", "style", "clipPath",
     ],
     ADD_ATTR: [
-      "viewBox",
-      "xmlns",
-      "transform",
-      "font-family",
-      "font-size",
-      "font-weight",
-      "fill",
-      "stroke",
-      "stroke-width",
-      "paint-order",
-      "filter",
-      "dy",
-      "dx",
-      "x",
-      "y",
-      "rx",
-      "ry",
-      "width",
-      "height",
-      "flood-color",
-      "flood-opacity",
-      "stdDeviation",
-      "in",
-      "preserveAspectRatio",
-      "id",
-      "letter-spacing",
-      "clip-path",
+      "viewBox", "xmlns", "transform", "font-family", "font-size",
+      "font-weight", "fill", "stroke", "stroke-width", "paint-order",
+      "filter", "dy", "dx", "x", "y", "rx", "ry", "width", "height",
+      "flood-color", "flood-opacity", "stdDeviation", "in",
+      "preserveAspectRatio", "id", "letter-spacing", "clip-path",
     ],
   });
 });
 
-/**
- * Convert a flex tree + component image URLs into editable layer objects.
- * Uses computeFlexLayout-equivalent logic to get bounding boxes, then maps to layers.
- */
-function flexTreeToLayers(
-  flexTree: any,
-  canvasSize: { w: number; h: number },
-  componentImageUrls: Record<string, string>,
-): any[] {
-  if (!flexTree) return [];
-
-  const cw = canvasSize.w || 1080;
-  const ch = canvasSize.h || 1080;
-  const layers: any[] = [];
-  let layerId = 0;
-
-  // Flatten flex tree into bounding boxes (same logic as frontend flattenFlexTree + backend computeFlexLayout)
-  interface Box {
-    id: string; type?: string; text?: string; label?: string;
-    x: number; y: number; w: number; h: number;
-    style?: any;
-  }
-
-  function flatten(node: any, x: number, y: number, w: number, h: number, out: Box[]): void {
-    if (!node) return;
-    const pad = node.padding ?? 0;
-    const ix = x + pad, iy = y + pad, iw = w - pad * 2, ih = h - pad * 2;
-
-    if (node.type && !node.children?.length) {
-      out.push({ id: node.id, type: node.type, text: node.text, label: node.label, x: ix, y: iy, w: iw, h: ih, style: node.style });
-      return;
-    }
-    const children = node.children ?? [];
-    if (!children.length) return;
-    const dir = node.direction ?? 'column';
-    const gap = node.gap ?? 8;
-    const totalGap = gap * (children.length - 1);
-    const avail = (dir === 'row' ? iw : ih) - totalGap;
-
-    const sizes = children.map((c: any) => {
-      const pct = dir === 'row' ? c.width : c.height;
-      return pct ? parseFloat(pct) / 100 : null;
-    });
-    const allocd = sizes.reduce((s: number, v: number | null) => s + (v ?? 0), 0);
-    const unalloc = sizes.filter((s: number | null) => s === null).length;
-    const each = unalloc > 0 ? Math.max(0, 1 - allocd) / unalloc : 0;
-
-    let cursor = dir === 'row' ? ix : iy;
-    for (let i = 0; i < children.length; i++) {
-      const frac = sizes[i] ?? each;
-      const main = avail * frac;
-      const cx = dir === 'row' ? cursor : ix;
-      const cy = dir === 'row' ? iy : cursor;
-      const cWidth = dir === 'row' ? main : iw;
-      const cHeight = dir === 'row' ? ih : main;
-      flatten(children[i], cx, cy, cWidth, cHeight, out);
-      cursor += main + gap;
-    }
-  }
-
-  const boxes: Box[] = [];
-  flatten(flexTree, 0, 0, cw, ch, boxes);
-  console.log(`[Editor] flexTreeToLayers: ${boxes.length} boxes from ${cw}×${ch} canvas`);
-
-  // Font size mapping (same as svgBuilder FLEX_FONT_RATIO)
-  const fontRatio: Record<string, number> = {
-    xlarge: 1.0, large: 0.75, medium: 0.5, small: 0.35, xsmall: 0.22,
-  };
-
-  for (const box of boxes) {
-    if (box.type === 'component') {
-      const imgUrl = componentImageUrls[box.label || ''] || '';
-      layers.push({
-        type: 'image',
-        label: box.label || box.id,
-        imageUrl: imgUrl,
-        id: layerId++,
-        x: (box.x / cw) * 100,
-        y: (box.y / ch) * 100,
-        w: (box.w / cw) * 100,
-        h: (box.h / ch) * 100,
-        rotation: 0,
-        z_index: 15,
-      });
-    } else if (box.type === 'text' && box.text) {
-      const s = box.style || {};
-      const ratio = fontRatio[s.fontSize || 'medium'] || 0.5;
-      const pxFont = Math.round(box.h * ratio);
-      const fontSizeNormalized = Math.round((pxFont / cw) * 1000);
-
-      const alignMap: Record<string, string> = { left: 'left', center: 'center', right: 'right' };
-
-      layers.push({
-        type: 'text',
-        content: box.text,
-        id: layerId++,
-        x: (box.x / cw) * 100,
-        y: (box.y / ch) * 100,
-        w: (box.w / cw) * 100,
-        h: (box.h / ch) * 100,
-        rotation: 0,
-        z_index: 10,
-        visual_container: 'none',
-        style: {
-          font_family: 'Kanit',
-          font_weight: s.fontWeight || '700',
-          font_size_normalized: fontSizeNormalized,
-          color_hex: s.color || '#FFFFFF',
-          stroke_hex: s.strokeColor || undefined,
-          stroke_width: s.strokeWidth || undefined,
-          letter_spacing: 0,
-          line_height: 1.35,
-          shadow: s.strokeColor ? 'none' : 'subtle',
-          align: alignMap[s.align || 'center'] || 'center',
-          background_color: s.backgroundColor || undefined,
-        },
-      });
-    }
-  }
-
-  console.log(`[Editor] flexTreeToLayers: ${layers.length} layers (${layers.filter(l => l.type === 'image').length} images, ${layers.filter(l => l.type === 'text').length} text)`);
-  return layers;
-}
-
-// Watch for background prop
 watch(
   () => props.initialBackground,
   async (bgUrl) => {
@@ -219,7 +62,6 @@ watch(
       const blob = await response.blob();
       bgFile.value = new File([blob], "background.png", { type: blob.type });
       bgPreviewUrl.value = URL.createObjectURL(bgFile.value);
-      console.log("[Editor] Background loaded from prop:", bgUrl);
     } catch (e) {
       console.error("Editor: Failed to load initial background", e);
     }
@@ -227,169 +69,126 @@ watch(
   { immediate: true },
 );
 
-// Watch for campaign data prop — loads layers immediately when available
 watch(
   () => props.campaignData,
   async (data) => {
     if (!data) return;
 
-    console.log(
-      "[Editor] Campaign data received:",
-      JSON.stringify({
-        referenceImage: data.referenceImage,
-        generatedBackgroundImageUrl: data.generatedBackgroundImageUrl || "NULL",
-        svg_overlay: data.svg_overlay ? `${data.svg_overlay.length} chars` : "NONE",
-        flexTree: data.flexTree ? "YES" : "NO",
-        canvasSize: data.canvasSize || "NONE",
-        textLayers: data.textLayers?.length || 0,
-        visualComponents: data.visualComponents?.length || 0,
-        componentPositions: data.visualComponents?.map((c: any) => ({
-          label: c.label,
-          top: c.position?.top,
-          left: c.position?.left,
-          width: c.position?.width,
-          height: c.position?.height,
-        })),
-      }),
-    );
-
-    // Load background (prefer generated clean background if available)
     const bgToUse = data.generatedBackgroundImageUrl || data.referenceImage;
-    console.log(`[Editor] BG URL: ${bgToUse} (generated: ${data.generatedBackgroundImageUrl || 'NULL'}, ref: ${data.referenceImage})`);
     if (bgToUse) {
       try {
         const response = await fetch(`http://localhost:5001${bgToUse}`);
         const blob = await response.blob();
         bgFile.value = new File([blob], "background.png", { type: blob.type });
         bgPreviewUrl.value = URL.createObjectURL(bgFile.value);
-        console.log("[Editor] Background loaded:", bgToUse);
       } catch (e) {
         console.error("Editor: Failed to load background", e);
       }
     }
 
-    // Load reference image as preview overlay
     if (data.referenceImage) {
       try {
-        const response = await fetch(
-          `http://localhost:5001${data.referenceImage}`,
-        );
+        const response = await fetch(`http://localhost:5001${data.referenceImage}`);
         const blob = await response.blob();
-        selectedFile.value = new File([blob], "reference.png", {
-          type: blob.type,
-        });
+        selectedFile.value = new File([blob], "reference.png", { type: blob.type });
         previewUrl.value = URL.createObjectURL(selectedFile.value);
-        console.log("[Editor] Reference image loaded as overlay");
       } catch (e) {
         console.error("Editor: Failed to load reference image", e);
       }
     }
 
-    // Convert campaign data directly into layers
-    const imageLayers: any[] = [];
-    const textLayers: any[] = [];
+    const newLayers: any[] = [];
+    let layerId = 0;
 
-    // Visual components → image layers
+    const fontRatio: Record<string, number> = {
+      xlarge: 1.0, large: 0.75, medium: 0.5, small: 0.35, xsmall: 0.22,
+    };
+
+    const canvasW = data.canvasSize?.w || 1080;
+    const canvasH = data.canvasSize?.h || 1080;
+
+    const compUrls: Record<string, string> = {};
     if (data.visualComponents?.length) {
-      data.visualComponents.forEach((comp: any) => {
-        imageLayers.push({
-          type: "image",
-          label: comp.label,
-          imageUrl: `http://localhost:5001${comp.imageUrl}`,
-          id: imageLayers.length,
-          x: comp.position.left / 10,
-          y: comp.position.top / 10,
-          w: comp.position.width / 10,
-          h: comp.position.height / 10,
-          rotation: comp.position.rotation || 0,
-          z_index: comp.z_index || 15,
-          interaction_zone: comp.interaction_zone || null,
-        });
-      });
+      for (const vc of data.visualComponents) {
+        compUrls[vc.label] = `http://localhost:5001${vc.imageUrl}`;
+      }
     }
 
-    // Text suggestions → text layers
-    if (data.textLayers?.length) {
-      data.textLayers.forEach((t: any) => {
-        textLayers.push({
-          type: "text",
-          content: t.part,
-          style: t.style || {},
-          id: imageLayers.length + textLayers.length,
-          x: t.position.left / 10,
-          y: t.position.top / 10,
-          w: t.position.width / 10,
-          h: t.position.height / 10,
-          rotation: t.position.rotation || 0,
-          z_index: t.z_index || 10,
-          visual_container: t.visual_container || "none",
-        });
-      });
-    }
+    if (data.computedBoxes?.length) {
+      for (const box of data.computedBoxes) {
+        if (box.type === 'component') {
+          const imgUrl = compUrls[box.label || ''] || '';
+          if (imgUrl) {
+            newLayers.push({
+              type: 'image',
+              label: box.label || box.id,
+              imageUrl: imgUrl,
+              id: layerId++,
+              x: Math.round((box.x / canvasW) * 10000) / 100,
+              y: Math.round((box.y / canvasH) * 10000) / 100,
+              w: Math.round((box.w / canvasW) * 10000) / 100,
+              h: Math.round((box.h / canvasH) * 10000) / 100,
+              rotation: 0,
+              z_index: 15,
+              visible: true,
+            });
+          }
+        } else if (box.type === 'text' && box.text) {
+          const s = box.style || {};
+          let pxFont: number;
+          const rawSize = s.fontSize || 'medium';
+          const parsed = parseInt(rawSize, 10);
+          if (!isNaN(parsed) && parsed > 0) {
+            pxFont = parsed;
+          } else {
+            const ratio = fontRatio[rawSize] || 0.5;
+            pxFont = Math.round(box.h * ratio);
+          }
+          const fontSizeNormalized = Math.round((pxFont / canvasW) * 1000);
 
-    // Character depth interaction: DISABLED — no intentional overlap until system is ready
-    // const characterLayers = imageLayers.filter(
-    //   (l: any) => l.interaction_zone?.enabled,
-    // );
-    // if (characterLayers.length > 0) {
-    //   textLayers.forEach((tl: any) => {
-    //     const tLeft = tl.x;
-    //     const tTop = tl.y;
-    //     const tRight = tl.x + tl.w;
-    //     const tBottom = tl.y + tl.h;
-    //     for (const cl of characterLayers) {
-    //       const iz = cl.interaction_zone;
-    //       const izLeft = iz.overlap_left / 10;
-    //       const izTop = iz.overlap_top / 10;
-    //       const izRight = (iz.overlap_left + iz.overlap_width) / 10;
-    //       const izBottom = (iz.overlap_top + iz.overlap_height) / 10;
-    //       const overlaps = !(
-    //         tRight <= izLeft ||
-    //         tLeft >= izRight ||
-    //         tBottom <= izTop ||
-    //         tTop >= izBottom
-    //       );
-    //       if (overlaps) {
-    //         tl.z_index = Math.min(tl.z_index, cl.z_index - 5);
-    //       }
-    //     }
-    //   });
-    // }
-
-    // Convert flex tree into editable layers (preferred) or fall back to SVG overlay
-    const hasCleanBg = !!data.generatedBackgroundImageUrl;
-    if (data.flexTree && data.canvasSize) {
-      // Build component image URL map from visualComponents
-      const compUrls: Record<string, string> = {};
-      if (data.visualComponents?.length) {
-        for (const vc of data.visualComponents) {
-          compUrls[vc.label] = `http://localhost:5001${vc.imageUrl}`;
+          newLayers.push({
+            type: 'text',
+            content: box.text,
+            id: layerId++,
+            x: Math.round((box.x / canvasW) * 10000) / 100,
+            y: Math.round((box.y / canvasH) * 10000) / 100,
+            w: Math.round((box.w / canvasW) * 10000) / 100,
+            h: Math.round((box.h / canvasH) * 10000) / 100,
+            rotation: 0,
+            z_index: 10,
+            visible: true,
+            visual_container: 'none',
+            style: {
+              font_family: 'Kanit',
+              font_weight: s.fontWeight || '700',
+              font_size_normalized: fontSizeNormalized,
+              color_hex: s.color || '#FFFFFF',
+              stroke_hex: s.strokeColor || undefined,
+              stroke_width: s.strokeWidth || undefined,
+              letter_spacing: s.letterSpacing || 0,
+              line_height: s.lineHeight || 1.35,
+              shadow: s.textShadow || (s.strokeColor ? 'none' : 'subtle'),
+              align: s.align || 'center',
+              background_color: s.backgroundColor || undefined,
+            },
+          });
         }
       }
-      const flexLayers = flexTreeToLayers(data.flexTree, data.canvasSize, compUrls);
-      if (flexLayers.length > 0) {
-        svgOverlay.value = ""; // editable layers — no read-only SVG
-        layers.value = flexLayers;
-        console.log(`[Editor] Flex tree → ${flexLayers.length} editable layers`);
-      } else {
-        // Fallback: show read-only SVG
-        svgOverlay.value = data.svg_overlay || "";
-        layers.value = hasCleanBg ? [...imageLayers, ...textLayers] : [...textLayers];
-        console.log(`[Editor] Flex tree empty — fallback mode`);
-      }
-    } else if (data.svg_overlay && data.svg_overlay.length > 50) {
-      // No flex tree available — show read-only SVG
-      svgOverlay.value = data.svg_overlay;
-      layers.value = [];
-      console.log(`[Editor] SVG overlay mode (no flex tree): ${data.svg_overlay.length} chars`);
-    } else {
-      svgOverlay.value = "";
-      layers.value = hasCleanBg
-        ? [...imageLayers, ...textLayers]
-        : [...textLayers];
     }
 
-    // Initial sync of text content to DOM refs
+    backgroundEffects.value = data.backgroundEffects || [];
+
+    if (newLayers.length > 0) {
+      svgOverlay.value = "";
+      layers.value = newLayers;
+    } else if (data.svg_overlay && data.svg_overlay.length > 50) {
+      svgOverlay.value = data.svg_overlay;
+      layers.value = [];
+    } else {
+      svgOverlay.value = "";
+      layers.value = [];
+    }
+
     setTimeout(() => {
       layers.value.forEach((layer) => {
         if (layer.type === "text") {
@@ -398,24 +197,77 @@ watch(
         }
       });
     }, 0);
-
-    console.log(
-      `[Editor] Loaded ${imageLayers.length} image + ${textLayers.length} text layers from campaign data`,
-    );
   },
   { immediate: true },
 );
 
-// Selected Layer for UI
 const selectedLayerId = ref<number | null>(null);
-
-// Dragging state
+const selectedLayerIds = ref<Set<number>>(new Set());
+const isFullscreen = ref(false);
+const marquee = reactive({
+  active: false,
+  startX: 0,
+  startY: 0,
+  currentX: 0,
+  currentY: 0,
+});
 const dragItem = ref<number | null>(null);
 const dragOffset = reactive({ x: 0, y: 0 });
+const dragStartPositions = ref<Record<number, { x: number; y: number }>>({});
+const snapGuides = ref<{ type: 'h' | 'v'; pos: number }[]>([]);
+const SNAP_THRESHOLD = 1;
 const focusedLayerId = ref<number | null>(null);
 const textRefs = ref<Record<number, HTMLElement>>({});
 
-// Watch for model changes and sync to DOM only if not focused
+const selectedLayer = computed(() => {
+  if (selectedLayerId.value === null) return null;
+  return layers.value[selectedLayerId.value] || null;
+});
+
+const selectedLayers = computed(() => {
+  if (selectedLayerIds.value.size === 0) return [];
+  return [...selectedLayerIds.value].map(idx => layers.value[idx]).filter(Boolean);
+});
+
+const multiSelectCount = computed(() => selectedLayerIds.value.size);
+
+const getMultiProp = (getter: (l: any) => any): { value: any; mixed: boolean } => {
+  const selected = selectedLayers.value;
+  if (selected.length === 0) return { value: null, mixed: false };
+  if (selected.length === 1) return { value: getter(selected[0]), mixed: false };
+  const first = getter(selected[0]);
+  const allSame = selected.every(l => getter(l) === first);
+  return { value: allSame ? first : null, mixed: !allSame };
+};
+
+const setMultiProp = (setter: (l: any, val: any) => void, val: any) => {
+  for (const idx of selectedLayerIds.value) {
+    const layer = layers.value[idx];
+    if (layer) setter(layer, val);
+  }
+};
+
+const setMultiStyle = (key: string, val: any) => {
+  for (const idx of selectedLayerIds.value) {
+    const layer = layers.value[idx];
+    if (layer?.style) (layer.style as any)[key] = val;
+  }
+};
+
+const marqueeRect = computed(() => {
+  if (!marquee.active) return null;
+  return {
+    left: Math.min(marquee.startX, marquee.currentX),
+    top: Math.min(marquee.startY, marquee.currentY),
+    width: Math.abs(marquee.currentX - marquee.startX),
+    height: Math.abs(marquee.currentY - marquee.startY),
+  };
+});
+
+const toggleFullscreen = () => {
+  isFullscreen.value = !isFullscreen.value;
+};
+
 watch(
   () => layers.value,
   (newLayers) => {
@@ -433,7 +285,6 @@ watch(
   { deep: true },
 );
 
-// Additional container styles (background color, text alignment from SVG parsing)
 const getEditorContainerStyle = (layer: any): Record<string, string> => {
   const s: Record<string, string> = {};
   if (layer.style?.background_color) {
@@ -463,6 +314,51 @@ const getShadowStyle = (shadow: string) => {
   }
 };
 
+const getBgEffectStyle = (effect: any): Record<string, string> => {
+  if (!effect) return {};
+  const s: Record<string, string> = {
+    position: 'absolute',
+    inset: '0',
+    pointerEvents: 'none',
+    zIndex: '1',
+  };
+
+  if (effect.type === 'linear-fade') {
+    const dir = effect.from === 'top' ? 'to bottom'
+      : effect.from === 'left' ? 'to right'
+      : effect.from === 'right' ? 'to left'
+      : 'to top';
+    const color = effect.color || 'rgba(0,0,0,0.7)';
+    const size = effect.size || '30%';
+    s.background = `linear-gradient(${dir}, ${color} 0%, transparent ${size})`;
+  } else if (effect.type === 'radial-fade') {
+    const cx = effect.cx ?? 50;
+    const cy = effect.cy ?? 50;
+    const color = effect.color || 'rgba(0,0,0,0.5)';
+    const radius = effect.radius || '60%';
+    s.background = `radial-gradient(ellipse at ${cx}% ${cy}%, transparent ${radius}, ${color} 100%)`;
+  } else if (effect.type === 'solid-overlay') {
+    s.background = effect.color || 'rgba(0,0,0,0.3)';
+  }
+
+  if (effect.opacity) {
+    s.opacity = String(effect.opacity);
+  }
+
+  return s;
+};
+
+const getLayerIcon = (layer: any) => {
+  if (layer.type === 'image') return 'img';
+  return 'T';
+};
+
+const getLayerLabel = (layer: any) => {
+  if (layer.type === 'image') return layer.label || 'Image';
+  const text = layer.content || '';
+  return text.length > 20 ? text.substring(0, 20) + '...' : text || 'Text';
+};
+
 const onFileChange = (e: any) => {
   const file = e.target.files[0];
   if (file) {
@@ -472,6 +368,7 @@ const onFileChange = (e: any) => {
     layers.value = [];
     renderedImage.value = null;
     selectedLayerId.value = null;
+    selectedLayerIds.value.clear();
   }
 };
 
@@ -507,7 +404,6 @@ const processImage = async (mode: string = "full") => {
 
     const data = await response.json();
     if (data.success && data.data.analysis.layers) {
-      // Worker 1: Text layers
       const textLayers = data.data.analysis.layers.map(
         (l: any, idx: number) => ({
           ...l,
@@ -517,10 +413,10 @@ const processImage = async (mode: string = "full") => {
           y: l.position.top / 10,
           w: l.position.width / 10,
           h: l.position.height / 10,
+          visible: true,
         }),
       );
 
-      // Worker 2: Visual component layers (die-cut PNGs from server)
       const imageLayers: any[] = [];
       if (data.data.visualComponents && data.data.visualComponents.length > 0) {
         for (const comp of data.data.visualComponents) {
@@ -535,6 +431,7 @@ const processImage = async (mode: string = "full") => {
             h: comp.position.height / 10,
             z_index: comp.z_index || 15,
             interaction_zone: comp.interaction_zone || null,
+            visible: true,
           });
         }
       }
@@ -551,7 +448,7 @@ const processImage = async (mode: string = "full") => {
 };
 
 const renderOnClient = async (): Promise<Blob | null> => {
-  const bgImg = document.querySelector(".bg-img") as HTMLImageElement;
+  const bgImg = editorCanvasEl.value?.querySelector(".bg-img") as HTMLImageElement;
   if (!bgImg || !layers.value.length) return null;
 
   const width = bgImg.naturalWidth;
@@ -563,11 +460,10 @@ const renderOnClient = async (): Promise<Blob | null> => {
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
 
-  // 1. Draw Background
   ctx.drawImage(bgImg, 0, 0);
 
-  // 2. Draw Layers
   for (const l of layers.value) {
+    if (!l.visible) continue;
     const x = (l.x / 100) * width;
     const y = (l.y / 100) * height;
     const w = (l.w / 100) * width;
@@ -594,14 +490,12 @@ const renderOnClient = async (): Promise<Blob | null> => {
       }
     } else {
       const fontSize = l.style.font_size_normalized || 40;
-      // Use natural scaling for font
       const pxFontSize = (fontSize / 1000) * height;
 
       ctx.font = `${l.style.font_weight || "normal"} ${pxFontSize}px ${l.style.font_family || "sans-serif"}`;
       ctx.fillStyle = l.style.color_hex || "#FFFFFF";
       ctx.textBaseline = "top";
 
-      // Shadow
       if (l.style.shadow !== "none") {
         ctx.shadowColor = "rgba(0,0,0,0.8)";
         ctx.shadowBlur = l.style.shadow === "strong" ? 12 : 4;
@@ -612,10 +506,9 @@ const renderOnClient = async (): Promise<Blob | null> => {
       const lines = (l.content || "").split("\n");
       const lineHeight = (l.style.line_height || 1.2) * pxFontSize;
 
-      // Stroke (Draw BEFORE fill to simulate paint-order: stroke fill)
       if (l.style.stroke_hex && l.style.stroke_width) {
         ctx.strokeStyle = l.style.stroke_hex;
-        ctx.lineWidth = l.style.stroke_width * 2; // Scale nicely
+        ctx.lineWidth = l.style.stroke_width * 2;
         ctx.lineJoin = "round";
         lines.forEach((line: string, i: number) => {
           ctx.strokeText(line, x, y + i * lineHeight);
@@ -670,13 +563,10 @@ const renderImage = async () => {
 
     formData.append("suggestions", JSON.stringify(suggestions));
 
-    const response = await fetch(
-      "http://localhost:5001/api/image/render-text",
-      {
-        method: "POST",
-        body: formData,
-      },
-    );
+    const response = await fetch("http://localhost:5001/api/image/render-text", {
+      method: "POST",
+      body: formData,
+    });
 
     const data = await response.json();
     if (data.success) {
@@ -691,80 +581,220 @@ const renderImage = async () => {
   }
 };
 
-// Dragging Logic
+// --- Drag logic (FIXED: uses editorCanvasEl instead of canvasContainer) ---
 const startDrag = (e: MouseEvent, idx: number) => {
+  if (resizeState.active) return;
   const layer = layers.value[idx];
-  const isEditable = (e.target as HTMLElement).classList.contains(
-    "editable-text",
-  );
+  const isEditable = (e.target as HTMLElement).classList.contains("editable-text");
 
-  // Prevent browser default ghost drag for images or clicking outside editable span
   if (layer.type === "image" || !isEditable) {
     e.preventDefault();
   }
-
   e.stopPropagation();
+
+  if (e.shiftKey) {
+    if (selectedLayerIds.value.has(idx)) {
+      selectedLayerIds.value.delete(idx);
+      if (selectedLayerId.value === idx) {
+        const remaining = [...selectedLayerIds.value];
+        selectedLayerId.value = remaining.length > 0 ? remaining[remaining.length - 1] : null;
+      }
+    } else {
+      selectedLayerIds.value.add(idx);
+      selectedLayerId.value = idx;
+    }
+    return;
+  }
+
+  if (!selectedLayerIds.value.has(idx)) {
+    selectedLayerIds.value.clear();
+    selectedLayerIds.value.add(idx);
+  }
   selectedLayerId.value = idx;
   dragItem.value = idx;
 
-  const clientX = e.clientX;
-  const clientY = e.clientY;
-
-  const rect = canvasContainer.value?.getBoundingClientRect();
+  const rect = editorCanvasEl.value?.getBoundingClientRect();
   if (!rect) return;
 
-  const posX = (layer.x / 100) * rect.width;
-  const posY = (layer.y / 100) * rect.height;
+  dragStartPositions.value = {};
+  for (const selIdx of selectedLayerIds.value) {
+    const l = layers.value[selIdx];
+    dragStartPositions.value[selIdx] = { x: l.x, y: l.y };
+  }
 
-  dragOffset.x = clientX - rect.left - posX;
-  dragOffset.y = clientY - rect.top - posY;
+  dragOffset.x = e.clientX;
+  dragOffset.y = e.clientY;
 
   window.addEventListener("mousemove", onDrag);
   window.addEventListener("mouseup", stopDrag);
 };
 
 const onDrag = (e: MouseEvent) => {
-  if (dragItem.value === null || !canvasContainer.value) return;
+  if (dragItem.value === null || !editorCanvasEl.value) return;
 
-  const rect = canvasContainer.value.getBoundingClientRect();
-  const x = e.clientX - rect.left - dragOffset.x;
-  const y = e.clientY - rect.top - dragOffset.y;
+  const rect = editorCanvasEl.value.getBoundingClientRect();
+  const dx = ((e.clientX - dragOffset.x) / rect.width) * 100;
+  const dy = ((e.clientY - dragOffset.y) / rect.height) * 100;
 
-  layers.value[dragItem.value].x = (x / rect.width) * 100;
-  layers.value[dragItem.value].y = (y / rect.height) * 100;
+  for (const selIdx of selectedLayerIds.value) {
+    const start = dragStartPositions.value[selIdx];
+    if (!start) continue;
+    layers.value[selIdx].x = start.x + dx;
+    layers.value[selIdx].y = start.y + dy;
+  }
+
+  computeSnapGuides(dragItem.value);
 };
 
 const stopDrag = () => {
   dragItem.value = null;
+  snapGuides.value = [];
   window.removeEventListener("mousemove", onDrag);
   window.removeEventListener("mouseup", stopDrag);
 };
 
-const isResizing = ref(false);
-const startSize = ref(0);
-const startY = ref(0);
+const computeSnapGuides = (idx: number) => {
+  const layer = layers.value[idx];
+  if (!layer) { snapGuides.value = []; return; }
 
-const startResize = (e: MouseEvent, idx: number) => {
-  isResizing.value = true;
+  const guides: { type: 'h' | 'v'; pos: number }[] = [];
+  const layerCx = layer.x + layer.w / 2;
+  const layerCy = layer.y + layer.h / 2;
+  const layerRight = layer.x + layer.w;
+  const layerBottom = layer.y + layer.h;
+
+  if (Math.abs(layerCx - 50) < SNAP_THRESHOLD) {
+    layer.x = 50 - layer.w / 2;
+    guides.push({ type: 'v', pos: 50 });
+  }
+  if (Math.abs(layerCy - 50) < SNAP_THRESHOLD) {
+    layer.y = 50 - layer.h / 2;
+    guides.push({ type: 'h', pos: 50 });
+  }
+
+  for (let i = 0; i < layers.value.length; i++) {
+    if (i === idx || selectedLayerIds.value.has(i)) continue;
+    const other = layers.value[i];
+    if (!other.visible) continue;
+
+    const otherCx = other.x + other.w / 2;
+    const otherCy = other.y + other.h / 2;
+    const otherRight = other.x + other.w;
+    const otherBottom = other.y + other.h;
+
+    const vChecks = [
+      { from: layer.x, to: other.x },
+      { from: layerRight, to: otherRight },
+      { from: layerCx, to: otherCx },
+      { from: layer.x, to: otherRight },
+      { from: layerRight, to: other.x },
+    ];
+    for (const check of vChecks) {
+      if (Math.abs(check.from - check.to) < SNAP_THRESHOLD) {
+        const delta = check.to - check.from;
+        layer.x += delta;
+        for (const selIdx of selectedLayerIds.value) {
+          if (selIdx !== idx) layers.value[selIdx].x += delta;
+        }
+        guides.push({ type: 'v', pos: check.to });
+        break;
+      }
+    }
+
+    const hChecks = [
+      { from: layer.y, to: other.y },
+      { from: layerBottom, to: otherBottom },
+      { from: layerCy, to: otherCy },
+      { from: layer.y, to: otherBottom },
+      { from: layerBottom, to: other.y },
+    ];
+    for (const check of hChecks) {
+      if (Math.abs(check.from - check.to) < SNAP_THRESHOLD) {
+        const delta = check.to - check.from;
+        layer.y += delta;
+        for (const selIdx of selectedLayerIds.value) {
+          if (selIdx !== idx) layers.value[selIdx].y += delta;
+        }
+        guides.push({ type: 'h', pos: check.to });
+        break;
+      }
+    }
+  }
+
+  snapGuides.value = guides;
+};
+
+// --- Resize logic (FIXED: resizes w/h, not just font size) ---
+const resizeState = reactive({
+  active: false,
+  handle: '',
+  startX: 0,
+  startY: 0,
+  startLayerX: 0,
+  startLayerY: 0,
+  startLayerW: 0,
+  startLayerH: 0,
+  startFontSize: 0,
+  layerIdx: -1,
+});
+
+const startResize = (e: MouseEvent, idx: number, handle: string) => {
+  e.stopPropagation();
+  e.preventDefault();
+  const layer = layers.value[idx];
+  resizeState.active = true;
+  resizeState.handle = handle;
+  resizeState.startX = e.clientX;
+  resizeState.startY = e.clientY;
+  resizeState.startLayerX = layer.x;
+  resizeState.startLayerY = layer.y;
+  resizeState.startLayerW = layer.w;
+  resizeState.startLayerH = layer.h;
+  resizeState.startFontSize = layer.style?.font_size_normalized || 0;
+  resizeState.layerIdx = idx;
   selectedLayerId.value = idx;
-  startSize.value = Number(layers.value[idx].style.font_size_normalized);
-  startY.value = e.clientY;
-
-  window.addEventListener("mousemove", onResize);
-  window.addEventListener("mouseup", stopResize);
+  window.addEventListener('mousemove', onResize);
+  window.addEventListener('mouseup', stopResize);
 };
 
 const onResize = (e: MouseEvent) => {
-  if (!isResizing.value || selectedLayerId.value === null) return;
-  const deltaY = e.clientY - startY.value;
-  const newSize = Math.max(8, startSize.value + deltaY);
-  layers.value[selectedLayerId.value].style.font_size_normalized = newSize;
+  if (!resizeState.active || !editorCanvasEl.value) return;
+  const rect = editorCanvasEl.value.getBoundingClientRect();
+  const dx = ((e.clientX - resizeState.startX) / rect.width) * 100;
+  const dy = ((e.clientY - resizeState.startY) / rect.height) * 100;
+  const layer = layers.value[resizeState.layerIdx];
+  const h = resizeState.handle;
+
+  // West edge: move x, shrink w
+  if (h === 'w' || h === 'nw' || h === 'sw') {
+    layer.x = resizeState.startLayerX + dx;
+    layer.w = Math.max(2, resizeState.startLayerW - dx);
+  }
+  // East edge: grow w
+  if (h === 'e' || h === 'ne' || h === 'se') {
+    layer.w = Math.max(2, resizeState.startLayerW + dx);
+  }
+  // North edge: move y, shrink h
+  if (h === 'n' || h === 'nw' || h === 'ne') {
+    layer.y = resizeState.startLayerY + dy;
+    layer.h = Math.max(2, resizeState.startLayerH - dy);
+  }
+  // South edge: grow h
+  if (h === 's' || h === 'sw' || h === 'se') {
+    layer.h = Math.max(2, resizeState.startLayerH + dy);
+  }
+
+  // Scale font size proportionally with height for text layers
+  if (layer.type === 'text' && layer.style && resizeState.startFontSize > 0 && resizeState.startLayerH > 0) {
+    const heightRatio = layer.h / resizeState.startLayerH;
+    layer.style.font_size_normalized = Math.max(4, Math.round(resizeState.startFontSize * heightRatio));
+  }
 };
 
 const stopResize = () => {
-  isResizing.value = false;
-  window.removeEventListener("mousemove", onResize);
-  window.removeEventListener("mouseup", stopResize);
+  resizeState.active = false;
+  window.removeEventListener('mousemove', onResize);
+  window.removeEventListener('mouseup', stopResize);
 };
 
 const updateText = (idx: number, e: Event) => {
@@ -784,22 +814,57 @@ const onBlurText = () => {
   focusedLayerId.value = null;
 };
 
-// Selection layer finding
 const deleteLayer = () => {
-  if (selectedLayerId.value !== null) {
+  if (selectedLayerIds.value.size > 0) {
+    const sorted = [...selectedLayerIds.value].sort((a, b) => b - a);
+    for (const idx of sorted) {
+      layers.value.splice(idx, 1);
+    }
+    selectedLayerIds.value.clear();
+    selectedLayerId.value = null;
+  } else if (selectedLayerId.value !== null) {
     layers.value.splice(selectedLayerId.value, 1);
     selectedLayerId.value = null;
   }
 };
 
+const toggleVisibility = (idx: number) => {
+  layers.value[idx].visible = !layers.value[idx].visible;
+};
+
+const moveLayerUp = (idx: number) => {
+  if (idx <= 0) return;
+  const layer = layers.value[idx];
+  const other = layers.value[idx - 1];
+  const tmpZ = layer.z_index;
+  layer.z_index = other.z_index;
+  other.z_index = tmpZ;
+  layers.value.splice(idx, 1);
+  layers.value.splice(idx - 1, 0, layer);
+  if (selectedLayerId.value === idx) selectedLayerId.value = idx - 1;
+  else if (selectedLayerId.value === idx - 1) selectedLayerId.value = idx;
+};
+
+const moveLayerDown = (idx: number) => {
+  if (idx >= layers.value.length - 1) return;
+  const layer = layers.value[idx];
+  const other = layers.value[idx + 1];
+  const tmpZ = layer.z_index;
+  layer.z_index = other.z_index;
+  other.z_index = tmpZ;
+  layers.value.splice(idx, 1);
+  layers.value.splice(idx + 1, 0, layer);
+  if (selectedLayerId.value === idx) selectedLayerId.value = idx + 1;
+  else if (selectedLayerId.value === idx + 1) selectedLayerId.value = idx;
+};
+
 const downloadAsSvg = async () => {
-  const bgImgElement = document.querySelector(".bg-img") as HTMLImageElement;
+  const bgImgElement = editorCanvasEl.value?.querySelector(".bg-img") as HTMLImageElement;
   if (!bgImgElement) return;
 
   const width = bgImgElement.naturalWidth;
   const height = bgImgElement.naturalHeight;
 
-  // Convert background to base64 for embedding
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
@@ -808,22 +873,56 @@ const downloadAsSvg = async () => {
   ctx.drawImage(bgImgElement, 0, 0);
   const base64Bg = canvas.toDataURL("image/png");
 
-  let svgContent = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">`;
+  // Build SVG with defs for filters
+  let defs = '';
+  let filterIdx = 0;
 
-  // Background
-  svgContent += `<image href="${base64Bg}" width="${width}" height="${height}" x="0" y="0" />`;
+  const makeShadowFilter = (shadow: string): string => {
+    if (!shadow || shadow === 'none') return '';
+    const id = `shadow-${filterIdx++}`;
+    if (shadow === 'subtle') {
+      defs += `<filter id="${id}" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="rgba(0,0,0,0.5)" flood-opacity="0.5"/></filter>`;
+    } else if (shadow === 'strong') {
+      defs += `<filter id="${id}" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="rgba(0,0,0,0.8)" flood-opacity="0.8"/></filter>`;
+    }
+    return id;
+  };
+
+  let body = '';
+
+  // Background image
+  body += `<image href="${base64Bg}" width="${width}" height="${height}" x="0" y="0" />`;
+
+  // Background effects
+  for (const effect of backgroundEffects.value) {
+    if (effect.type === 'linear-fade') {
+      const gradId = `grad-${filterIdx++}`;
+      const dir = effect.from || 'bottom';
+      const color = effect.color || 'rgba(0,0,0,0.7)';
+      const size = parseInt(effect.size || '30') / 100;
+
+      let x1 = '0', y1 = '0', x2 = '0', y2 = '0';
+      if (dir === 'bottom') { y1 = '1'; y2 = String(1 - size); }
+      else if (dir === 'top') { y2 = String(size); }
+      else if (dir === 'left') { x2 = String(size); }
+      else if (dir === 'right') { x1 = '1'; x2 = String(1 - size); }
+
+      defs += `<linearGradient id="${gradId}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"><stop offset="0%" stop-color="${color}"/><stop offset="100%" stop-color="transparent"/></linearGradient>`;
+      body += `<rect width="${width}" height="${height}" fill="url(#${gradId})" />`;
+    }
+  }
 
   // Layers
   for (const l of layers.value) {
+    if (!l.visible) continue;
     const x = (l.x / 100) * width;
     const y = (l.y / 100) * height;
     const w = (l.w / 100) * width;
     const h = (l.h / 100) * height;
     const rotation = l.rotation || 0;
-    const rotateStr = `rotate(${rotation}, ${x + w / 2}, ${y + h / 2})`;
+    const rotateStr = rotation ? `rotate(${rotation}, ${x + w / 2}, ${y + h / 2})` : '';
 
     if (l.type === "image") {
-      // Embedding image base64
       try {
         const resp = await fetch(l.imageUrl);
         const blob = await resp.blob();
@@ -832,39 +931,53 @@ const downloadAsSvg = async () => {
           reader.onloadend = () => resolve(reader.result);
           reader.readAsDataURL(blob);
         });
-        svgContent += `
-          <image
-            href="${base64Img}"
-            width="${w}"
-            height="${h}"
-            x="${x}"
-            y="${y}"
-            transform="${rotateStr}"
-          />`;
+        body += `<image href="${base64Img}" width="${w}" height="${h}" x="${x}" y="${y}"${rotateStr ? ` transform="${rotateStr}"` : ''} />`;
       } catch (e) {
         console.error("SVG Export: Failed to embed component image", e);
       }
     } else {
-      const escapedContent = (l.content || "")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
-      const fontSize = l.style.font_size_normalized || 40;
+      const fontSize = (l.style.font_size_normalized || 40) / 1000 * height;
+      const fontFamily = l.style.font_family || 'Kanit';
+      const fontWeight = l.style.font_weight || '700';
+      const fillColor = l.style.color_hex || '#FFFFFF';
+      const lineH = (l.style.line_height || 1.2) * fontSize;
+      const letterSpacing = l.style.letter_spacing || 0;
+      const align = l.style.align || 'center';
 
-      svgContent += `
-        <text
-          x="${x}"
-          y="${y + fontSize * 0.8}"
-          fill="${l.style.color_hex || "#000"}"
-          font-family="${l.style.font_family || "sans-serif"}"
-          font-size="${fontSize}px"
-          font-weight="${l.style.font_weight || "normal"}"
-          transform="${rotateStr}"
-        >${escapedContent}</text>`;
+      const anchorMap: Record<string, string> = { left: 'start', center: 'middle', right: 'end' };
+      const textAnchor = anchorMap[align] || 'middle';
+      const textX = align === 'left' ? x : align === 'right' ? x + w : x + w / 2;
+
+      const shadowId = makeShadowFilter(l.style.shadow);
+
+      if (l.style.background_color) {
+        body += `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="4" fill="${l.style.background_color}"${rotateStr ? ` transform="${rotateStr}"` : ''} />`;
+      }
+
+      const strokeAttrs = (l.style.stroke_hex && l.style.stroke_width)
+        ? ` stroke="${l.style.stroke_hex}" stroke-width="${l.style.stroke_width * 2}" stroke-linejoin="round" paint-order="stroke"`
+        : '';
+
+      const filterAttr = shadowId ? ` filter="url(#${shadowId})"` : '';
+
+      const lines = (l.content || '').split('\n');
+      const escapeLine = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+      body += `<text x="${textX}" y="${y + fontSize * 0.85}" fill="${fillColor}" font-family="${fontFamily}, sans-serif" font-size="${fontSize}px" font-weight="${fontWeight}" text-anchor="${textAnchor}" letter-spacing="${letterSpacing}px"${strokeAttrs}${filterAttr}${rotateStr ? ` transform="${rotateStr}"` : ''}>`;
+
+      lines.forEach((line: string, i: number) => {
+        if (i === 0) {
+          body += `${escapeLine(line)}`;
+        } else {
+          body += `<tspan x="${textX}" dy="${lineH}px">${escapeLine(line)}</tspan>`;
+        }
+      });
+
+      body += `</text>`;
     }
   }
 
-  svgContent += "</svg>";
+  const svgContent = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg"><defs>${defs}</defs>${body}</svg>`;
 
   const blob = new Blob([svgContent], { type: "image/svg+xml" });
   const url = URL.createObjectURL(blob);
@@ -874,562 +987,1052 @@ const downloadAsSvg = async () => {
   link.click();
   URL.revokeObjectURL(url);
 };
+
+// Collapsible sections in properties panel
+const expandedSections = reactive<Record<string, boolean>>({
+  transform: true,
+  text: true,
+  appearance: true,
+  effects: false,
+});
+
+const toggleSection = (key: string) => {
+  expandedSections[key] = !expandedSections[key];
+};
+
+const onWorkspaceMouseDown = (e: MouseEvent) => {
+  const target = e.target as HTMLElement;
+  if (!target.classList.contains('workspace') && !target.classList.contains('canvas') && !target.classList.contains('bg-img') && !target.classList.contains('bg-effect-layer')) return;
+
+  selectedLayerId.value = null;
+  selectedLayerIds.value.clear();
+  snapGuides.value = [];
+
+  const rect = editorCanvasEl.value?.getBoundingClientRect();
+  if (!rect) return;
+
+  marquee.active = true;
+  marquee.startX = ((e.clientX - rect.left) / rect.width) * 100;
+  marquee.startY = ((e.clientY - rect.top) / rect.height) * 100;
+  marquee.currentX = marquee.startX;
+  marquee.currentY = marquee.startY;
+
+  const onMarqueeMove = (me: MouseEvent) => {
+    if (!marquee.active || !editorCanvasEl.value) return;
+    const r = editorCanvasEl.value.getBoundingClientRect();
+    marquee.currentX = ((me.clientX - r.left) / r.width) * 100;
+    marquee.currentY = ((me.clientY - r.top) / r.height) * 100;
+  };
+
+  const onMarqueeUp = () => {
+    if (!marquee.active) return;
+    marquee.active = false;
+
+    const mx1 = Math.min(marquee.startX, marquee.currentX);
+    const my1 = Math.min(marquee.startY, marquee.currentY);
+    const mx2 = Math.max(marquee.startX, marquee.currentX);
+    const my2 = Math.max(marquee.startY, marquee.currentY);
+
+    if (mx2 - mx1 > 1 || my2 - my1 > 1) {
+      layers.value.forEach((layer, idx) => {
+        if (!layer.visible) return;
+        const lx1 = layer.x;
+        const ly1 = layer.y;
+        const lx2 = layer.x + layer.w;
+        const ly2 = layer.y + layer.h;
+
+        if (lx1 < mx2 && lx2 > mx1 && ly1 < my2 && ly2 > my1) {
+          selectedLayerIds.value.add(idx);
+        }
+      });
+
+      const first = [...selectedLayerIds.value][0];
+      if (first !== undefined) {
+        selectedLayerId.value = first;
+      }
+    }
+
+    window.removeEventListener('mousemove', onMarqueeMove);
+    window.removeEventListener('mouseup', onMarqueeUp);
+  };
+
+  window.addEventListener('mousemove', onMarqueeMove);
+  window.addEventListener('mouseup', onMarqueeUp);
+};
+
+const onKeyDown = (e: KeyboardEvent) => {
+  const tag = (e.target as HTMLElement).tagName;
+  const isEditable = (e.target as HTMLElement).getAttribute('contenteditable') === 'true';
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || isEditable) return;
+
+  if (e.key === 'Escape' && isFullscreen.value) {
+    isFullscreen.value = false;
+    e.preventDefault();
+    return;
+  }
+
+  if (selectedLayerId.value === null) return;
+  const layer = layers.value[selectedLayerId.value];
+  if (!layer) return;
+
+  const step = e.shiftKey ? 0.1 : 1;
+
+  switch (e.key) {
+    case 'Delete':
+    case 'Backspace':
+      deleteLayer();
+      e.preventDefault();
+      break;
+    case 'Escape':
+      selectedLayerId.value = null;
+      selectedLayerIds.value.clear();
+      snapGuides.value = [];
+      e.preventDefault();
+      break;
+    case 'ArrowLeft':
+      for (const selIdx of selectedLayerIds.value) layers.value[selIdx].x -= step;
+      if (selectedLayerIds.value.size === 0 && layer) layer.x -= step;
+      e.preventDefault();
+      break;
+    case 'ArrowRight':
+      for (const selIdx of selectedLayerIds.value) layers.value[selIdx].x += step;
+      if (selectedLayerIds.value.size === 0 && layer) layer.x += step;
+      e.preventDefault();
+      break;
+    case 'ArrowUp':
+      for (const selIdx of selectedLayerIds.value) layers.value[selIdx].y -= step;
+      if (selectedLayerIds.value.size === 0 && layer) layer.y -= step;
+      e.preventDefault();
+      break;
+    case 'ArrowDown':
+      for (const selIdx of selectedLayerIds.value) layers.value[selIdx].y += step;
+      if (selectedLayerIds.value.size === 0 && layer) layer.y += step;
+      e.preventDefault();
+      break;
+    case ']':
+      if (e.ctrlKey || e.metaKey) {
+        const idx = selectedLayerId.value;
+        if (idx !== null) moveLayerUp(idx);
+        e.preventDefault();
+      }
+      break;
+    case '[':
+      if (e.ctrlKey || e.metaKey) {
+        const idx = selectedLayerId.value;
+        if (idx !== null) moveLayerDown(idx);
+        e.preventDefault();
+      }
+      break;
+  }
+};
+
+onMounted(() => {
+  window.addEventListener('keydown', onKeyDown);
+});
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKeyDown);
+});
 </script>
 
 <template>
-  <div class="card editor-layout">
-    <div class="controls mb-4">
-      <h2>Layer Separator & Editor</h2>
-      <div class="flex vertical">
-        <div class="input-group">
-          <label class="label">Main Image (with text)</label>
-          <input type="file" @change="onFileChange" accept="image/*" />
-        </div>
-        <div class="input-group">
-          <label class="label">Background Image (optional)</label>
-          <input type="file" @change="onBgChange" accept="image/*" />
-        </div>
-        <div class="input-group">
-          <label class="label">Intended Text (Hint for AI)</label>
-          <input
-            v-model="hintText"
-            type="text"
-            placeholder="e.g. SUMMER SALE 50%"
-            class="hint-input"
-          />
-        </div>
-        <button
-          :disabled="!selectedFile || loading"
-          @click="processImage('full')"
-          class="mt-2"
-        >
-          {{ loading ? "Separating Layers..." : "Separate Layers" }}
+  <div class="studio-layout" :class="{ 'studio-fullscreen': isFullscreen }">
+    <!-- Top toolbar -->
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <h2 class="toolbar-title">Layer Editor</h2>
+        <button class="toolbar-btn toolbar-btn-icon" @click="toggleFullscreen" :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'">
+          <svg v-if="!isFullscreen" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+          </svg>
+          <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/>
+          </svg>
         </button>
       </div>
-      <div v-if="error" class="error mt-4">{{ error }}</div>
-    </div>
-
-    <!-- Active Layer Bar (Moves to top or follows selection) -->
-    <div v-if="selectedLayerId !== null" class="property-bar mb-4">
-      <div class="flex align-center gap-4 w-full">
-        <!-- Text layer controls -->
-        <template v-if="layers[selectedLayerId]?.type !== 'image'">
-          <div class="prop-item">
-            <label>Text Content</label>
-            <input v-model="layers[selectedLayerId].content" type="text" />
-          </div>
-          <div class="prop-item">
-            <label>Font</label>
-            <select v-model="layers[selectedLayerId].style.font_family">
-              <option value="Inter">Inter (Clean)</option>
-              <option value="Kanit">Kanit (Thai)</option>
-              <option value="Playfair Display">Playfair (Lux)</option>
-              <option value="Roboto Mono">Mono</option>
-              <option value="sans-serif">System Sans</option>
-            </select>
-          </div>
-          <div class="prop-item">
-            <label>Size</label>
-            <div class="flex no-gap">
-              <button
-                class="mini-btn left"
-                @click="layers[selectedLayerId].style.font_size_normalized -= 5"
-              >
-                -
-              </button>
-              <input
-                v-model="layers[selectedLayerId].style.font_size_normalized"
-                type="number"
-                class="w-16"
-              />
-              <button
-                class="mini-btn right"
-                @click="layers[selectedLayerId].style.font_size_normalized += 5"
-              >
-                +
-              </button>
-            </div>
-          </div>
-          <div class="prop-item">
-            <label>Color</label>
-            <div class="color-picker-wrapper">
-              <input
-                v-model="layers[selectedLayerId].style.color_hex"
-                type="color"
-              />
-            </div>
-          </div>
-          <div class="prop-item">
-            <label>Letter Spacing</label>
-            <div class="flex no-gap">
-              <button
-                class="mini-btn left"
-                @click="
-                  layers[selectedLayerId].style.letter_spacing =
-                    (Number(layers[selectedLayerId].style.letter_spacing) ||
-                      0) - 1
-                "
-              >
-                -
-              </button>
-              <input
-                v-model.number="layers[selectedLayerId].style.letter_spacing"
-                type="number"
-                class="w-16"
-              />
-              <button
-                class="mini-btn right"
-                @click="
-                  layers[selectedLayerId].style.letter_spacing =
-                    (Number(layers[selectedLayerId].style.letter_spacing) ||
-                      0) + 1
-                "
-              >
-                +
-              </button>
-            </div>
-          </div>
-          <div class="prop-item">
-            <label>Line Height</label>
-            <div class="flex no-gap">
-              <button
-                class="mini-btn left"
-                @click="
-                  layers[selectedLayerId].style.line_height =
-                    (Number(layers[selectedLayerId].style.line_height) || 1.2) -
-                    0.1
-                "
-              >
-                -
-              </button>
-              <input
-                v-model.number="layers[selectedLayerId].style.line_height"
-                type="number"
-                step="0.1"
-                class="w-16"
-              />
-              <button
-                class="mini-btn right"
-                @click="
-                  layers[selectedLayerId].style.line_height =
-                    (Number(layers[selectedLayerId].style.line_height) || 1.2) +
-                    0.1
-                "
-              >
-                +
-              </button>
-            </div>
-          </div>
-          <div class="prop-item">
-            <label>Effect (Shadow)</label>
-            <select
-              v-model="layers[selectedLayerId].style.shadow"
-              class="w-full"
-            >
-              <option value="none">None</option>
-              <option value="subtle">Subtle Shadow</option>
-              <option value="strong">Strong Shadow</option>
-            </select>
-          </div>
-          <!-- Stroke / Outline Controls -->
-          <div class="prop-item">
-            <label>Text Outline</label>
-            <div class="flex no-gap align-center">
-              <input
-                type="color"
-                v-model="layers[selectedLayerId].style.stroke_hex"
-                class="w-8 h-8 p-0 border-none mr-2"
-                title="Outline Color"
-              />
-              <input
-                v-model.number="layers[selectedLayerId].style.stroke_width"
-                type="number"
-                min="0"
-                max="10"
-                step="0.5"
-                placeholder="Width"
-                class="w-16"
-                title="Outline Width (px)"
-              />
-              <button
-                class="mini-btn ml-2"
-                @click="
-                  layers[selectedLayerId].style.stroke_width = layers[
-                    selectedLayerId
-                  ].style.stroke_width
-                    ? 0
-                    : 4;
-                  layers[selectedLayerId].style.stroke_hex = '#FFFFFF';
-                "
-              >
-                {{ layers[selectedLayerId].style.stroke_width ? "ON" : "OFF" }}
-              </button>
-            </div>
-          </div>
-        </template>
-        <!-- Mixed controls (Rotation, Opacity) -->
-        <div class="prop-item">
-          <label>Rotation</label>
-          <div class="flex no-gap">
-            <button
-              class="mini-btn left"
-              @click="layers[selectedLayerId].rotation -= 5"
-            >
-              -
-            </button>
-            <input
-              v-model.number="layers[selectedLayerId].rotation"
-              type="number"
-              class="w-16"
-            />
-            <button
-              class="mini-btn right"
-              @click="layers[selectedLayerId].rotation += 5"
-            >
-              +
-            </button>
-          </div>
+      <div class="toolbar-center">
+        <div class="zoom-controls">
+          <button class="zoom-btn" @click="zoomLevel = Math.max(25, zoomLevel - 25)" :disabled="zoomLevel <= 25">-</button>
+          <span class="zoom-label">{{ zoomLevel }}%</span>
+          <button class="zoom-btn" @click="zoomLevel = Math.min(200, zoomLevel + 25)" :disabled="zoomLevel >= 200">+</button>
+          <button class="zoom-btn zoom-fit" @click="zoomLevel = 100">Fit</button>
         </div>
-        <!-- Scale controls for images -->
-        <template v-if="layers[selectedLayerId].type === 'image'">
-          <div class="prop-item">
-            <label>Width (%)</label>
-            <input
-              v-model.number="layers[selectedLayerId].w"
-              type="number"
-              step="0.5"
-              class="w-16"
-            />
-          </div>
-          <div class="prop-item">
-            <label>Height (%)</label>
-            <input
-              v-model.number="layers[selectedLayerId].h"
-              type="number"
-              step="0.5"
-              class="w-16"
-            />
-          </div>
-        </template>
-        <div class="prop-item ml-auto">
-          <button class="btn-danger" @click="deleteLayer">Delete</button>
-        </div>
-      </div>
-    </div>
-
-    <div
-      class="editor-view"
-      ref="canvasContainer"
-      @mousedown="selectedLayerId = null"
-    >
-      <div
-        v-if="previewUrl || bgPreviewUrl || layers.length > 0"
-        class="canvas"
-        ref="editorCanvasEl"
-      >
-        <img
-          v-if="(bgPreviewUrl || previewUrl) && !hasSvgOverlay"
-          :src="
-            (layers.length > 0 ? bgPreviewUrl || previewUrl : previewUrl) ??
-            undefined
-          "
-          class="bg-img"
-          draggable="false"
-          style="user-select: none; pointer-events: none"
-          @load="onEditorImageLoad"
-        />
-
-        <!-- SVG overlay — AI-generated SVG (BG + components + text), read-only -->
-        <div
-          v-if="sanitizedEditorSvgOverlay"
-          v-html="sanitizedEditorSvgOverlay"
-          :class="['editor-svg-overlay-layer', { 'full-svg': hasSvgOverlay }]"
-          title="Text generated as SVG — use AI refinement to edit"
-        />
-
-        <div
-          v-for="(layer, idx) in layers"
-          :key="layer.id"
-          class="text-layer"
-          :class="{ active: selectedLayerId === idx }"
-          :style="
-            layer.type === 'image'
-              ? {
-                  top: layer.y + '%',
-                  left: layer.x + '%',
-                  width: layer.w + '%',
-                  height: layer.h + '%',
-                  transform: `rotate(${layer.rotation || 0}deg)`,
-                  zIndex: layer.z_index,
-                  padding: '0',
-                }
-              : {
-                  top: layer.y + '%',
-                  left: layer.x + '%',
-                  color: layer.style.color_hex,
-                  fontSize:
-                    (layer.style.font_size_normalized || 40) * 0.1 + 'cqw',
-                  fontFamily: `${layer.style.font_family || 'Kanit'}, sans-serif`,
-                  fontWeight: layer.style.font_weight,
-                  letterSpacing: (layer.style.letter_spacing || 0) + 'px',
-                  lineHeight: layer.style.line_height || 1.2,
-                  textShadow: getShadowStyle(layer.style.shadow),
-                  WebkitTextStroke: layer.style.stroke_hex
-                    ? `${layer.style.stroke_width || 1}px ${layer.style.stroke_hex}`
-                    : undefined,
-                  paintOrder: layer.style.stroke_hex ? 'stroke fill' : undefined,
-                  transform: `rotate(${layer.rotation || 0}deg)`,
-                  zIndex: layer.z_index,
-                }
-          "
-          @mousedown="startDrag($event, idx)"
-        >
-          <!-- Image layer -->
-          <img
-            v-if="layer.type === 'image'"
-            :src="layer.imageUrl"
-            :alt="layer.label"
-            :title="layer.label"
-            class="component-img"
-            draggable="false"
-          />
-          <!-- Text layer -->
-          <span
-            v-else
-            :ref="
-              (el) => {
-                if (el) textRefs[layer.id] = el as HTMLElement;
-              }
-            "
-            contenteditable="true"
-            @input="updateText(idx, $event)"
-            @focus="selectAll(idx)"
-            @blur="onBlurText"
-            class="editable-text"
-            :style="getEditorContainerStyle(layer)"
-          ></span>
-          <div
-            v-if="selectedLayerId === idx"
-            class="resize-handle"
-            @mousedown.stop="startResize($event, idx)"
-          ></div>
-        </div>
-      </div>
-      <div v-else class="placeholder">Upload an image to start editing</div>
-    </div>
-
-    <div
-      v-if="layers.length"
-      class="layer-actions mt-4 flex gap-4 align-center"
-    >
-      <div class="render-controls flex gap-2">
-        <select v-model="renderMode" class="render-mode-select">
-          <option value="ai">AI Production (Quality)</option>
-          <option value="simple">Raw PNG (Dumb/Speed)</option>
+        <select v-model="renderMode" class="toolbar-select">
+          <option value="ai">AI Production</option>
+          <option value="simple">Raw PNG</option>
         </select>
+      </div>
+      <div class="toolbar-right">
         <button
+          v-if="layers.length"
           :disabled="rendering"
           @click="renderImage"
-          class="btn-primary"
-          style="margin-top: 0"
+          class="toolbar-btn toolbar-btn-primary"
         >
           {{ rendering ? "Rendering..." : "Save & Render" }}
         </button>
+        <button
+          v-if="layers.length"
+          @click="downloadAsSvg"
+          class="toolbar-btn toolbar-btn-export"
+        >
+          Export SVG
+        </button>
       </div>
-      <button
-        @click="downloadAsSvg"
-        class="btn-primary"
-        style="background-color: #059669 !important; margin-top: 0; width: auto"
-      >
-        Export as SVG
-      </button>
     </div>
 
-    <div v-if="renderedImage" class="card mt-4 result-card">
-      <h3>Rendered Result</h3>
-      <div class="flex">
-        <img
-          :src="`http://localhost:5001${renderedImage}`"
-          class="result-img"
-        />
+    <div class="studio-body">
+      <!-- Left: Layers panel -->
+      <div class="panel panel-layers">
+        <div class="panel-header">Layers</div>
+        <div class="panel-content">
+          <!-- File inputs section -->
+          <div class="panel-section">
+            <div class="input-group">
+              <label class="input-label">Main Image</label>
+              <input type="file" @change="onFileChange" accept="image/*" class="file-input" />
+            </div>
+            <div class="input-group">
+              <label class="input-label">Background</label>
+              <input type="file" @change="onBgChange" accept="image/*" class="file-input" />
+            </div>
+            <div class="input-group">
+              <label class="input-label">Hint Text</label>
+              <input
+                v-model="hintText"
+                type="text"
+                placeholder="e.g. SUMMER SALE 50%"
+                class="text-input"
+              />
+            </div>
+            <button
+              :disabled="!selectedFile || loading"
+              @click="processImage('full')"
+              class="toolbar-btn toolbar-btn-primary"
+              style="width: 100%"
+            >
+              {{ loading ? "Separating..." : "Separate Layers" }}
+            </button>
+          </div>
+
+          <div v-if="error" class="error-msg">{{ error }}</div>
+
+          <!-- Layer list -->
+          <div class="layer-list">
+            <div
+              v-for="(layer, idx) in layers"
+              :key="layer.id"
+              class="layer-item"
+              :class="{ 'layer-item-selected': selectedLayerIds.has(idx) }"
+              @click="selectedLayerIds.clear(); selectedLayerIds.add(idx); selectedLayerId = idx"
+            >
+              <button
+                class="visibility-btn"
+                :class="{ 'visibility-off': !layer.visible }"
+                @click.stop="toggleVisibility(idx)"
+                :title="layer.visible ? 'Hide layer' : 'Show layer'"
+              >
+                <svg v-if="layer.visible" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                  <circle cx="12" cy="12" r="3"/>
+                </svg>
+                <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+                  <line x1="1" y1="1" x2="23" y2="23"/>
+                </svg>
+              </button>
+              <span class="layer-icon" :class="{ 'layer-icon-img': layer.type === 'image' }">
+                {{ getLayerIcon(layer) }}
+              </span>
+              <span class="layer-name">{{ getLayerLabel(layer) }}</span>
+              <div class="layer-order-btns">
+                <button
+                  class="order-btn"
+                  @click.stop="moveLayerUp(idx)"
+                  :disabled="idx === 0"
+                  title="Move up"
+                >&#9650;</button>
+                <button
+                  class="order-btn"
+                  @click.stop="moveLayerDown(idx)"
+                  :disabled="idx === layers.length - 1"
+                  title="Move down"
+                >&#9660;</button>
+              </div>
+            </div>
+
+            <div v-if="bgPreviewUrl" class="layer-item layer-item-bg">
+              <span class="layer-icon layer-icon-bg">BG</span>
+              <span class="layer-name">Background</span>
+            </div>
+          </div>
+        </div>
       </div>
-      <div class="mt-4 flex gap-4">
-        <a
-          v-if="renderedImage"
-          :href="`http://localhost:5001${renderedImage}`"
-          download
-          class="btn-download"
-          >Download PNG</a
+
+      <!-- Center: Canvas workspace -->
+      <div class="workspace" ref="canvasContainer" @mousedown="onWorkspaceMouseDown">
+        <div
+          v-if="previewUrl || bgPreviewUrl || layers.length > 0"
+          class="canvas"
+          ref="editorCanvasEl"
+          :style="{ transform: `scale(${zoomLevel / 100})`, transformOrigin: 'center center' }"
         >
-        <button
-          v-if="layers.length > 0"
-          @click="downloadAsSvg"
-          class="btn-primary"
-          style="background-color: #059669 !important"
-        >
-          Download SVG (Editable)
-        </button>
+          <img
+            v-if="(bgPreviewUrl || previewUrl) && !hasSvgOverlay"
+            :src="(layers.length > 0 ? bgPreviewUrl || previewUrl : previewUrl) ?? undefined"
+            class="bg-img"
+            draggable="false"
+            style="user-select: none; pointer-events: none"
+            @load="onEditorImageLoad"
+          />
+
+          <!-- Background effects (fade/gradient overlays from AI pipeline) -->
+          <div
+            v-for="(effect, eIdx) in backgroundEffects"
+            :key="'effect-' + eIdx"
+            class="bg-effect-layer"
+            :style="getBgEffectStyle(effect)"
+          ></div>
+
+          <div
+            v-if="sanitizedEditorSvgOverlay"
+            v-html="sanitizedEditorSvgOverlay"
+            :class="['editor-svg-overlay-layer', { 'full-svg': hasSvgOverlay }]"
+            title="Text generated as SVG"
+          />
+
+          <template v-for="(layer, idx) in layers" :key="layer.id">
+            <div
+              v-show="layer.visible"
+              class="layer-box"
+              :class="{ 'layer-box-selected': selectedLayerIds.has(idx) }"
+              :style="
+                layer.type === 'image'
+                  ? {
+                      top: layer.y + '%',
+                      left: layer.x + '%',
+                      width: layer.w + '%',
+                      height: layer.h + '%',
+                      transform: `rotate(${layer.rotation || 0}deg)`,
+                      zIndex: layer.z_index,
+                    }
+                  : {
+                      top: layer.y + '%',
+                      left: layer.x + '%',
+                      width: layer.w + '%',
+                      height: layer.h + '%',
+                      color: layer.style.color_hex,
+                      fontSize: (layer.style.font_size_normalized || 40) * 0.1 + 'cqw',
+                      fontFamily: `${layer.style.font_family || 'Kanit'}, sans-serif`,
+                      fontWeight: layer.style.font_weight,
+                      letterSpacing: (layer.style.letter_spacing || 0) + 'px',
+                      lineHeight: layer.style.line_height || 1.2,
+                      textShadow: getShadowStyle(layer.style.shadow),
+                      WebkitTextStroke: layer.style.stroke_hex
+                        ? `${layer.style.stroke_width || 1}px ${layer.style.stroke_hex}`
+                        : undefined,
+                      paintOrder: layer.style.stroke_hex ? 'stroke fill' : undefined,
+                      transform: `rotate(${layer.rotation || 0}deg)`,
+                      zIndex: layer.z_index,
+                    }
+              "
+              @mousedown="startDrag($event, idx)"
+            >
+              <img
+                v-if="layer.type === 'image'"
+                :src="layer.imageUrl"
+                :alt="layer.label"
+                :title="layer.label"
+                class="component-img"
+                draggable="false"
+              />
+              <span
+                v-else
+                :ref="(el) => { if (el) textRefs[layer.id] = el as HTMLElement; }"
+                contenteditable="true"
+                @input="updateText(idx, $event)"
+                @focus="selectAll(idx)"
+                @blur="onBlurText"
+                class="editable-text"
+                :style="getEditorContainerStyle(layer)"
+              ></span>
+
+              <!-- Selection handles -->
+              <template v-if="selectedLayerIds.has(idx)">
+                <div class="selection-outline"></div>
+                <div class="handle handle-nw" @mousedown.stop="startResize($event, idx, 'nw')"></div>
+                <div class="handle handle-n" @mousedown.stop="startResize($event, idx, 'n')"></div>
+                <div class="handle handle-ne" @mousedown.stop="startResize($event, idx, 'ne')"></div>
+                <div class="handle handle-e" @mousedown.stop="startResize($event, idx, 'e')"></div>
+                <div class="handle handle-se" @mousedown.stop="startResize($event, idx, 'se')"></div>
+                <div class="handle handle-s" @mousedown.stop="startResize($event, idx, 's')"></div>
+                <div class="handle handle-sw" @mousedown.stop="startResize($event, idx, 'sw')"></div>
+                <div class="handle handle-w" @mousedown.stop="startResize($event, idx, 'w')"></div>
+              </template>
+            </div>
+          </template>
+
+          <!-- Snap guides -->
+          <div
+            v-for="(guide, gIdx) in snapGuides"
+            :key="'guide-' + gIdx"
+            class="snap-guide"
+            :class="guide.type === 'h' ? 'snap-guide-h' : 'snap-guide-v'"
+            :style="guide.type === 'h'
+              ? { top: guide.pos + '%', left: '0', right: '0' }
+              : { left: guide.pos + '%', top: '0', bottom: '0' }
+            "
+          ></div>
+
+          <!-- Marquee selection rectangle -->
+          <div
+            v-if="marqueeRect"
+            class="marquee-rect"
+            :style="{
+              left: marqueeRect.left + '%',
+              top: marqueeRect.top + '%',
+              width: marqueeRect.width + '%',
+              height: marqueeRect.height + '%',
+            }"
+          ></div>
+        </div>
+        <div v-else class="placeholder">Upload an image to start editing</div>
+      </div>
+
+      <!-- Right: Properties panel -->
+      <div class="panel panel-props" v-if="selectedLayerIds.size > 0">
+        <div class="panel-header">
+          Properties {{ multiSelectCount > 1 ? `(${multiSelectCount})` : '' }}
+          <button class="delete-btn" @click="deleteLayer" title="Delete layer">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="3 6 5 6 21 6"/>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            </svg>
+          </button>
+        </div>
+        <div class="panel-content props-scroll">
+          <!-- Transform section -->
+          <div class="props-section">
+            <div class="props-section-header" @click="toggleSection('transform')">
+              <span>Transform</span>
+              <span class="chevron" :class="{ open: expandedSections.transform }">&#9662;</span>
+            </div>
+            <div v-show="expandedSections.transform" class="props-section-body">
+              <div class="props-grid">
+                <div class="props-field">
+                  <label>X</label>
+                  <input
+                    type="number" step="0.5"
+                    :value="getMultiProp(l => Math.round(l.x * 100) / 100).value"
+                    :placeholder="getMultiProp(l => l.x).mixed ? 'Mixed' : ''"
+                    @input="setMultiProp((l, v) => l.x = v, Number(($event.target as HTMLInputElement).value))"
+                  />
+                </div>
+                <div class="props-field">
+                  <label>Y</label>
+                  <input
+                    type="number" step="0.5"
+                    :value="getMultiProp(l => Math.round(l.y * 100) / 100).value"
+                    :placeholder="getMultiProp(l => l.y).mixed ? 'Mixed' : ''"
+                    @input="setMultiProp((l, v) => l.y = v, Number(($event.target as HTMLInputElement).value))"
+                  />
+                </div>
+                <div class="props-field">
+                  <label>W</label>
+                  <input
+                    type="number" step="0.5"
+                    :value="getMultiProp(l => Math.round(l.w * 100) / 100).value"
+                    :placeholder="getMultiProp(l => l.w).mixed ? 'Mixed' : ''"
+                    @input="setMultiProp((l, v) => l.w = v, Number(($event.target as HTMLInputElement).value))"
+                  />
+                </div>
+                <div class="props-field">
+                  <label>H</label>
+                  <input
+                    type="number" step="0.5"
+                    :value="getMultiProp(l => Math.round(l.h * 100) / 100).value"
+                    :placeholder="getMultiProp(l => l.h).mixed ? 'Mixed' : ''"
+                    @input="setMultiProp((l, v) => l.h = v, Number(($event.target as HTMLInputElement).value))"
+                  />
+                </div>
+              </div>
+              <div class="props-grid single">
+                <div class="props-field">
+                  <label>Rotation</label>
+                  <input
+                    type="number" step="5"
+                    :value="getMultiProp(l => l.rotation).value"
+                    :placeholder="getMultiProp(l => l.rotation).mixed ? 'Mixed' : ''"
+                    @input="setMultiProp((l, v) => l.rotation = v, Number(($event.target as HTMLInputElement).value))"
+                  />
+                </div>
+              </div>
+              <div class="props-grid single">
+                <div class="props-field">
+                  <label>Z-Index</label>
+                  <input
+                    type="number" step="1"
+                    :value="getMultiProp(l => l.z_index).value"
+                    :placeholder="getMultiProp(l => l.z_index).mixed ? 'Mixed' : ''"
+                    @input="setMultiProp((l, v) => l.z_index = v, Number(($event.target as HTMLInputElement).value))"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Text section (all selected must be text) -->
+          <template v-if="selectedLayers.every(l => l.type === 'text')">
+            <div class="props-section">
+              <div class="props-section-header" @click="toggleSection('text')">
+                <span>Text</span>
+                <span class="chevron" :class="{ open: expandedSections.text }">&#9662;</span>
+              </div>
+              <div v-show="expandedSections.text" class="props-section-body">
+                <div class="props-field full" v-if="multiSelectCount === 1">
+                  <label>Content</label>
+                  <input v-model="selectedLayer!.content" type="text" />
+                </div>
+                <div class="props-field full" v-else>
+                  <label>Content</label>
+                  <input type="text" disabled placeholder="(multiple layers)" />
+                </div>
+                <div class="props-field full">
+                  <label>Font Family</label>
+                  <select
+                    :value="getMultiProp(l => l.style?.font_family).value"
+                    @change="setMultiStyle('font_family', ($event.target as HTMLSelectElement).value)"
+                  >
+                    <option v-if="getMultiProp(l => l.style?.font_family).mixed" value="" disabled selected>Mixed</option>
+                    <option value="Inter">Inter</option>
+                    <option value="Kanit">Kanit</option>
+                    <option value="Playfair Display">Playfair Display</option>
+                    <option value="Roboto Mono">Roboto Mono</option>
+                    <option value="sans-serif">System Sans</option>
+                  </select>
+                </div>
+                <div class="props-field full">
+                  <label>Font Weight</label>
+                  <select
+                    :value="getMultiProp(l => l.style?.font_weight).value"
+                    @change="setMultiStyle('font_weight', ($event.target as HTMLSelectElement).value)"
+                  >
+                    <option v-if="getMultiProp(l => l.style?.font_weight).mixed" value="" disabled selected>Mixed</option>
+                    <option value="400">Regular (400)</option>
+                    <option value="500">Medium (500)</option>
+                    <option value="600">Semibold (600)</option>
+                    <option value="700">Bold (700)</option>
+                    <option value="800">Extra Bold (800)</option>
+                    <option value="900">Black (900)</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div class="props-section">
+              <div class="props-section-header" @click="toggleSection('appearance')">
+                <span>Appearance</span>
+                <span class="chevron" :class="{ open: expandedSections.appearance }">&#9662;</span>
+              </div>
+              <div v-show="expandedSections.appearance" class="props-section-body">
+                <div class="props-grid">
+                  <div class="props-field">
+                    <label>Size</label>
+                    <input
+                      type="number"
+                      :value="getMultiProp(l => l.style?.font_size_normalized).value"
+                      :placeholder="getMultiProp(l => l.style?.font_size_normalized).mixed ? 'Mixed' : ''"
+                      @input="setMultiStyle('font_size_normalized', Number(($event.target as HTMLInputElement).value))"
+                    />
+                  </div>
+                  <div class="props-field">
+                    <label>Color</label>
+                    <div class="color-input-wrap">
+                      <input
+                        type="color" class="color-input"
+                        :value="getMultiProp(l => l.style?.color_hex).value || '#FFFFFF'"
+                        @input="setMultiStyle('color_hex', ($event.target as HTMLInputElement).value)"
+                      />
+                      <span class="color-hex">{{ getMultiProp(l => l.style?.color_hex).mixed ? 'Mixed' : getMultiProp(l => l.style?.color_hex).value }}</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="props-grid">
+                  <div class="props-field">
+                    <label>Spacing</label>
+                    <input
+                      type="number" step="0.5"
+                      :value="getMultiProp(l => l.style?.letter_spacing).value"
+                      :placeholder="getMultiProp(l => l.style?.letter_spacing).mixed ? 'Mixed' : ''"
+                      @input="setMultiStyle('letter_spacing', Number(($event.target as HTMLInputElement).value))"
+                    />
+                  </div>
+                  <div class="props-field">
+                    <label>Line H.</label>
+                    <input
+                      type="number" step="0.05"
+                      :value="getMultiProp(l => l.style?.line_height).value"
+                      :placeholder="getMultiProp(l => l.style?.line_height).mixed ? 'Mixed' : ''"
+                      @input="setMultiStyle('line_height', Number(($event.target as HTMLInputElement).value))"
+                    />
+                  </div>
+                </div>
+                <div class="props-field full">
+                  <label>Align</label>
+                  <select
+                    :value="getMultiProp(l => l.style?.align).value"
+                    @change="setMultiStyle('align', ($event.target as HTMLSelectElement).value)"
+                  >
+                    <option v-if="getMultiProp(l => l.style?.align).mixed" value="" disabled selected>Mixed</option>
+                    <option value="left">Left</option>
+                    <option value="center">Center</option>
+                    <option value="right">Right</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div class="props-section">
+              <div class="props-section-header" @click="toggleSection('effects')">
+                <span>Effects</span>
+                <span class="chevron" :class="{ open: expandedSections.effects }">&#9662;</span>
+              </div>
+              <div v-show="expandedSections.effects" class="props-section-body">
+                <div class="props-field full">
+                  <label>Shadow</label>
+                  <select
+                    :value="getMultiProp(l => l.style?.shadow).value"
+                    @change="setMultiStyle('shadow', ($event.target as HTMLSelectElement).value)"
+                  >
+                    <option v-if="getMultiProp(l => l.style?.shadow).mixed" value="" disabled selected>Mixed</option>
+                    <option value="none">None</option>
+                    <option value="subtle">Subtle</option>
+                    <option value="strong">Strong</option>
+                  </select>
+                </div>
+                <div class="props-grid">
+                  <div class="props-field">
+                    <label>Stroke</label>
+                    <div class="color-input-wrap">
+                      <input
+                        type="color" class="color-input"
+                        :value="getMultiProp(l => l.style?.stroke_hex).value || '#FFFFFF'"
+                        @input="setMultiStyle('stroke_hex', ($event.target as HTMLInputElement).value)"
+                      />
+                    </div>
+                  </div>
+                  <div class="props-field">
+                    <label>Width</label>
+                    <input
+                      type="number" min="0" max="10" step="0.5"
+                      :value="getMultiProp(l => l.style?.stroke_width).value"
+                      :placeholder="getMultiProp(l => l.style?.stroke_width).mixed ? 'Mixed' : ''"
+                      @input="setMultiStyle('stroke_width', Number(($event.target as HTMLInputElement).value))"
+                    />
+                  </div>
+                </div>
+                <button
+                  v-if="multiSelectCount === 1 && selectedLayer"
+                  class="toggle-stroke-btn"
+                  @click="
+                    selectedLayer.style.stroke_width = selectedLayer.style.stroke_width ? 0 : 4;
+                    selectedLayer.style.stroke_hex = selectedLayer.style.stroke_hex || '#FFFFFF';
+                  "
+                >
+                  {{ selectedLayer.style.stroke_width ? 'Remove Stroke' : 'Add Stroke' }}
+                </button>
+              </div>
+            </div>
+          </template>
+
+          <!-- Image layer: all selected must be image -->
+          <template v-if="selectedLayers.every(l => l.type === 'image')">
+            <div class="props-section">
+              <div class="props-section-header">
+                <span>Image</span>
+              </div>
+              <div class="props-section-body">
+                <div class="props-field full" v-if="multiSelectCount === 1 && selectedLayer">
+                  <label>Label</label>
+                  <input :value="selectedLayer.label" type="text" disabled />
+                </div>
+                <div class="props-field full" v-else>
+                  <label>Label</label>
+                  <input type="text" disabled placeholder="(multiple layers)" />
+                </div>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
+
+    <!-- Rendered result -->
+    <div v-if="renderedImage" class="result-bar">
+      <h3>Rendered Result</h3>
+      <div class="result-content">
+        <img :src="`http://localhost:5001${renderedImage}`" class="result-img" />
+        <div class="result-actions">
+          <a :href="`http://localhost:5001${renderedImage}`" download class="toolbar-btn toolbar-btn-primary">
+            Download PNG
+          </a>
+          <button @click="downloadAsSvg" class="toolbar-btn toolbar-btn-export">
+            Download SVG
+          </button>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.property-bar {
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(16, 24, 40, 0.1);
-  padding: 12px 20px;
-  border-radius: 16px;
-  box-shadow: 0 10px 15px -3px rgba(16, 24, 40, 0.1);
-  position: sticky;
-  top: 10px;
-  z-index: 100;
+/* ---- Studio shell ---- */
+.studio-layout {
   display: flex;
-  align-items: center;
-  transition: all 0.3s ease;
+  flex-direction: column;
+  height: calc(100vh - 120px);
+  min-height: 600px;
+  background: #1e1e2e;
+  color: #e2e2e8;
+  font-family: system-ui, -apple-system, sans-serif;
+  border-radius: 8px;
+  overflow: hidden;
 }
 
-.prop-item h4 {
-  margin: 0 0 4px 0;
-  font-size: 0.7rem;
+/* ---- Toolbar ---- */
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 44px;
+  padding: 0 16px;
+  background: #1a1a28;
+  border-bottom: 1px solid #2d2d44;
+  flex-shrink: 0;
+}
+.toolbar-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0;
+  color: #e2e2e8;
+}
+.toolbar-left,
+.toolbar-center,
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.toolbar-select {
+  height: 28px;
+  padding: 0 8px;
+  background: #2d2d44;
+  border: 1px solid #3d3d5c;
+  border-radius: 4px;
+  color: #e2e2e8;
+  font-size: 12px;
+  outline: none;
+}
+.toolbar-select:focus {
+  border-color: #2563eb;
+}
+.toolbar-btn {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid #3d3d5c;
+  border-radius: 4px;
+  background: #2d2d44;
+  color: #e2e2e8;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+.toolbar-btn:hover {
+  background: #3d3d5c;
+}
+.toolbar-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.toolbar-btn-primary {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+.toolbar-btn-primary:hover {
+  background: #1d4ed8;
+}
+.toolbar-btn-export {
+  background: #065f46;
+  border-color: #065f46;
+  color: #d1fae5;
+}
+.toolbar-btn-export:hover {
+  background: #047857;
+}
+
+/* ---- Studio body (3-panel) ---- */
+.studio-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ---- Panels ---- */
+.panel {
+  background: #252536;
+  border-right: 1px solid #2d2d44;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+.panel-layers {
+  width: 200px;
+}
+.panel-props {
+  width: 260px;
+  border-right: none;
+  border-left: 1px solid #2d2d44;
+}
+.panel-header {
+  height: 36px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--secondary);
+  color: #8b8ba0;
+  border-bottom: 1px solid #2d2d44;
+  flex-shrink: 0;
 }
-
-.prop-item label {
-  display: block;
-  font-size: 0.75rem;
-  font-weight: 700;
-  color: #344054;
-  margin-bottom: 6px;
+.panel-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
 }
-
-.prop-item input,
-.prop-item select {
-  padding: 8px 12px;
-  margin-bottom: 0;
-  border: 1px solid #d0d5dd;
-  border-radius: 8px;
-  font-size: 0.9rem;
-  transition: border-color 0.2s;
-}
-
-.prop-item input:focus,
-.prop-item select:focus {
-  border-color: #2563eb;
-  outline: none;
-}
-
-.hint-input {
-  width: 100%;
-  padding: 10px 14px;
-  background: #fff;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.05);
-}
-
-.mini-btn {
-  width: 32px;
-  height: 38px;
+.props-scroll {
   padding: 0;
+}
+
+/* ---- Layers panel ---- */
+.panel-section {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #fff;
-  border: 1px solid #d0d5dd;
-  cursor: pointer;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #2d2d44;
+}
+.input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.input-label {
+  font-size: 10px;
   font-weight: 600;
-  color: #344054;
-  transition: all 0.2s;
+  color: #8b8ba0;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
-
-select {
-  height: 38px;
-  padding: 0 12px;
-  border: 1px solid #d0d5dd;
-  border-radius: 8px;
-  background: white;
-  font-size: 0.9rem;
-  color: #344054;
+.file-input {
+  font-size: 11px;
+  color: #8b8ba0;
+  width: 100%;
+}
+.file-input::file-selector-button {
+  height: 24px;
+  padding: 0 8px;
+  background: #2d2d44;
+  border: 1px solid #3d3d5c;
+  border-radius: 3px;
+  color: #e2e2e8;
+  font-size: 11px;
+  cursor: pointer;
+  margin-right: 6px;
+}
+.text-input {
+  height: 28px;
+  padding: 0 8px;
+  background: #1e1e2e;
+  border: 1px solid #3d3d5c;
+  border-radius: 4px;
+  color: #e2e2e8;
+  font-size: 12px;
   outline: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+.text-input:focus {
+  border-color: #2563eb;
+}
+.error-msg {
+  background: #3b1219;
+  color: #fca5a5;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  margin-bottom: 8px;
 }
 
-.mini-btn.left {
-  border-radius: 8px 0 0 8px;
-  border-right: none;
+.layer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
-
-.mini-btn.right {
-  border-radius: 0 8px 8px 0;
-  border-left: none;
+.layer-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.1s;
 }
-
-.mini-btn:hover {
-  background: #f9fafb;
+.layer-item:hover {
+  background: #2d2d44;
 }
-
-.w-16 {
-  width: 50px;
-  height: 38px;
-  text-align: center;
-  border-radius: 0 !important;
-  border-left: 1px solid #d0d5dd !important;
-  border-right: 1px solid #d0d5dd !important;
+.layer-item-selected {
+  background: #2563eb22;
+  outline: 1px solid #2563eb44;
 }
-
-.color-picker-wrapper {
-  width: 44px;
-  height: 38px;
-  padding: 4px;
-  border: 1px solid #d0d5dd;
-  border-radius: 8px;
-  background: #fff;
+.layer-item-bg {
+  opacity: 0.6;
+  cursor: default;
+}
+.layer-order-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.layer-item:hover .layer-order-btns {
+  opacity: 1;
+}
+.order-btn {
+  width: 18px;
+  height: 14px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: #8b8ba0;
+  font-size: 8px;
+  cursor: pointer;
+  border-radius: 2px;
   display: flex;
   align-items: center;
   justify-content: center;
+  line-height: 1;
 }
-
-.color-picker-wrapper input[type="color"] {
-  border: none;
-  width: 100%;
-  height: 100%;
-  padding: 0;
-  cursor: pointer;
+.order-btn:hover:not(:disabled) {
+  background: #3d3d54;
+  color: #e2e2e8;
+}
+.order-btn:disabled {
+  opacity: 0.2;
+  cursor: default;
+}
+.visibility-btn {
   background: none;
+  border: none;
+  color: #8b8ba0;
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.visibility-btn:hover {
+  color: #e2e2e8;
+}
+.visibility-off {
+  opacity: 0.35;
+}
+.layer-icon {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  background: #3d3d5c;
+  border-radius: 3px;
+  color: #c4b5fd;
+  flex-shrink: 0;
+}
+.layer-icon-img {
+  color: #86efac;
+  font-size: 8px;
+}
+.layer-icon-bg {
+  color: #93c5fd;
+  font-size: 8px;
+}
+.layer-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #c8c8d4;
 }
 
-.btn-danger {
-  background: #fee4e2;
-  color: #d92d20;
-  border: 1px solid #fda29b;
-  height: 38px;
-  padding: 0 16px;
-  align-self: flex-end;
-  border-radius: 8px;
+/* ---- Workspace ---- */
+.workspace {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    repeating-conic-gradient(#1a1a2e 0% 25%, #222238 0% 50%) 0 0 / 20px 20px;
+  padding: 24px;
+  overflow: auto;
+  position: relative;
 }
-.btn-danger:hover {
-  background: #fef3f2;
-}
-
-.w-full {
+.canvas {
+  position: relative;
   width: 100%;
+  max-width: 600px;
+  line-height: 0;
+  cursor: crosshair;
+  container-type: inline-size;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  border-radius: 2px;
 }
-.ml-auto {
-  margin-left: auto;
+.bg-img {
+  width: 100%;
+  display: block;
 }
-.no-gap {
-  gap: 0 !important;
+.bg-effect-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 400px;
+  color: #8b8ba0;
+  font-size: 14px;
+  font-weight: 500;
 }
 
-.text-layer.active {
-  outline: 2px solid var(--primary);
-  outline-offset: 4px;
-}
-
-/* SVG overlay in editor — read-only AI text overlay */
+/* ---- SVG overlay ---- */
 .editor-svg-overlay-layer {
   position: absolute;
   inset: 0;
@@ -1437,7 +2040,6 @@ select {
   overflow: hidden;
   z-index: 10;
 }
-/* Full SVG mode — SVG contains BG + components + text, displayed as standalone */
 .editor-svg-overlay-layer.full-svg {
   position: relative;
   inset: auto;
@@ -1455,166 +2057,320 @@ select {
   overflow: hidden;
 }
 
+/* ---- Layer boxes on canvas ---- */
+.layer-box {
+  position: absolute;
+  cursor: move;
+  user-select: none;
+}
 .component-img {
   width: 100%;
   height: 100%;
   object-fit: contain;
   pointer-events: none;
   user-select: none;
+  display: block;
 }
-
-.component-label {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: #344054;
-  padding: 6px 12px;
-  background: #f2f4f7;
-  border-radius: 8px;
-  display: inline-block;
-}
-
 .editable-text {
   white-space: pre-wrap;
   min-width: 20px;
   outline: none;
+  display: inline-block;
 }
 
-.resize-handle {
+/* ---- Selection outline + handles ---- */
+.selection-outline {
   position: absolute;
-  bottom: -5px;
-  right: -5px;
-  width: 10px;
-  height: 10px;
-  background: var(--primary);
-  cursor: nwse-resize;
+  inset: -1px;
+  border: 2px solid #2563eb;
+  pointer-events: none;
+  border-radius: 1px;
 }
+.handle {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: #fff;
+  border: 1.5px solid #2563eb;
+  border-radius: 1px;
+  z-index: 999;
+}
+.handle-nw { top: -5px; left: -5px; cursor: nw-resize; }
+.handle-n  { top: -5px; left: 50%; transform: translateX(-50%); cursor: n-resize; }
+.handle-ne { top: -5px; right: -5px; cursor: ne-resize; }
+.handle-e  { top: 50%; right: -5px; transform: translateY(-50%); cursor: e-resize; }
+.handle-se { bottom: -5px; right: -5px; cursor: se-resize; }
+.handle-s  { bottom: -5px; left: 50%; transform: translateX(-50%); cursor: s-resize; }
+.handle-sw { bottom: -5px; left: -5px; cursor: sw-resize; }
+.handle-w  { top: 50%; left: -5px; transform: translateY(-50%); cursor: w-resize; }
 
-.editor-layout {
+/* ---- Properties panel ---- */
+.props-section {
+  border-bottom: 1px solid #2d2d44;
+}
+.props-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #8b8ba0;
+  cursor: pointer;
+  user-select: none;
+}
+.props-section-header:hover {
+  color: #c8c8d4;
+}
+.chevron {
+  font-size: 10px;
+  transition: transform 0.15s;
+  transform: rotate(-90deg);
+}
+.chevron.open {
+  transform: rotate(0deg);
+}
+.props-section-body {
+  padding: 0 12px 10px;
   display: flex;
   flex-direction: column;
+  gap: 6px;
 }
-.flex.vertical {
+.props-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.props-grid.single {
+  grid-template-columns: 1fr;
+}
+.props-field {
+  display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 12px;
+  gap: 2px;
 }
-.input-group {
-  width: 100%;
+.props-field.full {
+  grid-column: 1 / -1;
 }
-.label {
-  display: block;
-  font-size: 0.8rem;
+.props-field label {
+  font-size: 10px;
   font-weight: 600;
-  margin-bottom: 4px;
-  color: var(--secondary);
+  color: #8b8ba0;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
-
-.editor-view {
-  position: relative;
-  width: 100%;
-  max-width: 600px; /* match preview canvas max-width so proportions look identical */
-  margin-left: auto;
-  margin-right: auto;
-  background: #f2f4f7;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.05);
-  margin-top: 10px;
-}
-
-.canvas {
-  position: relative;
-  width: 100%;
-  line-height: 0;
-  cursor: crosshair;
-  container-type: inline-size;
-}
-.bg-img {
-  width: 100%;
-  display: block;
-}
-
-.component-img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  display: block;
-}
-
-.text-layer {
-  position: absolute;
-  cursor: move;
-  padding: 2px 4px;
-  user-select: none;
-  white-space: nowrap;
-  line-height: 1;
-}
-
-.editable-text {
+.props-field input,
+.props-field select {
+  height: 28px;
+  padding: 0 8px;
+  background: #1e1e2e;
+  border: 1px solid #3d3d5c;
+  border-radius: 4px;
+  color: #e2e2e8;
+  font-size: 12px;
   outline: none;
-  display: inline-block;
-  min-width: 10px;
-  padding: 2px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.props-field input:focus,
+.props-field select:focus {
+  border-color: #2563eb;
+}
+.props-field input[type="number"] {
+  -moz-appearance: textfield;
+}
+.props-field input[type="number"]::-webkit-inner-spin-button,
+.props-field input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.props-field input::placeholder {
+  color: #6b6b80;
+  font-style: italic;
+}
+.color-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 4px;
+  background: #1e1e2e;
+  border: 1px solid #3d3d5c;
+  border-radius: 4px;
+}
+.color-input {
+  width: 20px !important;
+  height: 20px !important;
+  padding: 0 !important;
+  border: none !important;
+  background: none !important;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.color-hex {
+  font-size: 11px;
+  color: #8b8ba0;
+  font-family: monospace;
+}
+.toggle-stroke-btn {
+  height: 26px;
+  padding: 0 10px;
+  background: #2d2d44;
+  border: 1px solid #3d3d5c;
+  border-radius: 4px;
+  color: #c8c8d4;
+  font-size: 11px;
+  cursor: pointer;
+  width: 100%;
+}
+.toggle-stroke-btn:hover {
+  background: #3d3d5c;
+}
+.delete-btn {
+  background: none;
+  border: none;
+  color: #f87171;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  border-radius: 3px;
+}
+.delete-btn:hover {
+  background: #3b121944;
 }
 
-.placeholder {
+/* ---- Result bar ---- */
+.result-bar {
+  padding: 16px;
+  border-top: 1px solid #2d2d44;
+  background: #252536;
+}
+.result-bar h3 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 12px;
+  color: #e2e2e8;
+}
+.result-content {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.result-img {
+  max-width: 400px;
+  width: 100%;
+  border-radius: 4px;
+}
+.result-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: #2d2d44;
+  border-radius: 6px;
+  padding: 2px;
+  margin-right: 12px;
+}
+.zoom-btn {
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  color: #8b8ba0;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 500px;
-  color: var(--secondary);
+  transition: all 0.15s;
+}
+.zoom-btn:hover:not(:disabled) {
+  background: #3d3d54;
+  color: #e2e2e8;
+}
+.zoom-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.zoom-fit {
+  width: auto;
+  padding: 0 8px;
+  font-size: 11px;
+}
+.zoom-label {
+  font-size: 11px;
   font-weight: 600;
+  color: #8b8ba0;
+  min-width: 40px;
+  text-align: center;
 }
 
-.btn-download {
-  display: inline-block;
-  padding: 12px 24px;
-  background: var(--primary);
-  color: white;
-  text-decoration: none;
-  border-radius: 8px;
-  font-weight: 600;
+/* ---- Snap guides ---- */
+.snap-guide {
+  position: absolute;
+  pointer-events: none;
+  z-index: 9999;
 }
-.btn-primary {
-  width: 100%;
-  margin-top: 20px;
+.snap-guide-h {
+  height: 1px;
+  background: #ff3366;
+  left: 0;
+  right: 0;
 }
-.result-card {
-  border: 4px solid var(--primary);
-  margin-top: 32px;
-}
-.result-img {
-  width: 100%;
-  border-radius: 8px;
+.snap-guide-v {
+  width: 1px;
+  background: #ff3366;
+  top: 0;
+  bottom: 0;
 }
 
-.render-controls {
-  background: #f8fafc;
-  padding: 4px;
-  border-radius: 12px;
-  border: 1px solid #e2e8f0;
+/* ---- Marquee selection ---- */
+.marquee-rect {
+  position: absolute;
+  border: 1.5px solid #2563eb;
+  background: rgba(37, 99, 235, 0.1);
+  pointer-events: none;
+  z-index: 9998;
 }
 
-.render-mode-select {
-  border: none;
-  background: transparent;
-  font-weight: 600;
-  color: #475569;
-  padding: 0 12px;
-  cursor: pointer;
+/* ---- Fullscreen ---- */
+.studio-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  border-radius: 0;
+  min-height: 100vh;
+  height: 100vh;
 }
 
-.render-mode-select:focus {
-  outline: none;
-}
-
-.align-center {
+/* ---- Fullscreen icon button ---- */
+.toolbar-btn-icon {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: flex;
   align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: #8b8ba0;
+  cursor: pointer;
+  border-radius: 6px;
+  margin-left: 8px;
+  transition: all 0.15s;
 }
-.gap-2 {
-  gap: 8px;
+.toolbar-btn-icon:hover {
+  background: #2d2d44;
+  color: #e2e2e8;
 }
-.gap-4 {
-  gap: 16px;
-}
+
 </style>
