@@ -301,7 +301,12 @@ def _render_text_box(box: LayoutBox, clip_id: str) -> tuple[list[str], list[str]
 
     # Warp rendering: convert text to glyph paths and apply warp deformation
     if style.warpType and style.warpType != "none" and style.warpIntensity is not None:
-        warp_config = WarpConfig(warp_type=style.warpType, intensity=style.warpIntensity)
+        warp_config = WarpConfig(
+            warp_type=style.warpType,
+            intensity=style.warpIntensity,
+            h_distortion=style.warpHDistortion or 0,
+            v_distortion=style.warpVDistortion or 0,
+        )
         try:
             warped_svg, text_width, text_height = render_warped_text(
                 text=text,

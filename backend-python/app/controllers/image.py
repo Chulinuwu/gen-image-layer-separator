@@ -746,6 +746,8 @@ async def _step_flex_layout(
              "rotateY": b.style.rotateY,
              "warpType": b.style.warpType,
              "warpIntensity": b.style.warpIntensity,
+             "warpHDistortion": b.style.warpHDistortion,
+             "warpVDistortion": b.style.warpVDistortion,
          } if b.style else None}
         for b in flex_boxes
     ]

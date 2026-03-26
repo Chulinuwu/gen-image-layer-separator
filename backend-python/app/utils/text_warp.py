@@ -15,8 +15,10 @@ FONT_MAP = {
 
 @dataclass
 class WarpConfig:
-    warp_type: str  # "arc", "wave", "bulge", "flag", "none"
+    warp_type: str  # 15 Photoshop presets + "none"
     intensity: float  # -100 to 100
+    h_distortion: float = 0  # -100 to 100
+    v_distortion: float = 0  # -100 to 100
 
 
 @dataclass
@@ -138,42 +140,143 @@ def _warp_point(
     total_height: float,
     config: WarpConfig,
 ) -> tuple[float, float]:
-    if config.warp_type == "none" or config.intensity == 0:
+    if config.warp_type == "none" or (config.intensity == 0 and config.h_distortion == 0 and config.v_distortion == 0):
         return x, y
 
-    t = x / total_width if total_width > 0 else 0.5
+    tw = total_width if total_width > 0 else 1
+    th = total_height if total_height > 0 else 1
+    t = x / tw
+    s = y / th
     bend = config.intensity / 100.0
 
-    if config.warp_type == "arc":
-        offset = bend * total_height * 0.5 * (4 * t * (1 - t))
-        return x, y - offset
+    wx, wy = x, y
 
-    elif config.warp_type == "wave":
-        freq = 2.0
-        offset = bend * total_height * 0.3 * math.sin(t * math.pi * 2 * freq)
-        return x, y - offset
+    if config.warp_type == "arc":
+        wy = y - bend * th * 0.5 * 4 * t * (1 - t)
+
+    elif config.warp_type == "arc_lower":
+        curve = bend * th * 0.5 * 4 * t * (1 - t)
+        wy = y - curve * s
+
+    elif config.warp_type == "arc_upper":
+        curve = bend * th * 0.5 * 4 * t * (1 - t)
+        wy = y - curve * (1 - s)
+
+    elif config.warp_type == "arch":
+        curve = 4 * t * (1 - t)
+        wy = y - bend * th * 0.5 * curve
+        cx = tw / 2
+        squeeze = 1.0 - abs(bend) * 0.3 * curve
+        wx = cx + (x - cx) * squeeze
 
     elif config.warp_type == "bulge":
-        cx = total_width / 2
-        cy = total_height / 2
-        dx = x - cx
-        dy = y - cy
+        cx, cy = tw / 2, th / 2
+        dx, dy = x - cx, y - cy
         dist = math.sqrt(dx * dx + dy * dy) if (dx or dy) else 0
-        max_dist = math.sqrt(cx * cx + cy * cy)
-        factor = 1.0 + bend * 0.5 * (1 - (dist / max_dist if max_dist > 0 else 0))
-        return cx + dx * factor, cy + dy * factor
+        max_dist = math.sqrt(cx * cx + cy * cy) if (cx or cy) else 1
+        r = dist / max_dist
+        factor = 1.0 + bend * 0.5 * (1 - r)
+        wx = cx + dx * factor
+        wy = cy + dy * factor
+
+    elif config.warp_type == "shell_lower":
+        curve = math.sin(math.pi * t)
+        wy = y - bend * th * 0.4 * curve * s
+        cx = tw / 2
+        wx = cx + (x - cx) * (1 + bend * 0.15 * s)
+
+    elif config.warp_type == "shell_upper":
+        curve = math.sin(math.pi * t)
+        wy = y - bend * th * 0.4 * curve * (1 - s)
+        cx = tw / 2
+        wx = cx + (x - cx) * (1 + bend * 0.15 * (1 - s))
 
     elif config.warp_type == "flag":
-        offset = bend * total_height * 0.4 * t * math.sin(t * math.pi * 3)
-        return x, y - offset
+        wy = y - bend * th * 0.4 * t * math.sin(t * math.pi * 3)
 
-    return x, y
+    elif config.warp_type == "wave":
+        wy = y - bend * th * 0.3 * math.sin(t * math.pi * 4)
+
+    elif config.warp_type == "fish":
+        cx, cy = tw / 2, th / 2
+        dx, dy = x - cx, y - cy
+        dist = math.sqrt(dx * dx + dy * dy) if (dx or dy) else 0
+        max_dist = math.sqrt(cx * cx + cy * cy) if (cx or cy) else 1
+        r = dist / max_dist
+        r_new = r * (1 + bend * 0.5 * r * r)
+        if dist > 0:
+            scale = (r_new / r) if r > 0 else 1
+            wx = cx + dx * scale
+            wy = cy + dy * scale
+
+    elif config.warp_type == "rise":
+        wy = y - bend * th * 0.5 * t
+
+    elif config.warp_type == "fisheye":
+        cx, cy = tw / 2, th / 2
+        dx, dy = x - cx, y - cy
+        dist = math.sqrt(dx * dx + dy * dy) if (dx or dy) else 0
+        max_dist = max(cx, cy) if (cx or cy) else 1
+        r = dist / max_dist
+        power = 1.0 + bend * 0.8
+        r_new = math.pow(r, power) if r > 0 else 0
+        if dist > 0:
+            scale = (r_new * max_dist) / dist
+            wx = cx + dx * scale
+            wy = cy + dy * scale
+
+    elif config.warp_type == "inflate":
+        cx, cy = tw / 2, th / 2
+        dx, dy = x - cx, y - cy
+        dist = math.sqrt(dx * dx + dy * dy) if (dx or dy) else 0
+        max_dist = math.sqrt(cx * cx + cy * cy) if (cx or cy) else 1
+        r = dist / max_dist
+        push = bend * 0.4 * (1 - r * r)
+        if dist > 0:
+            wx = x + dx / dist * push * max_dist * 0.3
+            wy = y + dy / dist * push * max_dist * 0.3
+
+    elif config.warp_type == "squeeze":
+        cx = tw / 2
+        cy = th / 2
+        h_factor = 1.0 - bend * 0.4 * (1 - abs(2 * t - 1))
+        v_factor = 1.0 + bend * 0.3 * (1 - abs(2 * t - 1))
+        wx = cx + (x - cx) * h_factor
+        wy = cy + (y - cy) * v_factor
+
+    elif config.warp_type == "twist":
+        cx, cy = tw / 2, th / 2
+        dx, dy = x - cx, y - cy
+        dist = math.sqrt(dx * dx + dy * dy) if (dx or dy) else 0
+        max_dist = math.sqrt(cx * cx + cy * cy) if (cx or cy) else 1
+        r = dist / max_dist
+        angle = bend * math.pi * 0.5 * r
+        cos_a = math.cos(angle)
+        sin_a = math.sin(angle)
+        wx = cx + dx * cos_a - dy * sin_a
+        wy = cy + dx * sin_a + dy * cos_a
+
+    if config.h_distortion != 0:
+        h = config.h_distortion / 100.0
+        cy = th / 2
+        factor = 1.0 + h * ((wy - cy) / th if th > 0 else 0)
+        cx = tw / 2
+        wx = cx + (wx - cx) * factor
+
+    if config.v_distortion != 0:
+        v = config.v_distortion / 100.0
+        cx = tw / 2
+        factor = 1.0 + v * ((wx - cx) / tw if tw > 0 else 0)
+        cy = th / 2
+        wy = cy + (wy - cy) * factor
+
+    return wx, wy
 
 
 def _warp_path_data(
     d: str, total_width: float, total_height: float, config: WarpConfig
 ) -> str:
-    if config.warp_type == "none" or config.intensity == 0:
+    if config.warp_type == "none" or (config.intensity == 0 and config.h_distortion == 0 and config.v_distortion == 0):
         return d
 
     tokens = re.findall(r"[MmLlHhVvCcSsQqTtAaZz]|[-+]?[0-9]*\.?[0-9]+", d)

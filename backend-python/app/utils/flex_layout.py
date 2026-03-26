@@ -29,6 +29,8 @@ class FlexNodeStyle:
     rotateY: float | None = None     # degrees (3D tilt left/right)
     warpType: str | None = None       # "arc"|"wave"|"bulge"|"flag"|"none"
     warpIntensity: float | None = None # -100 to 100 (like Photoshop bend %)
+    warpHDistortion: float | None = None  # -100 to 100
+    warpVDistortion: float | None = None  # -100 to 100
 
 
 @dataclass

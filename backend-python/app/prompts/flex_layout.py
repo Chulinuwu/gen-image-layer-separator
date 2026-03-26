@@ -104,7 +104,26 @@ def build_flex_tree_prompt(
     footer_section: str,
     canvas_size: dict,
     layout_thought: str,
+    output_format: str = "standard",
 ) -> str:
+    _is_psd3d = output_format == "psd-3d"
+
+    _transform_style_props = (
+        "\nskewX, skewY, perspective, rotateX, rotateY, warpType, warpIntensity, warpHDistortion, warpVDistortion"
+        if _is_psd3d else ""
+    )
+
+    _transform_rules = """- TRANSFORM EFFECTS (use sparingly for emphasis):
+  - skewX/skewY: Tilt text diagonally (range -20 to 20 degrees). Use for dynamic/energetic feel.
+  - perspective + rotateX/rotateY: 3D rotation effect. perspective: 300-800px, rotateX/rotateY: -30 to 30 degrees.
+  - warpType: "arc"|"arc_lower"|"arc_upper"|"arch"|"bulge"|"shell_lower"|"shell_upper"|"flag"|"wave"|"fish"|"rise"|"fisheye"|"inflate"|"squeeze"|"twist"
+  - warpIntensity: -100 to 100 (bend %). warpHDistortion/warpVDistortion: -100 to 100 (perspective).
+  - Example arc headline: style {{"fontSize":"xlarge", "fontWeight":"900", "warpType":"arc", "warpIntensity":30}}
+  - Example wave with perspective: style {{"fontSize":"large", "warpType":"wave", "warpIntensity":40, "warpHDistortion":20}}
+  - Warp converts text to vector paths. Use only for hero headlines, not body text.
+  - Do NOT combine skew with warp on the same node.
+""" if _is_psd3d else ""
+
     return f"""You are a graphic designer. Convert the design plan below into a flex tree JSON.
 
 DESIGN PLAN (from Art Director -- follow this exactly):
@@ -151,8 +170,7 @@ gradientOverlay: "to-bottom rgba(0,0,0,0) rgba(0,0,0,0.7)" -- on CONTAINERS for 
 align: "left|center|right"
 lineHeight: multiplier (1.0-1.2 for headers, 1.4-1.8 for body)
 letterSpacing: px (1-4 for premium headlines)
-opacity, margin, maxLines, borderRadius
-skewX, skewY, perspective, rotateX, rotateY, warpType, warpIntensity
+opacity, margin, maxLines, borderRadius{_transform_style_props}
 
 BACKGROUND EFFECTS (canvas-level, in "backgroundEffects" array):
 - Linear fade: {{"type": "linear-fade", "from": "bottom|top|left|right", "color": "rgba(0,0,0,0.7)", "size": "40%"}}
@@ -172,15 +190,4 @@ RULES:
 - Use SPACER containers (empty children:[]) to reserve space for the subject/visual.
 - TOTAL HEIGHT: All direct children height% in root MUST add up to EXACTLY 100%.
 - Footer/disclaimer is handled separately by the system. Do NOT include footer text.
-- TRANSFORM EFFECTS (use sparingly for emphasis):
-  - skewX/skewY: Tilt text diagonally (range -20 to 20 degrees). Use for dynamic/energetic feel. Works in SVG and PSD.
-  - perspective + rotateX/rotateY: 3D rotation effect (PSD export only). perspective: 300-800px, rotateX/rotateY: -30 to 30 degrees.
-  - Example dynamic headline: style {{"fontSize":"xlarge", "fontWeight":"900", "color":"#FFFFFF", "skewX":-5}}
-  - Example 3D card effect: style {{"fontSize":"large", "perspective":500, "rotateY":15}}
-  - Do NOT apply transforms to body text or small text. Only headlines and accent text.
-  - Do NOT combine skew with 3D rotation on the same node.
-  - warpType: "arc"|"wave"|"bulge"|"flag" -- Photoshop-style text warp. warpIntensity: -100 to 100 (bend %).
-  - Example arc headline: style {{"fontSize":"xlarge", "fontWeight":"900", "color":"#FFFFFF", "warpType":"arc", "warpIntensity":30}}
-  - Arc: curves text in a circular arc. Wave: sinusoidal ripple. Bulge: expand from center. Flag: wave with increasing amplitude.
-  - Warp converts text to vector paths (no longer editable as text). Use only for hero headlines.
-- Hero/promo = LARGEST element (fontSize "xlarge", fontWeight "900")."""
+{_transform_rules}- Hero/promo = LARGEST element (fontSize "xlarge", fontWeight "900")."""

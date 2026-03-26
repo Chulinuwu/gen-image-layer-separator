@@ -185,6 +185,8 @@ watch(
               rotateY: s.rotateY || 0,
               warpType: s.warpType || 'none',
               warpIntensity: s.warpIntensity || 0,
+              warpHDistortion: s.warpHDistortion || 0,
+              warpVDistortion: s.warpVDistortion || 0,
             },
           });
         }
@@ -1722,7 +1724,7 @@ onUnmounted(() => {
           </div>
 
           <!-- Transform Effects section -->
-          <div class="props-section">
+          <div class="props-section" v-if="outputFormat === 'psd-3d'">
             <div class="props-section-header" @click="toggleSection('transform3d')">
               <span>Transform Effects</span>
               <span class="chevron" :class="{ open: expandedSections.transform3d }">&#9662;</span>
@@ -1789,9 +1791,20 @@ onUnmounted(() => {
                   >
                     <option value="none">None</option>
                     <option value="arc">Arc</option>
-                    <option value="wave">Wave</option>
+                    <option value="arc_lower">Arc Lower</option>
+                    <option value="arc_upper">Arc Upper</option>
+                    <option value="arch">Arch</option>
                     <option value="bulge">Bulge</option>
+                    <option value="shell_lower">Shell Lower</option>
+                    <option value="shell_upper">Shell Upper</option>
                     <option value="flag">Flag</option>
+                    <option value="wave">Wave</option>
+                    <option value="fish">Fish</option>
+                    <option value="rise">Rise</option>
+                    <option value="fisheye">Fisheye</option>
+                    <option value="inflate">Inflate</option>
+                    <option value="squeeze">Squeeze</option>
+                    <option value="twist">Twist</option>
                   </select>
                 </div>
                 <div class="props-field">
@@ -1801,6 +1814,26 @@ onUnmounted(() => {
                     :value="getMultiProp(l => l.style?.warpIntensity ?? 0).value"
                     :placeholder="getMultiProp(l => l.style?.warpIntensity).mixed ? 'Mixed' : ''"
                     @input="selectedLayers.forEach(l => { if (l.style) l.style.warpIntensity = Number(($event.target as HTMLInputElement).value); })"
+                  />
+                </div>
+              </div>
+              <div class="props-grid">
+                <div class="props-field">
+                  <label>H Distort</label>
+                  <input
+                    type="number" step="5" min="-100" max="100"
+                    :value="getMultiProp(l => l.style?.warpHDistortion ?? 0).value"
+                    :placeholder="getMultiProp(l => l.style?.warpHDistortion).mixed ? 'Mixed' : ''"
+                    @input="selectedLayers.forEach(l => { if (l.style) l.style.warpHDistortion = Number(($event.target as HTMLInputElement).value); })"
+                  />
+                </div>
+                <div class="props-field">
+                  <label>V Distort</label>
+                  <input
+                    type="number" step="5" min="-100" max="100"
+                    :value="getMultiProp(l => l.style?.warpVDistortion ?? 0).value"
+                    :placeholder="getMultiProp(l => l.style?.warpVDistortion).mixed ? 'Mixed' : ''"
+                    @input="selectedLayers.forEach(l => { if (l.style) l.style.warpVDistortion = Number(($event.target as HTMLInputElement).value); })"
                   />
                 </div>
               </div>
