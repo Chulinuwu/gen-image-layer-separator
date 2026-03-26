@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
+import CustomDropdown from "./CustomDropdown.vue";
 
 const prompt = ref("An office group photo of people looking stressed");
 const aspectRatio = ref("3:4");
@@ -213,27 +214,33 @@ const goToCampaign = () => {
 
     <div class="mb-4">
       <label class="label">Aspect Ratio</label>
-      <select v-model="aspectRatio" class="select-input">
-        <option value="1:1">1:1 (Square)</option>
-        <option value="4:3">4:3 (Standard)</option>
-        <option value="3:4">3:4 (Portrait)</option>
-        <option value="16:9">16:9 (Widescreen)</option>
-        <option value="9:16">9:16 (Vertical)</option>
-        <option value="21:9">21:9 (Ultra Wide)</option>
-        <option value="3:2">3:2 (Photo)</option>
-        <option value="2:3">2:3 (Portrait Photo)</option>
-        <option value="5:4">5:4 (Classic)</option>
-        <option value="4:5">4:5 (Instagram)</option>
-      </select>
+      <CustomDropdown
+        v-model="aspectRatio"
+        :options="[
+          { value: '1:1', label: '1:1 (Square)' },
+          { value: '4:3', label: '4:3 (Standard)' },
+          { value: '3:4', label: '3:4 (Portrait)' },
+          { value: '16:9', label: '16:9 (Widescreen)' },
+          { value: '9:16', label: '9:16 (Vertical)' },
+          { value: '21:9', label: '21:9 (Ultra Wide)' },
+          { value: '3:2', label: '3:2 (Photo)' },
+          { value: '2:3', label: '2:3 (Portrait Photo)' },
+          { value: '5:4', label: '5:4 (Classic)' },
+          { value: '4:5', label: '4:5 (Instagram)' },
+        ]"
+      />
     </div>
 
     <div class="mb-4">
       <label class="label">Generation Mode</label>
-      <select v-model="generationMode" class="select-input">
-        <option value="normal">Normal (BG only)</option>
-        <option value="integrated">Integrated (BG + text zone planning)</option>
-        <option value="full-campaign">Full Campaign (BG + layout + SVG render)</option>
-      </select>
+      <CustomDropdown
+        v-model="generationMode"
+        :options="[
+          { value: 'normal', label: 'Normal (BG only)' },
+          { value: 'integrated', label: 'Integrated (BG + text zone planning)' },
+          { value: 'full-campaign', label: 'Full Campaign (BG + layout + SVG render)' },
+        ]"
+      />
     </div>
 
     <div v-if="showTextInputs" class="mb-4">

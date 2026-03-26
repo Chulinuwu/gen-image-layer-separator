@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, watch, computed, onMounted, onUnmounted } from "vue";
 import createDOMPurify from "dompurify";
+import CustomDropdown from "./CustomDropdown.vue";
 const DOMPurify = createDOMPurify(window);
 
 const props = defineProps({
@@ -202,7 +203,7 @@ watch(
 );
 
 const selectedLayerId = ref<number | null>(null);
-const selectedLayerIds = ref<Set<number>>(new Set());
+const selectedLayerIds = ref<number[]>([]);
 const isFullscreen = ref(false);
 const marquee = reactive({
   active: false,
@@ -225,11 +226,11 @@ const selectedLayer = computed(() => {
 });
 
 const selectedLayers = computed(() => {
-  if (selectedLayerIds.value.size === 0) return [];
-  return [...selectedLayerIds.value].map(idx => layers.value[idx]).filter(Boolean);
+  if (selectedLayerIds.value.length === 0) return [];
+  return selectedLayerIds.value.map(idx => layers.value[idx]).filter(Boolean);
 });
 
-const multiSelectCount = computed(() => selectedLayerIds.value.size);
+const multiSelectCount = computed(() => selectedLayerIds.value.length);
 
 const getMultiProp = (getter: (l: any) => any): { value: any; mixed: boolean } => {
   const selected = selectedLayers.value;
@@ -368,7 +369,7 @@ const onFileChange = (e: any) => {
     layers.value = [];
     renderedImage.value = null;
     selectedLayerId.value = null;
-    selectedLayerIds.value.clear();
+    selectedLayerIds.value = [];
   }
 };
 
@@ -593,22 +594,22 @@ const startDrag = (e: MouseEvent, idx: number) => {
   e.stopPropagation();
 
   if (e.shiftKey) {
-    if (selectedLayerIds.value.has(idx)) {
-      selectedLayerIds.value.delete(idx);
+    if (selectedLayerIds.value.includes(idx)) {
+      selectedLayerIds.value = selectedLayerIds.value.filter(i => i !== idx);
       if (selectedLayerId.value === idx) {
-        const remaining = [...selectedLayerIds.value];
+        const remaining = selectedLayerIds.value;
         selectedLayerId.value = remaining.length > 0 ? remaining[remaining.length - 1] : null;
       }
     } else {
-      selectedLayerIds.value.add(idx);
+      if (!selectedLayerIds.value.includes(idx)) selectedLayerIds.value.push(idx);
       selectedLayerId.value = idx;
     }
     return;
   }
 
-  if (!selectedLayerIds.value.has(idx)) {
-    selectedLayerIds.value.clear();
-    selectedLayerIds.value.add(idx);
+  if (!selectedLayerIds.value.includes(idx)) {
+    selectedLayerIds.value = [];
+    if (!selectedLayerIds.value.includes(idx)) selectedLayerIds.value.push(idx);
   }
   selectedLayerId.value = idx;
   dragItem.value = idx;
@@ -673,7 +674,7 @@ const computeSnapGuides = (idx: number) => {
   }
 
   for (let i = 0; i < layers.value.length; i++) {
-    if (i === idx || selectedLayerIds.value.has(i)) continue;
+    if (i === idx || selectedLayerIds.value.includes(i)) continue;
     const other = layers.value[i];
     if (!other.visible) continue;
 
@@ -716,6 +717,89 @@ const computeSnapGuides = (idx: number) => {
           if (selIdx !== idx) layers.value[selIdx].y += delta;
         }
         guides.push({ type: 'h', pos: check.to });
+        break;
+      }
+    }
+  }
+
+  snapGuides.value = guides;
+};
+
+const computeSnapGuidesForResize = (idx: number) => {
+  const layer = layers.value[idx];
+  if (!layer) { snapGuides.value = []; return; }
+
+  const guides: { type: 'h' | 'v'; pos: number }[] = [];
+  const layerRight = layer.x + layer.w;
+  const layerBottom = layer.y + layer.h;
+  const layerCx = layer.x + layer.w / 2;
+  const layerCy = layer.y + layer.h / 2;
+
+  if (Math.abs(layerRight - 50) < SNAP_THRESHOLD) {
+    layer.w = 50 - layer.x;
+    guides.push({ type: 'v', pos: 50 });
+  }
+  if (Math.abs(layer.x - 50) < SNAP_THRESHOLD) {
+    const oldRight = layer.x + layer.w;
+    layer.x = 50;
+    layer.w = oldRight - 50;
+    guides.push({ type: 'v', pos: 50 });
+  }
+  if (Math.abs(layerCx - 50) < SNAP_THRESHOLD) {
+    guides.push({ type: 'v', pos: 50 });
+  }
+  if (Math.abs(layerBottom - 50) < SNAP_THRESHOLD) {
+    layer.h = 50 - layer.y;
+    guides.push({ type: 'h', pos: 50 });
+  }
+  if (Math.abs(layerCy - 50) < SNAP_THRESHOLD) {
+    guides.push({ type: 'h', pos: 50 });
+  }
+
+  for (let i = 0; i < layers.value.length; i++) {
+    if (i === idx) continue;
+    const other = layers.value[i];
+    if (!other.visible) continue;
+
+    const otherRight = other.x + other.w;
+    const otherBottom = other.y + other.h;
+
+    const vEdges = [
+      { edge: layerRight, target: other.x, side: 'right' },
+      { edge: layerRight, target: otherRight, side: 'right' },
+      { edge: layer.x, target: other.x, side: 'left' },
+      { edge: layer.x, target: otherRight, side: 'left' },
+    ];
+    for (const check of vEdges) {
+      if (Math.abs(check.edge - check.target) < SNAP_THRESHOLD) {
+        if (check.side === 'right') {
+          layer.w = check.target - layer.x;
+        } else {
+          const oldRight = layer.x + layer.w;
+          layer.x = check.target;
+          layer.w = oldRight - check.target;
+        }
+        guides.push({ type: 'v', pos: check.target });
+        break;
+      }
+    }
+
+    const hEdges = [
+      { edge: layerBottom, target: other.y, side: 'bottom' },
+      { edge: layerBottom, target: otherBottom, side: 'bottom' },
+      { edge: layer.y, target: other.y, side: 'top' },
+      { edge: layer.y, target: otherBottom, side: 'top' },
+    ];
+    for (const check of hEdges) {
+      if (Math.abs(check.edge - check.target) < SNAP_THRESHOLD) {
+        if (check.side === 'bottom') {
+          layer.h = check.target - layer.y;
+        } else {
+          const oldBottom = layer.y + layer.h;
+          layer.y = check.target;
+          layer.h = oldBottom - check.target;
+        }
+        guides.push({ type: 'h', pos: check.target });
         break;
       }
     }
@@ -789,10 +873,14 @@ const onResize = (e: MouseEvent) => {
     const heightRatio = layer.h / resizeState.startLayerH;
     layer.style.font_size_normalized = Math.max(4, Math.round(resizeState.startFontSize * heightRatio));
   }
+
+  // Show snap guides for resized edges
+  computeSnapGuidesForResize(resizeState.layerIdx);
 };
 
 const stopResize = () => {
   resizeState.active = false;
+  snapGuides.value = [];
   window.removeEventListener('mousemove', onResize);
   window.removeEventListener('mouseup', stopResize);
 };
@@ -815,12 +903,12 @@ const onBlurText = () => {
 };
 
 const deleteLayer = () => {
-  if (selectedLayerIds.value.size > 0) {
+  if (selectedLayerIds.value.length > 0) {
     const sorted = [...selectedLayerIds.value].sort((a, b) => b - a);
     for (const idx of sorted) {
       layers.value.splice(idx, 1);
     }
-    selectedLayerIds.value.clear();
+    selectedLayerIds.value = [];
     selectedLayerId.value = null;
   } else if (selectedLayerId.value !== null) {
     layers.value.splice(selectedLayerId.value, 1);
@@ -858,6 +946,30 @@ const moveLayerDown = (idx: number) => {
   else if (selectedLayerId.value === idx + 1) selectedLayerId.value = idx;
 };
 
+// Cache for font base64 data
+const fontCache = ref<Record<string, string>>({});
+
+const loadFontAsBase64 = async (weight: string, filename: string): Promise<string> => {
+  const key = `${weight}-${filename}`;
+  if (fontCache.value[key]) return fontCache.value[key];
+  try {
+    const resp = await fetch(`http://localhost:5001/assets/fonts/${filename}`);
+    if (!resp.ok) return '';
+    const blob = await resp.blob();
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const b64 = (reader.result as string).split(',')[1] || '';
+        fontCache.value[key] = b64;
+        resolve(b64);
+      };
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return '';
+  }
+};
+
 const downloadAsSvg = async () => {
   const bgImgElement = editorCanvasEl.value?.querySelector(".bg-img") as HTMLImageElement;
   if (!bgImgElement) return;
@@ -873,8 +985,18 @@ const downloadAsSvg = async () => {
   ctx.drawImage(bgImgElement, 0, 0);
   const base64Bg = canvas.toDataURL("image/png");
 
+  // Embed Kanit fonts as base64 @font-face
+  let fontStyle = '';
+  const fontFiles: [string, string][] = [['400', 'Kanit-Regular.ttf'], ['700', 'Kanit-Bold.ttf'], ['900', 'Kanit-Black.ttf']];
+  for (const [weight, file] of fontFiles) {
+    const b64 = await loadFontAsBase64(weight, file);
+    if (b64) {
+      fontStyle += `@font-face{font-family:'Kanit';font-weight:${weight};src:url('data:font/ttf;base64,${b64}') format('truetype');}`;
+    }
+  }
+
   // Build SVG with defs for filters
-  let defs = '';
+  let defs = fontStyle ? `<style>${fontStyle}</style>` : '';
   let filterIdx = 0;
 
   const makeShadowFilter = (shadow: string): string => {
@@ -915,6 +1037,7 @@ const downloadAsSvg = async () => {
   // Layers
   for (const l of layers.value) {
     if (!l.visible) continue;
+    try {
     const x = (l.x / 100) * width;
     const y = (l.y / 100) * height;
     const w = (l.w / 100) * width;
@@ -975,6 +1098,9 @@ const downloadAsSvg = async () => {
 
       body += `</text>`;
     }
+    } catch (e) {
+      console.error("SVG Export: Failed to export layer", l, e);
+    }
   }
 
   const svgContent = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg"><defs>${defs}</defs>${body}</svg>`;
@@ -1005,7 +1131,7 @@ const onWorkspaceMouseDown = (e: MouseEvent) => {
   if (!target.classList.contains('workspace') && !target.classList.contains('canvas') && !target.classList.contains('bg-img') && !target.classList.contains('bg-effect-layer')) return;
 
   selectedLayerId.value = null;
-  selectedLayerIds.value.clear();
+  selectedLayerIds.value = [];
   snapGuides.value = [];
 
   const rect = editorCanvasEl.value?.getBoundingClientRect();
@@ -1042,11 +1168,11 @@ const onWorkspaceMouseDown = (e: MouseEvent) => {
         const ly2 = layer.y + layer.h;
 
         if (lx1 < mx2 && lx2 > mx1 && ly1 < my2 && ly2 > my1) {
-          selectedLayerIds.value.add(idx);
+          if (!selectedLayerIds.value.includes(idx)) selectedLayerIds.value.push(idx);
         }
       });
 
-      const first = [...selectedLayerIds.value][0];
+      const first = selectedLayerIds.value[0];
       if (first !== undefined) {
         selectedLayerId.value = first;
       }
@@ -1085,28 +1211,28 @@ const onKeyDown = (e: KeyboardEvent) => {
       break;
     case 'Escape':
       selectedLayerId.value = null;
-      selectedLayerIds.value.clear();
+      selectedLayerIds.value = [];
       snapGuides.value = [];
       e.preventDefault();
       break;
     case 'ArrowLeft':
       for (const selIdx of selectedLayerIds.value) layers.value[selIdx].x -= step;
-      if (selectedLayerIds.value.size === 0 && layer) layer.x -= step;
+      if (selectedLayerIds.value.length === 0 && layer) layer.x -= step;
       e.preventDefault();
       break;
     case 'ArrowRight':
       for (const selIdx of selectedLayerIds.value) layers.value[selIdx].x += step;
-      if (selectedLayerIds.value.size === 0 && layer) layer.x += step;
+      if (selectedLayerIds.value.length === 0 && layer) layer.x += step;
       e.preventDefault();
       break;
     case 'ArrowUp':
       for (const selIdx of selectedLayerIds.value) layers.value[selIdx].y -= step;
-      if (selectedLayerIds.value.size === 0 && layer) layer.y -= step;
+      if (selectedLayerIds.value.length === 0 && layer) layer.y -= step;
       e.preventDefault();
       break;
     case 'ArrowDown':
       for (const selIdx of selectedLayerIds.value) layers.value[selIdx].y += step;
-      if (selectedLayerIds.value.size === 0 && layer) layer.y += step;
+      if (selectedLayerIds.value.length === 0 && layer) layer.y += step;
       e.preventDefault();
       break;
     case ']':
@@ -1157,10 +1283,15 @@ onUnmounted(() => {
           <button class="zoom-btn" @click="zoomLevel = Math.min(200, zoomLevel + 25)" :disabled="zoomLevel >= 200">+</button>
           <button class="zoom-btn zoom-fit" @click="zoomLevel = 100">Fit</button>
         </div>
-        <select v-model="renderMode" class="toolbar-select">
-          <option value="ai">AI Production</option>
-          <option value="simple">Raw PNG</option>
-        </select>
+        <CustomDropdown
+          v-model="renderMode"
+          :options="[
+            { value: 'ai', label: 'AI Production' },
+            { value: 'simple', label: 'Raw PNG' },
+          ]"
+          theme="dark"
+          size="sm"
+        />
       </div>
       <div class="toolbar-right">
         <button
@@ -1223,8 +1354,8 @@ onUnmounted(() => {
               v-for="(layer, idx) in layers"
               :key="layer.id"
               class="layer-item"
-              :class="{ 'layer-item-selected': selectedLayerIds.has(idx) }"
-              @click="selectedLayerIds.clear(); selectedLayerIds.add(idx); selectedLayerId = idx"
+              :class="{ 'layer-item-selected': selectedLayerIds.includes(idx) }"
+              @click="selectedLayerIds = []; selectedLayerIds.push(idx); selectedLayerId = idx"
             >
               <button
                 class="visibility-btn"
@@ -1305,7 +1436,7 @@ onUnmounted(() => {
             <div
               v-show="layer.visible"
               class="layer-box"
-              :class="{ 'layer-box-selected': selectedLayerIds.has(idx) }"
+              :class="{ 'layer-box-selected': selectedLayerIds.includes(idx) }"
               :style="
                 layer.type === 'image'
                   ? {
@@ -1358,7 +1489,7 @@ onUnmounted(() => {
               ></span>
 
               <!-- Selection handles -->
-              <template v-if="selectedLayerIds.has(idx)">
+              <template v-if="selectedLayerIds.includes(idx)">
                 <div class="selection-outline"></div>
                 <div class="handle handle-nw" @mousedown.stop="startResize($event, idx, 'nw')"></div>
                 <div class="handle handle-n" @mousedown.stop="startResize($event, idx, 'n')"></div>
@@ -1400,7 +1531,7 @@ onUnmounted(() => {
       </div>
 
       <!-- Right: Properties panel -->
-      <div class="panel panel-props" v-if="selectedLayerIds.size > 0">
+      <div class="panel panel-props" v-if="selectedLayerIds.length > 0">
         <div class="panel-header">
           Properties {{ multiSelectCount > 1 ? `(${multiSelectCount})` : '' }}
           <button class="delete-btn" @click="deleteLayer" title="Delete layer">
@@ -1499,32 +1630,38 @@ onUnmounted(() => {
                 </div>
                 <div class="props-field full">
                   <label>Font Family</label>
-                  <select
-                    :value="getMultiProp(l => l.style?.font_family).value"
-                    @change="setMultiStyle('font_family', ($event.target as HTMLSelectElement).value)"
-                  >
-                    <option v-if="getMultiProp(l => l.style?.font_family).mixed" value="" disabled selected>Mixed</option>
-                    <option value="Inter">Inter</option>
-                    <option value="Kanit">Kanit</option>
-                    <option value="Playfair Display">Playfair Display</option>
-                    <option value="Roboto Mono">Roboto Mono</option>
-                    <option value="sans-serif">System Sans</option>
-                  </select>
+                  <CustomDropdown
+                    :model-value="getMultiProp(l => l.style?.font_family).value || ''"
+                    :options="[
+                      ...(getMultiProp(l => l.style?.font_family).mixed ? [{ value: '', label: 'Mixed', disabled: true }] : []),
+                      { value: 'Inter', label: 'Inter' },
+                      { value: 'Kanit', label: 'Kanit' },
+                      { value: 'Playfair Display', label: 'Playfair Display' },
+                      { value: 'Roboto Mono', label: 'Roboto Mono' },
+                      { value: 'sans-serif', label: 'System Sans' },
+                    ]"
+                    @update:model-value="setMultiStyle('font_family', $event)"
+                    theme="dark"
+                    size="sm"
+                  />
                 </div>
                 <div class="props-field full">
                   <label>Font Weight</label>
-                  <select
-                    :value="getMultiProp(l => l.style?.font_weight).value"
-                    @change="setMultiStyle('font_weight', ($event.target as HTMLSelectElement).value)"
-                  >
-                    <option v-if="getMultiProp(l => l.style?.font_weight).mixed" value="" disabled selected>Mixed</option>
-                    <option value="400">Regular (400)</option>
-                    <option value="500">Medium (500)</option>
-                    <option value="600">Semibold (600)</option>
-                    <option value="700">Bold (700)</option>
-                    <option value="800">Extra Bold (800)</option>
-                    <option value="900">Black (900)</option>
-                  </select>
+                  <CustomDropdown
+                    :model-value="getMultiProp(l => l.style?.font_weight).value || ''"
+                    :options="[
+                      ...(getMultiProp(l => l.style?.font_weight).mixed ? [{ value: '', label: 'Mixed', disabled: true }] : []),
+                      { value: '400', label: 'Regular (400)' },
+                      { value: '500', label: 'Medium (500)' },
+                      { value: '600', label: 'Semibold (600)' },
+                      { value: '700', label: 'Bold (700)' },
+                      { value: '800', label: 'Extra Bold (800)' },
+                      { value: '900', label: 'Black (900)' },
+                    ]"
+                    @update:model-value="setMultiStyle('font_weight', $event)"
+                    theme="dark"
+                    size="sm"
+                  />
                 </div>
               </div>
             </div>
@@ -1579,15 +1716,18 @@ onUnmounted(() => {
                 </div>
                 <div class="props-field full">
                   <label>Align</label>
-                  <select
-                    :value="getMultiProp(l => l.style?.align).value"
-                    @change="setMultiStyle('align', ($event.target as HTMLSelectElement).value)"
-                  >
-                    <option v-if="getMultiProp(l => l.style?.align).mixed" value="" disabled selected>Mixed</option>
-                    <option value="left">Left</option>
-                    <option value="center">Center</option>
-                    <option value="right">Right</option>
-                  </select>
+                  <CustomDropdown
+                    :model-value="getMultiProp(l => l.style?.align).value || ''"
+                    :options="[
+                      ...(getMultiProp(l => l.style?.align).mixed ? [{ value: '', label: 'Mixed', disabled: true }] : []),
+                      { value: 'left', label: 'Left' },
+                      { value: 'center', label: 'Center' },
+                      { value: 'right', label: 'Right' },
+                    ]"
+                    @update:model-value="setMultiStyle('align', $event)"
+                    theme="dark"
+                    size="sm"
+                  />
                 </div>
               </div>
             </div>
@@ -1600,15 +1740,18 @@ onUnmounted(() => {
               <div v-show="expandedSections.effects" class="props-section-body">
                 <div class="props-field full">
                   <label>Shadow</label>
-                  <select
-                    :value="getMultiProp(l => l.style?.shadow).value"
-                    @change="setMultiStyle('shadow', ($event.target as HTMLSelectElement).value)"
-                  >
-                    <option v-if="getMultiProp(l => l.style?.shadow).mixed" value="" disabled selected>Mixed</option>
-                    <option value="none">None</option>
-                    <option value="subtle">Subtle</option>
-                    <option value="strong">Strong</option>
-                  </select>
+                  <CustomDropdown
+                    :model-value="getMultiProp(l => l.style?.shadow).value || ''"
+                    :options="[
+                      ...(getMultiProp(l => l.style?.shadow).mixed ? [{ value: '', label: 'Mixed', disabled: true }] : []),
+                      { value: 'none', label: 'None' },
+                      { value: 'subtle', label: 'Subtle' },
+                      { value: 'strong', label: 'Strong' },
+                    ]"
+                    @update:model-value="setMultiStyle('shadow', $event)"
+                    theme="dark"
+                    size="sm"
+                  />
                 </div>
                 <div class="props-grid">
                   <div class="props-field">
@@ -1722,19 +1865,6 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-.toolbar-select {
-  height: 28px;
-  padding: 0 8px;
-  background: #2d2d44;
-  border: 1px solid #3d3d5c;
-  border-radius: 4px;
-  color: #e2e2e8;
-  font-size: 12px;
-  outline: none;
-}
-.toolbar-select:focus {
-  border-color: #2563eb;
 }
 .toolbar-btn {
   height: 28px;
