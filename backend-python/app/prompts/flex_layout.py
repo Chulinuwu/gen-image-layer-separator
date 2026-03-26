@@ -166,7 +166,8 @@ SIZING RULES:
 RULES:
 - Use ONLY the EXACT text from CAMPAIGN TEXT. Do NOT rephrase or add words.
 - ONLY create component leaves for labels listed in available die-cut components.
-- Root is always "column" with padding and justifyContent "start".
+- Root is always "column" with padding >= 30 and justifyContent "start". This root padding is the SAFE MARGIN -- text must never touch the canvas edge.
+- Every text node's bounding box must stay at least 30px away from ALL canvas edges (top, bottom, left, right). If text is right-aligned, ensure the right edge of the container still has >= 30px margin from canvas right. Check EVERY text node before outputting.
 - Use SPACER containers (empty children:[]) to reserve space for the subject/visual.
 - TOTAL HEIGHT: All direct children height% in root MUST add up to EXACTLY 100%.
 - Footer/disclaimer is handled separately by the system. Do NOT include footer text.

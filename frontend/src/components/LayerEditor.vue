@@ -164,11 +164,11 @@ watch(
               font_weight: s.fontWeight || '700',
               font_size_normalized: fontSizeNormalized,
               color_hex: s.color || '#FFFFFF',
-              stroke_hex: s.strokeColor || undefined,
-              stroke_width: s.strokeWidth || undefined,
+              stroke_hex: s.strokeColor || (s.strokeWidth ? '#FFFFFF' : undefined),
+              stroke_width: s.strokeWidth ?? (s.strokeColor ? 3 : undefined),
               letter_spacing: s.letterSpacing || 0,
               line_height: s.lineHeight || 1.35,
-              shadow: s.textShadow || (s.strokeColor ? 'none' : 'subtle'),
+              shadow: s.textShadow || 'subtle',
               align: s.align || 'center',
               background_color: s.backgroundColor || undefined,
             },
@@ -491,7 +491,7 @@ const renderOnClient = async (): Promise<Blob | null> => {
       }
     } else {
       const fontSize = l.style.font_size_normalized || 40;
-      const pxFontSize = (fontSize / 1000) * height;
+      const pxFontSize = (fontSize / 1000) * width;
 
       ctx.font = `${l.style.font_weight || "normal"} ${pxFontSize}px ${l.style.font_family || "sans-serif"}`;
       ctx.fillStyle = l.style.color_hex || "#FFFFFF";
@@ -974,6 +974,10 @@ const downloadAsSvg = async () => {
   const bgImgElement = editorCanvasEl.value?.querySelector(".bg-img") as HTMLImageElement;
   if (!bgImgElement) return;
 
+  if (!bgImgElement.complete || bgImgElement.naturalWidth === 0) {
+    await new Promise((resolve) => { bgImgElement.onload = resolve; });
+  }
+
   const width = bgImgElement.naturalWidth;
   const height = bgImgElement.naturalHeight;
 
@@ -983,7 +987,27 @@ const downloadAsSvg = async () => {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   ctx.drawImage(bgImgElement, 0, 0);
-  const base64Bg = canvas.toDataURL("image/png");
+  let base64Bg: string;
+  try {
+    base64Bg = canvas.toDataURL("image/png");
+  } catch (e) {
+    console.error("SVG Export: Canvas tainted, trying re-fetch", e);
+    try {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.src = bgImgElement.src;
+      await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; });
+      const c2 = document.createElement("canvas");
+      c2.width = width;
+      c2.height = height;
+      const ctx2 = c2.getContext("2d")!;
+      ctx2.drawImage(img, 0, 0, width, height);
+      base64Bg = c2.toDataURL("image/png");
+    } catch (e2) {
+      console.error("SVG Export: Failed to encode background", e2);
+      return;
+    }
+  }
 
   // Embed Kanit fonts as base64 @font-face
   let fontStyle = '';
@@ -1059,7 +1083,7 @@ const downloadAsSvg = async () => {
         console.error("SVG Export: Failed to embed component image", e);
       }
     } else {
-      const fontSize = (l.style.font_size_normalized || 40) / 1000 * height;
+      const fontSize = (l.style.font_size_normalized || 40) / 1000 * width;
       const fontFamily = l.style.font_family || 'Kanit';
       const fontWeight = l.style.font_weight || '700';
       const fillColor = l.style.color_hex || '#FFFFFF';
@@ -1083,8 +1107,44 @@ const downloadAsSvg = async () => {
 
       const filterAttr = shadowId ? ` filter="url(#${shadowId})"` : '';
 
-      const lines = (l.content || '').split('\n');
       const escapeLine = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+      // Measure-based text wrapping using canvas
+      const wrapText = (text: string, maxWidth: number, font: string): string[] => {
+        const measureCanvas = document.createElement('canvas');
+        const mCtx = measureCanvas.getContext('2d');
+        if (!mCtx) return text.split('\n');
+        mCtx.font = font;
+
+        const result: string[] = [];
+        const rawLines = text.split('\n');
+
+        for (const raw of rawLines) {
+          // If line fits, keep as-is
+          if (mCtx.measureText(raw).width <= maxWidth) {
+            result.push(raw);
+            continue;
+          }
+          // Wrap at word/space boundaries
+          let current = '';
+          // Split keeping spaces: "hello world" -> ["hello", " ", "world"]
+          const tokens = raw.split(/(\s+)/);
+          for (const token of tokens) {
+            const test = current + token;
+            if (mCtx.measureText(test).width > maxWidth && current.length > 0) {
+              result.push(current.trimEnd());
+              current = token.trimStart();
+            } else {
+              current = test;
+            }
+          }
+          if (current.trim()) result.push(current.trimEnd());
+        }
+        return result;
+      };
+
+      const fontStr = `${fontWeight} ${fontSize}px ${fontFamily}, sans-serif`;
+      const lines = wrapText(l.content || '', w, fontStr);
 
       body += `<text x="${textX}" y="${y + fontSize * 0.85}" fill="${fillColor}" font-family="${fontFamily}, sans-serif" font-size="${fontSize}px" font-weight="${fontWeight}" text-anchor="${textAnchor}" letter-spacing="${letterSpacing}px"${strokeAttrs}${filterAttr}${rotateStr ? ` transform="${rotateStr}"` : ''}>`;
 
