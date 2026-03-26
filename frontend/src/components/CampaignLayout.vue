@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, nextTick } from "vue";
 import AIRefinementPreview from "./AIRefinementPreview.vue";
+import CustomInput from "./CustomInput.vue";
 
 const props = defineProps({
   initialBackgroundUrl: String,
   initialTextBrief: String,
   initialTextZones: { type: Array, default: () => [] },
+  outputFormat: { type: String, default: 'standard' },
 });
 const emit = defineEmits(["created", "proceed"]);
 
@@ -201,23 +203,25 @@ const useGeneratedBg = () => {
               :class="{ active: mode === 'full' }"
               @click="mode = 'full'"
             >
-              Full (Text + Comp)
+              {{ outputFormat === 'psd-3d' ? 'Full + 3D (PSD)' : 'Full (Text + Components)' }}
             </button>
             <button
               type="button"
               :class="{ active: mode === 'text' }"
               @click="mode = 'text'"
             >
-              Text & BG Only
+              Text Layout Only
             </button>
             <button
               type="button"
               :class="{ active: mode === 'only_bg_comp' }"
               @click="mode = 'only_bg_comp'"
-              title="Test: Generate only Background and components (No Text)"
             >
               Inpaint & Die-cut Only
             </button>
+          </div>
+          <div v-if="outputFormat === 'psd-3d'" class="format-badge">
+            PSD + 3D Transform mode enabled
           </div>
         </div>
 
@@ -228,11 +232,13 @@ const useGeneratedBg = () => {
               {{ integratedTextZones.length }} zone hint{{ integratedTextZones.length !== 1 ? 's' : '' }} active
             </span>
           </label>
-          <textarea
+          <CustomInput
             v-model="targetText"
-            placeholder="Paste your ad brief, headlines, bullet points, or fine print here..."
-            rows="6"
-          ></textarea>
+            :multiline="true"
+            :rows="3"
+            :maxRows="10"
+            placeholder="Enter your campaign text..."
+          />
           <!-- <p class="small">
           AI จะวิเคราะห์ภาพ แนะนำ text + สร้าง die-cut components ให้อัตโนมัติ
         </p> -->
@@ -692,5 +698,16 @@ textarea {
   padding: 2px 8px;
   border-radius: 12px;
   vertical-align: middle;
+}
+
+.format-badge {
+  margin-top: 8px;
+  padding: 6px 12px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #2563eb;
 }
 </style>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
 import CustomDropdown from "./CustomDropdown.vue";
+import CustomInput from "./CustomInput.vue";
 
 const prompt = ref("An office group photo of people looking stressed");
 const aspectRatio = ref("3:4");
@@ -19,7 +20,11 @@ const showTextInputs = computed(() => generationMode.value === "integrated" || g
 
 const API_BASE = "http://localhost:5001";
 
-const emit = defineEmits(["generated", "integrated-generated", "campaign-created", "proceed", "proceed-editor"]);
+const props = defineProps({
+  outputFormat: { type: String, default: "standard" },
+});
+
+const emit = defineEmits(["generated", "integrated-generated", "campaign-created", "proceed", "proceed-editor", "update:outputFormat"]);
 
 const buttonLabel = computed(() => {
   if (loading.value) return "Generating...";
@@ -205,11 +210,13 @@ const goToCampaign = () => {
     <h2>Generate Background</h2>
     <div class="mb-4">
       <label class="label">Prompt</label>
-      <textarea
+      <CustomInput
         v-model="prompt"
-        rows="3"
+        :multiline="true"
+        :rows="3"
+        :maxRows="6"
         placeholder="Describe the scene..."
-      ></textarea>
+      />
     </div>
 
     <div class="mb-4">
@@ -232,33 +239,70 @@ const goToCampaign = () => {
     </div>
 
     <div class="mb-4">
+      <label class="label">Output Format</label>
+      <div class="format-toggle">
+        <button
+          type="button"
+          :class="{ active: props.outputFormat === 'standard' }"
+          @click="emit('update:outputFormat', 'standard')"
+        >
+          <span class="format-icon">SVG</span>
+          <span class="format-info">
+            <strong>Standard</strong>
+            <small>SVG/AI compatible, 2D transforms</small>
+          </span>
+        </button>
+        <button
+          type="button"
+          :class="{ active: props.outputFormat === 'psd-3d' }"
+          @click="emit('update:outputFormat', 'psd-3d')"
+        >
+          <span class="format-icon">PSD</span>
+          <span class="format-info">
+            <strong>PSD + 3D</strong>
+            <small>Photoshop layers, 3D transforms</small>
+          </span>
+        </button>
+      </div>
+    </div>
+
+    <div class="mb-4">
       <label class="label">Generation Mode</label>
       <CustomDropdown
         v-model="generationMode"
-        :options="[
-          { value: 'normal', label: 'Normal (BG only)' },
-          { value: 'integrated', label: 'Integrated (BG + text zone planning)' },
-          { value: 'full-campaign', label: 'Full Campaign (BG + layout + SVG render)' },
-        ]"
+        :options="props.outputFormat === 'psd-3d'
+          ? [
+              { value: 'normal', label: 'Normal (BG only)' },
+              { value: 'full-campaign', label: 'Full Campaign + 3D Transforms' },
+            ]
+          : [
+              { value: 'normal', label: 'Normal (BG only)' },
+              { value: 'integrated', label: 'Integrated (BG + text zone planning)' },
+              { value: 'full-campaign', label: 'Full Campaign (BG + layout + SVG render)' },
+            ]
+        "
       />
     </div>
 
     <div v-if="showTextInputs" class="mb-4">
       <label class="label">Ad Text Brief</label>
-      <textarea
+      <CustomInput
         v-model="textBrief"
-        rows="4"
+        :multiline="true"
+        :rows="4"
+        :maxRows="10"
         placeholder="Paste your ad copy, headlines, and key messages here..."
-      ></textarea>
+      />
     </div>
 
     <div v-if="generationMode === 'full-campaign'" class="mb-4">
       <label class="label">Footer Text (optional)</label>
-      <input
+      <CustomInput
         v-model="footerText"
-        type="text"
-        class="text-input"
-        placeholder="Disclaimer or fine print..."
+        :multiline="true"
+        :rows="2"
+        :maxRows="6"
+        placeholder="Legal disclaimer, terms, contact info..."
       />
     </div>
 
@@ -345,6 +389,61 @@ const goToCampaign = () => {
   font-weight: 600;
   margin-bottom: 8px;
   font-size: 0.9rem;
+}
+
+.format-toggle {
+  display: flex;
+  gap: 8px;
+}
+.format-toggle button {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 2px solid var(--border, #e2e8f0);
+  border-radius: 12px;
+  background: white;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: left;
+}
+.format-toggle button:hover {
+  border-color: #93c5fd;
+}
+.format-toggle button.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+.format-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: #f1f5f9;
+  font-weight: 800;
+  font-size: 12px;
+  color: #475569;
+  flex-shrink: 0;
+}
+.format-toggle button.active .format-icon {
+  background: #2563eb;
+  color: white;
+}
+.format-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.format-info strong {
+  font-size: 14px;
+  color: #1e293b;
+}
+.format-info small {
+  font-size: 11px;
+  color: #64748b;
 }
 
 .error {

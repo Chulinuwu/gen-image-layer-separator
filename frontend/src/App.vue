@@ -7,6 +7,7 @@ import LayerEditor from "./components/LayerEditor.vue";
 const activeTab = ref("generate");
 
 // Shared Assets State
+const sharedOutputFormat = ref<string>("standard");
 const sharedBackgroundUrl = ref<string | undefined>(undefined);
 const sharedCampaignData = ref<any>(null);
 const sharedTextBrief = ref<string | undefined>(undefined);
@@ -59,6 +60,8 @@ const onIntegratedGenerated = (payload: { url: string; textBrief: string; textZo
     <main>
       <ImageGenerator
         v-show="activeTab === 'generate'"
+        :outputFormat="sharedOutputFormat"
+        @update:outputFormat="sharedOutputFormat = $event"
         @generated="onBackgroundGenerated"
         @integrated-generated="onIntegratedGenerated"
         @campaign-created="onCampaignCreated"
@@ -67,6 +70,7 @@ const onIntegratedGenerated = (payload: { url: string; textBrief: string; textZo
       />
       <CampaignLayout
         v-show="activeTab === 'campaign'"
+        :outputFormat="sharedOutputFormat"
         :initialBackgroundUrl="sharedBackgroundUrl"
         :initialTextBrief="sharedTextBrief"
         :initialTextZones="sharedTextZones"
@@ -75,6 +79,7 @@ const onIntegratedGenerated = (payload: { url: string; textBrief: string; textZo
       />
       <LayerEditor
         v-show="activeTab === 'editor'"
+        :outputFormat="sharedOutputFormat"
         :initialBackground="sharedBackgroundUrl"
         :campaignData="sharedCampaignData"
       />
