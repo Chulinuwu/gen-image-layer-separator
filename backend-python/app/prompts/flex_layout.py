@@ -152,7 +152,7 @@ align: "left|center|right"
 lineHeight: multiplier (1.0-1.2 for headers, 1.4-1.8 for body)
 letterSpacing: px (1-4 for premium headlines)
 opacity, margin, maxLines, borderRadius
-skewX, skewY, perspective, rotateX, rotateY
+skewX, skewY, perspective, rotateX, rotateY, warpType, warpIntensity
 
 BACKGROUND EFFECTS (canvas-level, in "backgroundEffects" array):
 - Linear fade: {{"type": "linear-fade", "from": "bottom|top|left|right", "color": "rgba(0,0,0,0.7)", "size": "40%"}}
@@ -179,4 +179,8 @@ RULES:
   - Example 3D card effect: style {{"fontSize":"large", "perspective":500, "rotateY":15}}
   - Do NOT apply transforms to body text or small text. Only headlines and accent text.
   - Do NOT combine skew with 3D rotation on the same node.
+  - warpType: "arc"|"wave"|"bulge"|"flag" -- Photoshop-style text warp. warpIntensity: -100 to 100 (bend %).
+  - Example arc headline: style {{"fontSize":"xlarge", "fontWeight":"900", "color":"#FFFFFF", "warpType":"arc", "warpIntensity":30}}
+  - Arc: curves text in a circular arc. Wave: sinusoidal ripple. Bulge: expand from center. Flag: wave with increasing amplitude.
+  - Warp converts text to vector paths (no longer editable as text). Use only for hero headlines.
 - Hero/promo = LARGEST element (fontSize "xlarge", fontWeight "900")."""

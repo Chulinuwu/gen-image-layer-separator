@@ -183,6 +183,8 @@ watch(
               perspective: s.perspective || 0,
               rotateX: s.rotateX || 0,
               rotateY: s.rotateY || 0,
+              warpType: s.warpType || 'none',
+              warpIntensity: s.warpIntensity || 0,
             },
           });
         }
@@ -1777,6 +1779,31 @@ onUnmounted(() => {
                   />
                 </div>
               </div>
+              <div class="props-grid">
+                <div class="props-field">
+                  <label>Warp</label>
+                  <select
+                    class="props-select"
+                    :value="getMultiProp(l => l.style?.warpType ?? 'none').value || 'none'"
+                    @change="selectedLayers.forEach(l => { if (l.style) l.style.warpType = ($event.target as HTMLSelectElement).value; })"
+                  >
+                    <option value="none">None</option>
+                    <option value="arc">Arc</option>
+                    <option value="wave">Wave</option>
+                    <option value="bulge">Bulge</option>
+                    <option value="flag">Flag</option>
+                  </select>
+                </div>
+                <div class="props-field">
+                  <label>Bend %</label>
+                  <input
+                    type="number" step="5" min="-100" max="100"
+                    :value="getMultiProp(l => l.style?.warpIntensity ?? 0).value"
+                    :placeholder="getMultiProp(l => l.style?.warpIntensity).mixed ? 'Mixed' : ''"
+                    @input="selectedLayers.forEach(l => { if (l.style) l.style.warpIntensity = Number(($event.target as HTMLInputElement).value); })"
+                  />
+                </div>
+              </div>
             </div>
           </div>
 
@@ -2483,6 +2510,16 @@ onUnmounted(() => {
   outline: none;
   width: 100%;
   box-sizing: border-box;
+}
+.props-select {
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  background: #2d2d44;
+  border: 1px solid #3d3d54;
+  border-radius: 6px;
+  color: #e2e2e8;
+  font-size: 12px;
 }
 .props-field input:focus,
 .props-field select:focus {

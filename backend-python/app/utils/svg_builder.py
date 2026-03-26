@@ -8,6 +8,7 @@ from pathlib import Path
 
 from app.utils.flex_layout import LayoutBox, FlexNodeStyle
 from app.utils.text_measure import measure_text, wrap_text, auto_fit_font_size
+from app.utils.text_warp import render_warped_text, WarpConfig
 
 
 def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
@@ -297,6 +298,28 @@ def _render_text_box(box: LayoutBox, clip_id: str) -> tuple[list[str], list[str]
             total_height=wrapped.line_height * style.maxLines,
         )
         total_text_height = len(wrapped.lines) * line_height
+
+    # Warp rendering: convert text to glyph paths and apply warp deformation
+    if style.warpType and style.warpType != "none" and style.warpIntensity is not None:
+        warp_config = WarpConfig(warp_type=style.warpType, intensity=style.warpIntensity)
+        try:
+            warped_svg, text_width, text_height = render_warped_text(
+                text=text,
+                font_size=font_size,
+                font_weight=font_weight,
+                color=color,
+                warp_config=warp_config,
+                letter_spacing=style.letterSpacing or 0,
+                stroke_color=style.strokeColor,
+                stroke_width=style.strokeWidth,
+            )
+            if warped_svg:
+                x_offset = box.x + (box.w - text_width) / 2
+                y_offset = box.y + box.h * 0.75
+                elements.append(f'<g transform="translate({x_offset:.1f},{y_offset:.1f})">{warped_svg}</g>')
+                return defs, elements
+        except Exception as e:
+            print(f"[Warp] Failed for '{text}': {e}, falling back to normal text")
 
     offset_y = max(0, (box.h - total_text_height) / 2)
 

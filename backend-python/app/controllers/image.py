@@ -744,6 +744,8 @@ async def _step_flex_layout(
              "perspective": b.style.perspective,
              "rotateX": b.style.rotateX,
              "rotateY": b.style.rotateY,
+             "warpType": b.style.warpType,
+             "warpIntensity": b.style.warpIntensity,
          } if b.style else None}
         for b in flex_boxes
     ]
