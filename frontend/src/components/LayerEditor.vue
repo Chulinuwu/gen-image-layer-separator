@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, reactive, watch, computed, onMounted, onUnmounted } from "vue";
+import { ref, reactive, watch, computed, onMounted, onUnmounted, nextTick } from "vue";
 import createDOMPurify from "dompurify";
 import CustomDropdown from "./CustomDropdown.vue";
 import CustomInput from "./CustomInput.vue";
+import Text3DRenderer from "./Text3DRenderer.vue";
 const DOMPurify = createDOMPurify(window);
 
 const props = defineProps({
@@ -187,6 +188,13 @@ watch(
               warpIntensity: s.warpIntensity || 0,
               warpHDistortion: s.warpHDistortion || 0,
               warpVDistortion: s.warpVDistortion || 0,
+              text3dStyle: s.text3dStyle || 'none',
+              text3dDepth: s.text3dDepth || 0,
+              text3dBevel: s.text3dBevel || 0,
+              text3dMaterial: s.text3dMaterial || 'matte',
+              text3dLightAngle: s.text3dLightAngle || 45,
+              text3dColor: s.text3dColor || '',
+              text3dSideColor: s.text3dSideColor || '',
             },
           });
         }
@@ -236,6 +244,7 @@ const snapGuides = ref<{ type: 'h' | 'v'; pos: number }[]>([]);
 const SNAP_THRESHOLD = 1;
 const focusedLayerId = ref<number | null>(null);
 const textRefs = ref<Record<number, HTMLElement>>({});
+const text3dRefs = ref<Record<number, any>>({});
 const warpCache = ref<Record<string, string>>({});
 const warpPreviews = ref<Record<number, string>>({});
 
@@ -274,7 +283,9 @@ const fetchWarpPreview = async (layer: any): Promise<string> => {
     });
     const data = await resp.json();
     if (data.success && data.data.svg) {
-      const svgStr = `<svg viewBox="0 0 ${data.data.width} ${data.data.height}" xmlns="http://www.w3.org/2000/svg">${data.data.svg}</svg>`;
+      const w = data.data.width;
+      const h = data.data.height;
+      const svgStr = `<svg viewBox="${-w*0.1} ${-h*0.5} ${w*1.2} ${h*1.5}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">${data.data.svg}</svg>`;
       warpCache.value[key] = svgStr;
       return svgStr;
     }
@@ -981,10 +992,15 @@ const updateText = (idx: number, e: Event) => {
 const selectAll = (idx: number) => {
   selectedLayerId.value = idx;
   focusedLayerId.value = idx;
+  nextTick(() => {
+    const el = textRefs.value[layers.value[idx]?.id];
+    if (el) el.focus();
+  });
 };
 
-const onBlurText = () => {
+const onBlurText = (_idx?: number) => {
   focusedLayerId.value = null;
+  updateWarpPreviews();
 };
 
 const deleteLayer = () => {
@@ -1301,6 +1317,107 @@ const downloadAsSvg = async () => {
   URL.revokeObjectURL(url);
 };
 
+const downloadAsPsd = async () => {
+  const { writePsd } = await import('ag-psd');
+
+  const bgImg = editorCanvasEl.value?.querySelector(".bg-img") as HTMLImageElement;
+  if (!bgImg) return;
+
+  const width = bgImg.naturalWidth;
+  const height = bgImg.naturalHeight;
+
+  const bgCanvas = document.createElement('canvas');
+  bgCanvas.width = width;
+  bgCanvas.height = height;
+  bgCanvas.getContext('2d')!.drawImage(bgImg, 0, 0);
+
+  const children: any[] = [];
+
+  for (const l of layers.value) {
+    if (!l.visible) continue;
+    const lx = Math.round((l.x / 100) * width);
+    const ly = Math.round((l.y / 100) * height);
+    const lw = Math.round((l.w / 100) * width);
+    const lh = Math.round((l.h / 100) * height);
+
+    if (l.type === 'image') {
+      try {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.src = l.imageUrl;
+        await new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
+        const c = document.createElement('canvas');
+        c.width = lw;
+        c.height = lh;
+        c.getContext('2d')!.drawImage(img, 0, 0, lw, lh);
+        children.push({ name: l.label || 'Image', left: lx, top: ly, canvas: c, blendMode: 'normal', opacity: 1 });
+      } catch (e) {
+        console.error('PSD export: image layer failed', e);
+      }
+    } else if (l.type === 'text') {
+      if (l.style?.text3dStyle && l.style.text3dStyle !== 'none' && text3dRefs.value[l.id]) {
+        try {
+          const dataUrl = text3dRefs.value[l.id].getDataURL();
+          if (dataUrl) {
+            const img = new Image();
+            img.src = dataUrl;
+            await new Promise((res) => { img.onload = res; });
+            const c = document.createElement('canvas');
+            c.width = lw;
+            c.height = lh;
+            c.getContext('2d')!.drawImage(img, 0, 0, lw, lh);
+            children.push({
+              name: `3D: ${(l.content || '').substring(0, 20)}`,
+              left: lx, top: ly, canvas: c, blendMode: 'normal', opacity: 1,
+            });
+          }
+        } catch (e) {
+          console.error('PSD export: 3D text failed', e);
+        }
+      }
+
+      const has3d = l.style?.text3dStyle && l.style.text3dStyle !== 'none';
+      children.push({
+        name: (l.content || '').substring(0, 30),
+        left: lx, top: ly,
+        text: {
+          text: l.content || '',
+          orientation: 'horizontal',
+          antiAlias: 'smooth',
+          style: {
+            font: { name: l.style?.font_family || 'Kanit' },
+            fontSize: (l.style?.font_size_normalized || 40) / 1000 * width,
+            fillColor: { r: 0, g: 0, b: 0 },
+            tracking: (l.style?.letter_spacing || 0) * 10,
+          },
+          paragraphStyle: {
+            justification: l.style?.align === 'center' ? 'center' : l.style?.align === 'right' ? 'right' : 'left',
+          },
+        },
+        hidden: !!has3d,
+      });
+    }
+  }
+
+  const psd = {
+    width,
+    height,
+    children: [
+      { name: 'Background', canvas: bgCanvas, blendMode: 'normal' as const, opacity: 1 },
+      ...children,
+    ],
+  };
+
+  const buffer = writePsd(psd);
+  const blob = new Blob([buffer], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'ad-layout.psd';
+  link.click();
+  URL.revokeObjectURL(url);
+};
+
 // Collapsible sections in properties panel
 const expandedSections = reactive<Record<string, boolean>>({
   transform: true,
@@ -1308,6 +1425,7 @@ const expandedSections = reactive<Record<string, boolean>>({
   appearance: true,
   effects: false,
   transform3d: false,
+  text3d: false,
 });
 
 const toggleSection = (key: string) => {
@@ -1500,8 +1618,7 @@ onUnmounted(() => {
         <button
           v-if="layers.length && props.outputFormat === 'psd-3d'"
           class="toolbar-btn toolbar-btn-psd"
-          title="PSD export coming soon"
-          disabled
+          @click="downloadAsPsd"
         >
           Export PSD
         </button>
@@ -1687,19 +1804,38 @@ onUnmounted(() => {
                 class="component-img"
                 draggable="false"
               />
+              <!-- 3D text preview (click to edit) -->
+              <Text3DRenderer
+                v-else-if="layer.type === 'text' && layer.style?.text3dStyle && layer.style.text3dStyle !== 'none' && layer.style.text3dDepth > 0 && focusedLayerId !== idx"
+                :ref="(el: any) => { if (el) text3dRefs.value[layer.id] = el; }"
+                :text="layer.content || ''"
+                :text3d-style="layer.style.text3dStyle"
+                :text3d-depth="layer.style.text3dDepth || 20"
+                :text3d-bevel="layer.style.text3dBevel || 3"
+                :text3d-material="layer.style.text3dMaterial || 'matte'"
+                :text3d-light-angle="layer.style.text3dLightAngle || 45"
+                :text3d-color="layer.style.text3dColor || layer.style.color_hex || '#FFFFFF'"
+                :text3d-side-color="layer.style.text3dSideColor || '#888888'"
+                :width="400"
+                :height="120"
+                @mousedown.stop="selectAll(idx)"
+              />
+              <!-- Warped text preview (visual overlay, click to edit) -->
               <div
-                v-else-if="layer.type === 'text' && warpPreviews[layer.id]"
+                v-else-if="layer.type === 'text' && warpPreviews[layer.id] && focusedLayerId !== idx"
                 class="warp-preview"
                 v-html="warpPreviews[layer.id]"
-                :title="`Warp: ${layer.style.warpType} ${layer.style.warpIntensity}%`"
+                :title="`Warp: ${layer.style.warpType} ${layer.style.warpIntensity}% -- click to edit`"
+                @mousedown.stop="selectAll(idx)"
               ></div>
+              <!-- Editable text (shown always for non-warped/non-3D, or when focused) -->
               <span
-                v-else
+                v-else-if="layer.type !== 'image'"
                 :ref="(el) => { if (el) textRefs[layer.id] = el as HTMLElement; }"
                 contenteditable="true"
                 @input="updateText(idx, $event)"
                 @focus="selectAll(idx)"
-                @blur="onBlurText"
+                @blur="onBlurText(idx)"
                 class="editable-text"
                 :style="getEditorContainerStyle(layer)"
               ></span>
@@ -1940,6 +2076,98 @@ onUnmounted(() => {
                     :placeholder="getMultiProp(l => l.style?.warpVDistortion).mixed ? 'Mixed' : ''"
                     @input="selectedLayers.forEach(l => { if (l.style) l.style.warpVDistortion = Number(($event.target as HTMLInputElement).value); })"
                   />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 3D Text Effects section -->
+          <div class="props-section" v-if="outputFormat === 'psd-3d' && selectedLayers.every(l => l.type === 'text')">
+            <div class="props-section-header" @click="toggleSection('text3d')">
+              <span>3D Text</span>
+              <span class="chevron" :class="{ open: expandedSections.text3d }">&#9662;</span>
+            </div>
+            <div v-show="expandedSections.text3d" class="props-section-body">
+              <div class="props-field full">
+                <label>3D Style</label>
+                <select
+                  class="props-select"
+                  :value="getMultiProp(l => l.style?.text3dStyle ?? 'none').value || 'none'"
+                  @change="selectedLayers.forEach(l => { if (l.style) l.style.text3dStyle = ($event.target as HTMLSelectElement).value; })"
+                >
+                  <option value="none">None</option>
+                  <option value="extruded">Extruded</option>
+                  <option value="embossed">Embossed</option>
+                  <option value="engraved">Engraved</option>
+                  <option value="floating">Floating</option>
+                  <option value="neon">Neon</option>
+                </select>
+              </div>
+              <div class="props-grid">
+                <div class="props-field">
+                  <label>Depth</label>
+                  <input
+                    type="number" step="5" min="0" max="50"
+                    :value="getMultiProp(l => l.style?.text3dDepth ?? 0).value"
+                    @input="selectedLayers.forEach(l => { if (l.style) l.style.text3dDepth = Number(($event.target as HTMLInputElement).value); })"
+                  />
+                </div>
+                <div class="props-field">
+                  <label>Bevel</label>
+                  <input
+                    type="number" step="1" min="0" max="10"
+                    :value="getMultiProp(l => l.style?.text3dBevel ?? 0).value"
+                    @input="selectedLayers.forEach(l => { if (l.style) l.style.text3dBevel = Number(($event.target as HTMLInputElement).value); })"
+                  />
+                </div>
+              </div>
+              <div class="props-field full">
+                <label>Material</label>
+                <select
+                  class="props-select"
+                  :value="getMultiProp(l => l.style?.text3dMaterial ?? 'matte').value || 'matte'"
+                  @change="selectedLayers.forEach(l => { if (l.style) l.style.text3dMaterial = ($event.target as HTMLSelectElement).value; })"
+                >
+                  <option value="metallic">Metallic</option>
+                  <option value="glossy">Glossy</option>
+                  <option value="matte">Matte</option>
+                  <option value="neon">Neon</option>
+                  <option value="glass">Glass</option>
+                  <option value="wood">Wood</option>
+                </select>
+              </div>
+              <div class="props-grid">
+                <div class="props-field">
+                  <label>Light Angle</label>
+                  <input
+                    type="number" step="15" min="0" max="360"
+                    :value="getMultiProp(l => l.style?.text3dLightAngle ?? 45).value"
+                    @input="selectedLayers.forEach(l => { if (l.style) l.style.text3dLightAngle = Number(($event.target as HTMLInputElement).value); })"
+                  />
+                </div>
+              </div>
+              <div class="props-grid">
+                <div class="props-field">
+                  <label>Face Color</label>
+                  <div class="color-input-wrap">
+                    <input
+                      type="color"
+                      class="color-input"
+                      :value="getMultiProp(l => l.style?.text3dColor || l.style?.color_hex || '#FFFFFF').value"
+                      @input="selectedLayers.forEach(l => { if (l.style) l.style.text3dColor = ($event.target as HTMLInputElement).value; })"
+                    />
+                  </div>
+                </div>
+                <div class="props-field">
+                  <label>Side Color</label>
+                  <div class="color-input-wrap">
+                    <input
+                      type="color"
+                      class="color-input"
+                      :value="getMultiProp(l => l.style?.text3dSideColor || '#888888').value"
+                      @input="selectedLayers.forEach(l => { if (l.style) l.style.text3dSideColor = ($event.target as HTMLInputElement).value; })"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -2247,8 +2475,10 @@ onUnmounted(() => {
   border-radius: 6px;
   font-size: 12px;
   font-weight: 600;
-  cursor: not-allowed;
-  opacity: 0.6;
+  cursor: pointer;
+}
+.toolbar-btn-psd:hover {
+  background: #6d28d9;
 }
 
 /* ---- Studio body (3-panel) ---- */

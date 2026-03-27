@@ -31,6 +31,14 @@ class FlexNodeStyle:
     warpIntensity: float | None = None # -100 to 100 (like Photoshop bend %)
     warpHDistortion: float | None = None  # -100 to 100
     warpVDistortion: float | None = None  # -100 to 100
+    # 3D text effects (PSD+3D mode only, rendered via Three.js on frontend)
+    text3dStyle: str | None = None       # "extruded"|"embossed"|"engraved"|"floating"|"neon"
+    text3dDepth: float | None = None     # px depth of extrusion (5-50)
+    text3dBevel: float | None = None     # bevel size (0-10)
+    text3dMaterial: str | None = None    # "metallic"|"glossy"|"matte"|"neon"|"glass"|"wood"
+    text3dLightAngle: float | None = None # degrees (0-360)
+    text3dColor: str | None = None       # main face color (overrides color if set)
+    text3dSideColor: str | None = None   # side/extrusion color
 
 
 @dataclass

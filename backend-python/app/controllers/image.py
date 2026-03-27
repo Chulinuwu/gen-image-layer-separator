@@ -797,6 +797,13 @@ async def _step_flex_layout(
              "warpIntensity": b.style.warpIntensity,
              "warpHDistortion": b.style.warpHDistortion,
              "warpVDistortion": b.style.warpVDistortion,
+             "text3dStyle": b.style.text3dStyle,
+             "text3dDepth": b.style.text3dDepth,
+             "text3dBevel": b.style.text3dBevel,
+             "text3dMaterial": b.style.text3dMaterial,
+             "text3dLightAngle": b.style.text3dLightAngle,
+             "text3dColor": b.style.text3dColor,
+             "text3dSideColor": b.style.text3dSideColor,
          } if b.style else None}
         for b in flex_boxes
     ]

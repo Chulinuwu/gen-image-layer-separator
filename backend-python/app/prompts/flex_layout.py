@@ -110,6 +110,7 @@ def build_flex_tree_prompt(
 
     _transform_style_props = (
         "\nskewX, skewY, perspective, rotateX, rotateY, warpType, warpIntensity, warpHDistortion, warpVDistortion"
+        "\ntext3dStyle, text3dDepth, text3dBevel, text3dMaterial, text3dLightAngle, text3dColor, text3dSideColor"
         if _is_psd3d else ""
     )
 
@@ -136,6 +137,20 @@ def build_flex_tree_prompt(
   - Hero: style {{"fontSize":"xlarge", "fontWeight":"900", "color":"#FFFFFF", "strokeColor":"#000000", "strokeWidth":3, "warpType":"arc", "warpIntensity":35, "warpHDistortion":15}}
   - Sub-headline with skew: style {{"fontSize":"large", "fontWeight":"700", "skewX":-8, "color":"#FFD700"}}
   - Sub-headline with warp: style {{"fontSize":"large", "fontWeight":"700", "warpType":"rise", "warpIntensity":25}}
+- 3D TEXT EFFECTS (for premium/impactful headlines):
+  - text3dStyle: "extruded" (text pops out), "embossed" (raised from surface), "engraved" (carved in), "floating" (shadow gap), "neon" (glowing outline)
+  - text3dDepth: 5-50 px (how far text extrudes). Use 15-30 for headlines, 5-10 for subtle.
+  - text3dBevel: 0-10 (rounded edge size). Use 2-5 for elegant, 0 for sharp.
+  - text3dMaterial: "metallic" (reflective gold/silver), "glossy" (shiny plastic), "matte" (flat solid), "neon" (glowing), "glass" (transparent), "wood" (textured)
+  - text3dLightAngle: 0-360 degrees (where light comes from). 45 = top-left (classic), 315 = top-right.
+  - text3dColor: face color (optional, overrides base color). text3dSideColor: extrusion side color.
+  - STYLE GUIDE for 3D:
+    - Gold premium: text3dStyle "extruded", text3dMaterial "metallic", text3dColor "#FFD700", text3dSideColor "#B8860B", text3dDepth 20, text3dBevel 3
+    - Neon sign: text3dStyle "neon", text3dMaterial "neon", text3dColor "#FF00FF", text3dDepth 5, text3dBevel 0
+    - Corporate solid: text3dStyle "extruded", text3dMaterial "matte", text3dDepth 12, text3dBevel 2
+    - Glass/ice: text3dStyle "extruded", text3dMaterial "glass", text3dColor "#88CCFF", text3dDepth 15, text3dBevel 4
+  - You can combine 3D with warp: first warp shapes the text path, then 3D extrudes it.
+  - Apply 3D to at most 2 text nodes (hero + optionally sub-headline). Body text stays flat.
 - Do NOT apply transforms to body text, fine print, or disclaimers.
 - Do NOT combine skew with warp on the same node.
 """ if _is_psd3d else ""
