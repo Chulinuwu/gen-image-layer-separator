@@ -1771,7 +1771,7 @@ onUnmounted(() => {
                       top: layer.y + '%',
                       left: layer.x + '%',
                       width: layer.w + '%',
-                      height: layer.h + '%',
+                      minHeight: layer.h + '%',
                       color: layer.style.color_hex,
                       fontSize: (layer.style.font_size_normalized || 40) * 0.1 + 'cqw',
                       fontFamily: `${layer.style.font_family || 'Kanit'}, sans-serif`,
