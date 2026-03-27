@@ -113,21 +113,31 @@ def build_flex_tree_prompt(
         if _is_psd3d else ""
     )
 
-    _transform_rules = """- PSD+3D MODE IS ACTIVE. You MUST use at least one transform effect on the hero/headline text. This is a premium output mode -- plain flat text is not acceptable.
-- TRANSFORM EFFECTS (REQUIRED for headlines, optional for sub-headlines):
-  - skewX/skewY: Tilt text diagonally (-20 to 20 degrees). Great for dynamic/energetic feel.
-  - perspective + rotateX/rotateY: 3D rotation. perspective: 300-800px, rotateX/rotateY: -30 to 30 deg.
+    _transform_rules = """- PSD+3D MODE IS ACTIVE. You are a bold Photoshop graphic designer. Flat text is BORING -- make it POP.
+- TRANSFORM EFFECTS -- MANDATORY RULES:
+  1. The HERO HEADLINE **MUST** use warpType (NOT just skew -- use a REAL warp like arc, wave, arch, flag, etc.)
+  2. At least one SUB-HEADLINE should use either warpType OR skew/perspective for visual hierarchy
+  3. Body text stays flat (no transforms)
+  4. Be BOLD with intensity values -- subtle = invisible. Go 25-50 range, not 5-15.
+- AVAILABLE TRANSFORMS:
   - warpType: "arc"|"arc_lower"|"arc_upper"|"arch"|"bulge"|"shell_lower"|"shell_upper"|"flag"|"wave"|"fish"|"rise"|"fisheye"|"inflate"|"squeeze"|"twist"
-  - warpIntensity: -100 to 100 (bend %). warpHDistortion/warpVDistortion: -100 to 100 (perspective).
-  - APPLY warp or skew to the LARGEST headline. Choose the effect that matches the campaign mood:
-    - Energetic/sale: "arc" or "wave" with intensity 20-40
-    - Premium/luxury: "arch" with subtle intensity 15-25, or skewX -3 to -5
-    - Dynamic/action: "flag" or "rise" with intensity 25-40
-    - Playful/fun: "bulge" or "inflate" with intensity 20-35
-    - Dramatic: "twist" or "squeeze" with intensity 15-30
-  - Example: style {{"fontSize":"xlarge", "fontWeight":"900", "color":"#FFFFFF", "warpType":"arc", "warpIntensity":30}}
-  - Do NOT apply transforms to body text, fine print, or disclaimers.
-  - Do NOT combine skew with warp on the same node.
+  - warpIntensity: -100 to 100 (USE 25-50 for visible impact, not wimpy 5-10)
+  - warpHDistortion/warpVDistortion: -100 to 100 (add perspective depth, try 15-30)
+  - skewX/skewY: -20 to 20 degrees (use on sub-headlines for dynamic angle)
+  - perspective + rotateX/rotateY: 3D tilt (perspective 400-600px, rotate 10-20 deg)
+- MOOD GUIDE -- pick warp that matches the vibe:
+  - Sale/promo/discount: "arc" 30-45 -- classic eye-catching curve
+  - Premium/finance/corporate: "arch" 20-35 + warpHDistortion 15 -- elegant arc with depth
+  - Action/sports/energy: "wave" 30-40 or "flag" 35-50 -- movement and power
+  - Fun/kids/food: "bulge" 30-40 or "inflate" 25-35 -- playful and bouncy
+  - Tech/modern: "rise" 25-35 + skewX -8 on sub-headline -- forward momentum
+  - Drama/movie/event: "twist" 20-30 or "squeeze" 25-35 -- tension and impact
+- EXAMPLES:
+  - Hero: style {{"fontSize":"xlarge", "fontWeight":"900", "color":"#FFFFFF", "strokeColor":"#000000", "strokeWidth":3, "warpType":"arc", "warpIntensity":35, "warpHDistortion":15}}
+  - Sub-headline with skew: style {{"fontSize":"large", "fontWeight":"700", "skewX":-8, "color":"#FFD700"}}
+  - Sub-headline with warp: style {{"fontSize":"large", "fontWeight":"700", "warpType":"rise", "warpIntensity":25}}
+- Do NOT apply transforms to body text, fine print, or disclaimers.
+- Do NOT combine skew with warp on the same node.
 """ if _is_psd3d else ""
 
     return f"""You are a graphic designer. Convert the design plan below into a flex tree JSON.
