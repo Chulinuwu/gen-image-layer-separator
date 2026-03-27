@@ -113,14 +113,20 @@ def build_flex_tree_prompt(
         if _is_psd3d else ""
     )
 
-    _transform_rules = """- TRANSFORM EFFECTS (use sparingly for emphasis):
-  - skewX/skewY: Tilt text diagonally (range -20 to 20 degrees). Use for dynamic/energetic feel.
-  - perspective + rotateX/rotateY: 3D rotation effect. perspective: 300-800px, rotateX/rotateY: -30 to 30 degrees.
+    _transform_rules = """- PSD+3D MODE IS ACTIVE. You MUST use at least one transform effect on the hero/headline text. This is a premium output mode -- plain flat text is not acceptable.
+- TRANSFORM EFFECTS (REQUIRED for headlines, optional for sub-headlines):
+  - skewX/skewY: Tilt text diagonally (-20 to 20 degrees). Great for dynamic/energetic feel.
+  - perspective + rotateX/rotateY: 3D rotation. perspective: 300-800px, rotateX/rotateY: -30 to 30 deg.
   - warpType: "arc"|"arc_lower"|"arc_upper"|"arch"|"bulge"|"shell_lower"|"shell_upper"|"flag"|"wave"|"fish"|"rise"|"fisheye"|"inflate"|"squeeze"|"twist"
   - warpIntensity: -100 to 100 (bend %). warpHDistortion/warpVDistortion: -100 to 100 (perspective).
-  - Example arc headline: style {{"fontSize":"xlarge", "fontWeight":"900", "warpType":"arc", "warpIntensity":30}}
-  - Example wave with perspective: style {{"fontSize":"large", "warpType":"wave", "warpIntensity":40, "warpHDistortion":20}}
-  - Warp converts text to vector paths. Use only for hero headlines, not body text.
+  - APPLY warp or skew to the LARGEST headline. Choose the effect that matches the campaign mood:
+    - Energetic/sale: "arc" or "wave" with intensity 20-40
+    - Premium/luxury: "arch" with subtle intensity 15-25, or skewX -3 to -5
+    - Dynamic/action: "flag" or "rise" with intensity 25-40
+    - Playful/fun: "bulge" or "inflate" with intensity 20-35
+    - Dramatic: "twist" or "squeeze" with intensity 15-30
+  - Example: style {{"fontSize":"xlarge", "fontWeight":"900", "color":"#FFFFFF", "warpType":"arc", "warpIntensity":30}}
+  - Do NOT apply transforms to body text, fine print, or disclaimers.
   - Do NOT combine skew with warp on the same node.
 """ if _is_psd3d else ""
 
