@@ -1,6 +1,9 @@
+import os
 import pytest
 
-from app.services.vertex import with_retry
+from app.services.vertex import with_retry, vertex_service
+
+_HAS_CREDS = bool(os.getenv("GOOGLE_SERVICE_ACCOUNT_CLIENT_EMAIL"))
 
 
 call_count = 0
@@ -56,3 +59,27 @@ async def test_with_retry_exhausts_retries():
 
     with pytest.raises(Exception, match="429"):
         await with_retry(always_429, retries=2, delay=0.01)
+
+
+@pytest.mark.skipif(not _HAS_CREDS, reason="no creds")
+@pytest.mark.asyncio
+async def test_plan_target_overview_returns_nonempty_paragraph():
+    result = await vertex_service.plan_target_overview(
+        brief="a playful snack brand for teens",
+        user_image=None,
+        mime=None,
+        aspect_ratio="4:5",
+        footer_text=None,
+    )
+    assert isinstance(result, str)
+    assert 100 < len(result) < 2500
+    assert "No " in result
+
+
+@pytest.mark.skipif(not _HAS_CREDS, reason="no creds")
+@pytest.mark.asyncio
+async def test_embed_text_returns_vector():
+    vec = await vertex_service.embed_text("a dark editorial luxury layout")
+    assert isinstance(vec, list)
+    assert len(vec) > 0
+    assert all(isinstance(x, (int, float)) for x in vec)

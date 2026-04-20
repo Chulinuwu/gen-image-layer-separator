@@ -24,6 +24,7 @@ from app.constants.pipeline import (
     QUALITY_ALPHA_CUTOFF, GRID_THUMBNAIL_SIZE, GRID_MAX_COLS,
     FLOOD_FILL_ALPHA_THRESH, INPAINT_FG_ALPHA_THRESH, INPAINT_MASK_DILATION,
     BBOX_ALPHA_THRESH, STROKE_BBOX_ALPHA_THRESH, CHARACTER_KEYWORDS, NO_TEXT_PREFIX,
+    STYLE_EMBED_MODEL,
 )
 from app.constants.models import SAFETY_OFF, get_text_model, get_text_model_best
 from app.prompts.campaign_layout import build_campaign_layout_prompt
@@ -1525,6 +1526,61 @@ class VertexService:
             return data
         except Exception:
             return {"result": "PASS"}
+
+    async def plan_target_overview(
+        self,
+        *,
+        brief: str,
+        user_image: bytes | None,
+        mime: str | None,
+        aspect_ratio: str,
+        footer_text: str | None,
+    ) -> str:
+        from app.prompts.plan_target_overview import build_plan_overview_prompt
+
+        prompt = build_plan_overview_prompt(
+            brief=brief,
+            has_user_image=user_image is not None,
+            aspect_ratio=aspect_ratio,
+            footer_text=footer_text,
+        )
+        parts: list = [prompt]
+        if user_image is not None and mime:
+            from google.genai import types
+            parts.append(types.Part.from_bytes(data=user_image, mime_type=mime))
+        response = await with_retry(
+            lambda: self.client.aio.models.generate_content(
+                model=get_text_model_best(),
+                contents=parts,
+                config=SAFETY_OFF,
+            )
+        )
+        return (response.text or "").strip()
+
+    async def embed_text(self, text: str) -> list[float]:
+        response = await with_retry(
+            lambda: self.client.aio.models.embed_content(
+                model=STYLE_EMBED_MODEL,
+                contents=text,
+            )
+        )
+        emb = response.embeddings[0]
+        return list(emb.values)
+
+    async def translate_spec_to_imagen_prompt(
+        self, *, spec_md: str, brief: str
+    ) -> str:
+        from app.prompts.translate_spec_to_imagen import build_translate_prompt
+
+        prompt = build_translate_prompt(spec_md=spec_md, brief=brief)
+        response = await with_retry(
+            lambda: self.client.aio.models.generate_content(
+                model=get_text_model_best(),
+                contents=[prompt],
+                config=SAFETY_OFF,
+            )
+        )
+        return (response.text or "").strip()
 
 
 vertex_service = VertexService()
