@@ -511,6 +511,48 @@ def _has_extractable_foreground(masked_buf: bytes | None, threshold: float = FG_
         return False
 
 
+async def _step_plan_and_match(
+    *,
+    send_sse,
+    brief: str,
+    user_image: bytes | None,
+    mime: str | None,
+    aspect_ratio: str,
+    footer_text: str | None,
+):
+    from app.services import style_library
+    from app.utils.style_spec import load_spec
+
+    send_sse("progress", {"step": "style_planning", "message": "Planning target style..."})
+    overview = await vertex_service.plan_target_overview(
+        brief=brief,
+        user_image=user_image,
+        mime=mime,
+        aspect_ratio=aspect_ratio,
+        footer_text=footer_text,
+    )
+
+    vector = await vertex_service.embed_text(overview)
+    hits = style_library.search_top_k(vector, k=1)
+    if not hits:
+        send_sse("progress", {"step": "style_selection", "message": "No style library -- running without StyleSpec"})
+        return None, overview
+
+    top = hits[0]
+    spec = load_spec(top["path"])
+    send_sse("progress", {
+        "step": "style_selection",
+        "message": f"Matched style: {spec.id} (score {top['score']:.3f})",
+    })
+    send_sse("debug", {
+        "step": "style_spec",
+        "id": spec.id,
+        "overview": spec.overview,
+        "source_image_url": f"/assets/design_systems/{spec.id}/source.jpg",
+    })
+    return spec, overview
+
+
 async def _step_rmbg_prescan(
     image_bytes: bytes,
     send_sse,
@@ -1103,6 +1145,22 @@ async def create_campaign(
                 yield e
             events.clear()
 
+            # Step 0: Plan target overview + match StyleSpec
+            # TODO(task-12/14): thread style_spec into downstream steps
+            aspect_ratio_in = (body.get("aspect_ratio") if body else None) or "3:4"
+            footer_text_in = (body.get("footer_text") if body else None) or None
+            style_spec, planned_overview = await _step_plan_and_match(
+                send_sse=send_sse,
+                brief=target_text,
+                user_image=image_buffer,
+                mime=mime_type,
+                aspect_ratio=aspect_ratio_in,
+                footer_text=footer_text_in,
+            )
+            for e in events:
+                yield e
+            events.clear()
+
             # Step 1A: RMBG prescan
             masked_buf, rmbg_no_go = await _step_rmbg_prescan(image_buffer, send_sse)
             parsed_no_go = rmbg_no_go + parsed_no_go
@@ -1405,6 +1463,20 @@ async def create_campaign_integrated(request: Request, body: dict):
                 for e in events:
                     yield e
                 return
+
+            # Step 0: Plan target overview + match StyleSpec
+            # TODO(task-12/14): thread style_spec into downstream steps
+            style_spec, planned_overview = await _step_plan_and_match(
+                send_sse=send_sse,
+                brief=text_brief,
+                user_image=None,
+                mime=None,
+                aspect_ratio=aspect_ratio,
+                footer_text=footer_text or None,
+            )
+            for e in events:
+                yield e
+            events.clear()
 
             # Step 1: Plan text zones
             send_sse("progress", {"step": "planning_zones", "message": "Planning text zones..."})
