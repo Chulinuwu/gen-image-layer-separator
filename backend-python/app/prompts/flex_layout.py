@@ -1,15 +1,26 @@
 def build_flex_thought_prompt(
     target_text: str,
     components_list: str,
-    ref_section: str,
-    canvas_size: dict,
+    ref_section: str = "",
+    canvas_size: dict = None,
     style_guide: str = "",
     layout_strategy_section: str = "",
     no_go_zones_section: str = "",
     image_description_section: str = "",
     zone_hints: list[dict] | None = None,
+    style_spec_md: str | None = None,
 ) -> str:
+    if canvas_size is None:
+        canvas_size = {}
     style_section = f"\n{style_guide}\n" if style_guide else ""
+    spec_section = (
+        "\n\nTARGET DESIGN SYSTEM (match strictly):\n"
+        f"{style_spec_md}\n\n"
+        "Your flex tree MUST adhere to this design system. Typography, color, "
+        "effects, and text-image relationship fields are binding.\n"
+        if style_spec_md
+        else ""
+    )
 
     style_matching_rules = ""
     if style_guide:
@@ -34,7 +45,7 @@ STYLE MATCHING: Reference images and their style guide are provided above. Your 
 Your job is to ANALYZE the image and PLAN where each text element goes, with specific readability treatments.
 Do NOT output any JSON or flex tree. Only output your analysis and plan.
 
-{ref_section}{style_section}{image_description_section}{layout_strategy_section}{no_go_zones_section}{zone_hints_section}CAMPAIGN TEXT:
+{ref_section}{style_section}{spec_section}{image_description_section}{layout_strategy_section}{no_go_zones_section}{zone_hints_section}CAMPAIGN TEXT:
 {target_text}
 
 {components_list}
@@ -105,8 +116,17 @@ def build_flex_tree_prompt(
     canvas_size: dict,
     layout_thought: str,
     output_format: str = "standard",
+    style_spec_md: str | None = None,
 ) -> str:
     _is_psd3d = output_format == "psd-3d"
+    spec_section = (
+        "\n\nTARGET DESIGN SYSTEM (match strictly):\n"
+        f"{style_spec_md}\n\n"
+        "Your flex tree MUST adhere to this design system. Typography, color, "
+        "effects, and text-image relationship fields are binding.\n"
+        if style_spec_md
+        else ""
+    )
 
     _transform_style_props = (
         "\nskewX, skewY, perspective, rotateX, rotateY, warpType, warpIntensity, warpHDistortion, warpVDistortion"
@@ -158,7 +178,7 @@ def build_flex_tree_prompt(
     return f"""You are a graphic designer. Convert the design plan below into a flex tree JSON.
 
 DESIGN PLAN (from Art Director -- follow this exactly):
-{layout_thought}
+{layout_thought}{spec_section}
 
 CAMPAIGN TEXT:
 {target_text}

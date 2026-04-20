@@ -116,3 +116,29 @@ def test_margin_shifts_position():
     assert a.y == 10
     assert a.w == 380  # 400 - 10*2
     assert a.h == 80   # 100 - 10*2
+
+
+from app.prompts.flex_layout import build_flex_thought_prompt
+
+
+def test_flex_thought_includes_style_spec_when_provided():
+    spec_md = "## A. Visual Mood\n\nluxury serious editorial.\n\n## C. Typography Personality\n\ntight tracking display serif."
+    p = build_flex_thought_prompt(
+        target_text="Headline",
+        components_list="",
+        canvas_size={"w": 1000, "h": 1000},
+        style_spec_md=spec_md,
+    )
+    assert "luxury" in p
+    assert "Typography Personality" in p
+    assert "match" in p.lower() or "adhere" in p.lower()
+
+
+def test_flex_thought_works_without_style_spec():
+    p = build_flex_thought_prompt(
+        target_text="Headline",
+        components_list="",
+        canvas_size={"w": 1000, "h": 1000},
+        style_spec_md=None,
+    )
+    assert "Headline" in p
