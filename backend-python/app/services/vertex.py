@@ -480,6 +480,7 @@ class VertexService:
         style_guide: str | None = None,
         layout_thought: str | None = None,
         contrast_data: str | None = None,
+        style_spec: StyleSpec | None = None,
     ) -> dict:
         model = self._text_model()
         prompt = build_critique_prompt(
@@ -487,8 +488,10 @@ class VertexService:
             style_guide=style_guide or "",
             layout_thought=layout_thought or "",
             contrast_data=contrast_data or "",
+            style_spec_md=style_spec.spec_markdown if style_spec else None,
         )
 
+        default_compliance = {"pass": True, "violations": []}
         try:
             parts = [
                 _inline_data(original_buffer, mime_type),
@@ -501,13 +504,25 @@ class VertexService:
             json_match = re.search(r"\{[\s\S]*\}", text)
             if json_match:
                 try:
-                    return json.loads(json_match.group(0))
+                    result = json.loads(json_match.group(0))
+                    result.setdefault("spec_compliance", default_compliance)
+                    return result
                 except json.JSONDecodeError:
                     pass
-            return {"status": "FAIL", "feedback": "Could not parse critique response", "actionable_steps": []}
+            return {
+                "status": "FAIL",
+                "feedback": "Could not parse critique response",
+                "actionable_steps": [],
+                "spec_compliance": default_compliance,
+            }
         except Exception as e:
             print(f"[GenAI] Critique error: {e}")
-            return {"status": "FAIL", "feedback": "Critique failed", "actionable_steps": []}
+            return {
+                "status": "FAIL",
+                "feedback": "Critique failed",
+                "actionable_steps": [],
+                "spec_compliance": default_compliance,
+            }
 
     # ── Layer Separation & Analysis ─────────────────────────────────────
 

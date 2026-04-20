@@ -913,6 +913,7 @@ async def _step_refinement_loop(
     style_guide: str | None = None,
     layout_thought: str | None = None,
     flex_boxes: list | None = None,
+    style_spec: StyleSpec | None = None,
 ) -> tuple[str, dict]:
     current_svg = svg_overlay
     last_critique: dict = {"status": "FAIL"}
@@ -922,7 +923,10 @@ async def _step_refinement_loop(
         send_sse("progress", {"step": "refinement_skipped", "message": "Refinement skipped (Component Only Mode)."})
         return current_svg, {"status": "PASS", "feedback": "Skipped"}
 
-    while iteration < max_iter and last_critique.get("status") != "PASS":
+    while iteration < max_iter and not (
+        last_critique.get("status") == "PASS"
+        and last_critique.get("spec_compliance", {"pass": True}).get("pass", True)
+    ):
         iteration += 1
         send_sse("iteration_start", {
             "iteration": iteration, "maxIterations": max_iter,
@@ -985,8 +989,13 @@ async def _step_refinement_loop(
             style_guide=style_guide,
             layout_thought=layout_thought,
             contrast_data=contrast_summary,
+            style_spec=style_spec,
         )
         last_critique = critique
+
+        spec_compliance = critique.get("spec_compliance", {"pass": True, "violations": []})
+        spec_pass = bool(spec_compliance.get("pass", True))
+        status_pass = critique.get("status") == "PASS"
 
         send_sse("critique_complete", {
             "iteration": iteration,
@@ -994,15 +1003,16 @@ async def _step_refinement_loop(
             "confidence": critique.get("confidence"),
             "feedback": critique.get("feedback"),
             "actionableSteps": critique.get("actionable_steps", []),
+            "spec_compliance": spec_compliance,
             "message": (
                 f"✅ Layout approved! (confidence: {int((critique.get('confidence', 0.5)) * 100)}%)"
-                if critique.get("status") == "PASS"
+                if (status_pass and spec_pass)
                 else f"❌ Issues found: {critique.get('feedback')}"
             ),
         })
 
         confidence = critique.get("confidence", 0.5)
-        if critique.get("status") == "PASS":
+        if status_pass and spec_pass:
             send_sse("progress", {"step": "refinement_complete", "message": "Layout approved!"})
             break
 
@@ -1018,7 +1028,11 @@ async def _step_refinement_loop(
             steps = critique.get("actionable_steps", [])
             if steps:
                 feedback += "\nActionable steps: " + "; ".join(steps)
-            refined_text = f"{target_text}\n\n[REFINEMENT FEEDBACK]:\n{feedback}"
+            violations = critique.get("spec_compliance", {}).get("violations", [])
+            violation_block = ""
+            if violations:
+                violation_block = "\n\n[SPEC VIOLATIONS]:\n- " + "\n- ".join(violations)
+            refined_text = f"{target_text}\n\n[REFINEMENT FEEDBACK]:\n{feedback}{violation_block}"
 
             component_labels = [c["label"] for c in visual_components]
             refined_flex = await vertex_service.suggest_flex_layout(
@@ -1027,6 +1041,7 @@ async def _step_refinement_loop(
                 ref_image_buffers, footer_text or None,
                 ref_descriptions=ref_descriptions,
                 style_guide=style_guide,
+                style_spec=style_spec,
             )
 
             refined_boxes = compute_flex_layout(refined_flex["flexTree"], canvas_w, canvas_h)
@@ -1373,6 +1388,7 @@ async def create_campaign(
                     style_guide=style_guide if mode != "only_bg_comp" else None,
                     layout_thought=layout_thought if mode != "only_bg_comp" else None,
                     flex_boxes=flex_boxes if mode != "only_bg_comp" else None,
+                    style_spec=style_spec,
                 )
             except Exception as e:
                 send_sse("error", {
@@ -1678,6 +1694,7 @@ async def create_campaign_integrated(request: Request, body: dict):
                     style_guide=style_guide,
                     layout_thought=layout_thought,
                     flex_boxes=flex_boxes,
+                    style_spec=style_spec,
                 )
             except Exception as e:
                 send_sse("error", {
