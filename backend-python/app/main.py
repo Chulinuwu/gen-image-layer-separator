@@ -15,11 +15,22 @@ ASSETS_DIR = Path(__file__).parent.parent / "assets"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from app.services.vertex import vertex_service
+    from app.services import style_library
+    from app.constants.pipeline import STYLE_SPEC_DIR
+
     try:
         await vertex_service.warmup_rmbg2()
         print("\n[ML] RMBG-2.0 system is ready and idle.")
     except Exception as e:
         print(f"\n[ML] Warmup failed: {e}")
+
+    try:
+        base = Path(__file__).parent.parent / STYLE_SPEC_DIR
+        index = style_library.load_index(base)
+        print(f"\n[STYLE] Loaded {len(index)} design systems from {base}")
+    except Exception as e:
+        print(f"\n[STYLE] Library load failed: {e}")
+
     yield
 
 
