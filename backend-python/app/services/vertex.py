@@ -185,21 +185,34 @@ class VertexService:
         resolution: str = "1K",
         input_images: list[dict] | None = None,
         model: str | None = None,
+        *,
+        style_spec: "StyleSpec | None" = None,
+        brief_for_translation: str | None = None,
     ) -> dict:
+        effective_prompt = prompt
+        effective_input_images: list[dict] = list(input_images or [])
+
+        if style_spec is not None:
+            effective_prompt = await self.translate_spec_to_imagen_prompt(
+                spec_md=style_spec.spec_markdown,
+                brief=brief_for_translation or prompt,
+            )
+            source_bytes = Path(style_spec.source_image_path).read_bytes()
+            effective_input_images.append({"buffer": source_bytes, "mime_type": "image/jpeg"})
+
         s = get_settings()
         primary = model or s.gemini_image_endpoint_2 or s.gemini_image_endpoint or "gemini-2.5-flash-image"
         fallback = s.gemini_image_endpoint if primary == s.gemini_image_endpoint_2 else None
 
         async def execute_gen(target_model: str) -> dict:
             parts = []
-            if input_images:
-                for img in input_images:
-                    parts.append(_inline_data(img["buffer"], img["mime_type"]))
+            for img in effective_input_images:
+                parts.append(_inline_data(img["buffer"], img["mime_type"]))
             clean_prompt = (
                 "IMPORTANT: Do NOT include any text, typography, letters, words, numbers, "
                 "logos with text, watermarks, or any written content in the generated image. "
                 "The image must be completely free of any text elements. Only generate visual/graphical elements.\n\n"
-                + prompt
+                + effective_prompt
             )
             parts.append({"text": clean_prompt})
             print(f"[GenAI] Generating image with model: {target_model}")
@@ -228,7 +241,7 @@ class VertexService:
                             generated_buffer = part.inline_data.data
                             if isinstance(generated_buffer, str):
                                 generated_buffer = base64.b64decode(generated_buffer)
-            return {"buffer": generated_buffer, "text": response_text, "prompt": prompt}
+            return {"buffer": generated_buffer, "text": response_text, "prompt": effective_prompt}
 
         try:
             return await execute_gen(primary)

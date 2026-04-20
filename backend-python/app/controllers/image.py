@@ -1527,7 +1527,12 @@ async def create_campaign_integrated(request: Request, body: dict):
             cohesion = "The entire image must look like ONE cohesive photograph with smooth, natural transitions between all elements. No hard edges, no collage effect, no pasted-on sections."
             enriched_prompt = f"{visual_concept}. {cohesion} {bg_constraints}" if bg_constraints else visual_concept
 
-            result = await vertex_service.generate_image(prompt=enriched_prompt, aspect_ratio=aspect_ratio)
+            result = await vertex_service.generate_image(
+                prompt=enriched_prompt,
+                aspect_ratio=aspect_ratio,
+                style_spec=style_spec,
+                brief_for_translation=text_brief,
+            )
             if not result or not result.get("buffer"):
                 send_sse("error", {"error": "Failed to generate background image"})
                 for e in events:
