@@ -5,7 +5,6 @@ def build_critique_prompt(
     target_text: str,
     style_only: bool,
     has_components: bool = True,
-    style_guide: str = "",
     layout_thought: str = "",
     contrast_data: str = "",
     style_spec_md: str | None = None,
@@ -23,12 +22,6 @@ If the text is readable, well-contrasted, and properly arranged — PASS it."""
         "Verify that the preview MATCHES these style intentions."
         if layout_thought else ""
     )
-    style_guide_section = (
-        f"\nREFERENCE STYLE GUIDE:\n{style_guide[:500]}\n"
-        "Verify style matching with references."
-        if style_guide else ""
-    )
-
     contrast_section = ""
     if contrast_data:
         contrast_section = (
@@ -62,7 +55,7 @@ If the text is readable, well-contrasted, and properly arranged — PASS it."""
         "You are the STRICTEST ART DIRECTOR in the advertising industry.\n"
         "IMAGE 1: ORIGINAL reference. IMAGE 2: PREVIEW with text overlays.\n"
         f'AD BRIEF: "{target_text}"\n'
-        f"{missing_note}{layout_thought_section}{style_guide_section}{contrast_section}{spec_section}\n"
+        f"{missing_note}{layout_thought_section}{contrast_section}{spec_section}\n"
         "CRITIQUE CRITERIA: Check text overlap with faces, readability, contrast, composition.\n"
         f"{style_focus}\n\n"
         "Return as STRICT JSON with exactly these keys:\n"

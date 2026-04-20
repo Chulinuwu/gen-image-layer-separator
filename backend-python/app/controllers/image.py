@@ -19,7 +19,6 @@ from app.constants.pipeline import (
 from app.services.vertex import vertex_service
 from app.utils.ai_logger import log_event, trace_ai
 from app.utils.flex_layout import compute_flex_layout, LayoutBox, FlexNodeStyle
-from app.utils.ref_image_search import find_similar_refs, extract_style_guide
 from app.utils.safe_zones import BBox, compute_safe_zones
 from app.utils.contrast import check_text_contrast
 from app.utils.svg_builder import build_flex_svg, FlexSVGInput
@@ -584,10 +583,12 @@ async def _step_component_placement(
     text: str,
     no_go_zones: list[dict],
     send_sse,
+    style_spec: StyleSpec | None = None,
 ) -> dict:
     send_sse("progress", {"step": "initial_analysis", "message": "AI art director is composing component placement..."})
     analysis = await vertex_service.suggest_campaign_layout(
-        image_bytes, mime, text, "only_bg_comp", no_go_zones
+        image_bytes, mime, text, "only_bg_comp", no_go_zones,
+        style_spec=style_spec,
     )
     log_event("Component Placement", "Initial art director placement", analysis)
     return analysis
@@ -760,14 +761,11 @@ async def _step_flex_layout(
     visual_components: list[dict],
     canvas_w: int,
     canvas_h: int,
-    ref_image_buffers: list[bytes],
     footer_text: str | None,
     generated_bg_url: str | None,
     ref_image_url: str,
     origin: str,
     send_sse,
-    ref_descriptions: list[str] | None = None,
-    style_guide: str | None = None,
     layout_strategy: dict | None = None,
     no_go_zones: list[dict] | None = None,
     image_description: str | None = None,
@@ -784,9 +782,7 @@ async def _step_flex_layout(
         flex_result = await vertex_service.suggest_flex_layout(
             image_bytes, mime, target_text, component_labels,
             {"w": canvas_w, "h": content_h},  # AI sees only content area
-            ref_image_buffers, None,  # No footer sent to AI
-            ref_descriptions=ref_descriptions,
-            style_guide=style_guide,
+            footer_text=None,  # No footer sent to AI
             layout_strategy=layout_strategy,
             no_go_zones=no_go_zones,
             image_description=image_description,
@@ -901,7 +897,6 @@ async def _step_refinement_loop(
     analysis: dict,
     canvas_w: int,
     canvas_h: int,
-    ref_image_buffers: list[bytes],
     footer_text: str | None,
     generated_bg_url: str | None,
     ref_image_url: str,
@@ -909,8 +904,6 @@ async def _step_refinement_loop(
     mode: str,
     send_sse,
     max_iter: int = 1,
-    ref_descriptions: list[str] | None = None,
-    style_guide: str | None = None,
     layout_thought: str | None = None,
     flex_boxes: list | None = None,
     style_spec: StyleSpec | None = None,
@@ -986,7 +979,6 @@ async def _step_refinement_loop(
         critique = await vertex_service.critique_layout(
             image_bytes, preview_bytes, mime, target_text, False,
             has_components=bool(visual_components),
-            style_guide=style_guide,
             layout_thought=layout_thought,
             contrast_data=contrast_summary,
             style_spec=style_spec,
@@ -1038,9 +1030,7 @@ async def _step_refinement_loop(
             refined_flex = await vertex_service.suggest_flex_layout(
                 image_bytes, mime, refined_text, component_labels,
                 {"w": canvas_w, "h": canvas_h},
-                ref_image_buffers, footer_text or None,
-                ref_descriptions=ref_descriptions,
-                style_guide=style_guide,
+                footer_text=footer_text or None,
                 style_spec=style_spec,
             )
 
@@ -1190,14 +1180,16 @@ async def create_campaign(
             # Step 1B: Component placement (skip if no extractable foreground)
             if has_foreground:
                 comp_analysis = await _step_component_placement(
-                    image_buffer, mime_type, target_text, parsed_no_go, send_sse
+                    image_buffer, mime_type, target_text, parsed_no_go, send_sse,
+                    style_spec=style_spec,
                 )
                 component_suggestions = _dedup_components(comp_analysis.get("components", []))
             else:
                 print("[Pipeline] No extractable foreground — skipping component detection & die-cut")
                 send_sse("progress", {"step": "component_skip", "message": "Background-only image detected — skipping component extraction."})
                 comp_analysis = await _step_component_placement(
-                    image_buffer, mime_type, target_text, parsed_no_go, send_sse
+                    image_buffer, mime_type, target_text, parsed_no_go, send_sse,
+                    style_spec=style_spec,
                 )
                 component_suggestions = []
             analysis = {**comp_analysis, "suggestions": [], "components": component_suggestions}
@@ -1264,25 +1256,12 @@ async def create_campaign(
                     yield e
                 events.clear()
 
-                # Reference image lookup
-                ref_image_buffers: list[bytes] = []
-                ref_descriptions: list[str] = []
-                style_guide: str = ""
+                # Image description (used for downstream layout context)
                 desc_result: dict = {}
                 try:
                     desc_result = await vertex_service.describe_and_embed(image_buffer, mime_type)
-                    refs = find_similar_refs(desc_result["embedding"], 3)
-                    if refs:
-                        ref_image_buffers = [Path(r["filepath"]).read_bytes() for r in refs]
-                        ref_descriptions = [r["description"] for r in refs]
-                        style_guide = extract_style_guide(refs)
-                        send_sse("debug", {
-                            "step": "ref_images",
-                            "message": f"Found {len(refs)} similar reference ads",
-                            "style_guide_preview": style_guide[:200] if style_guide else "",
-                        })
                 except Exception as e:
-                    print(f"[Pass2] Reference image search failed: {e}")
+                    print(f"[Pass2] Image describe failed: {e}")
 
                 # Footer text
                 footer_path = Path(__file__).parent.parent.parent / "assets" / "Ref_Footer" / "footer.txt"
@@ -1316,14 +1295,11 @@ async def create_campaign(
                         target_text=target_text,
                         visual_components=visual_components,
                         canvas_w=canvas_w, canvas_h=canvas_h,
-                        ref_image_buffers=ref_image_buffers,
                         footer_text=footer_text or None,
                         generated_bg_url=generated_bg_url,
                         ref_image_url=ref_url,
                         origin=origin,
                         send_sse=send_sse,
-                        ref_descriptions=ref_descriptions,
-                        style_guide=style_guide,
                         layout_strategy=layout_hint if layout_hint else None,
                         no_go_zones=all_no_go or None,
                         image_description=image_description,
@@ -1377,15 +1353,12 @@ async def create_campaign(
                     component_suggestions=component_suggestions,
                     analysis=analysis,
                     canvas_w=canvas_w, canvas_h=canvas_h,
-                    ref_image_buffers=ref_image_buffers if mode != "only_bg_comp" else [],
                     footer_text=footer_text if mode != "only_bg_comp" else None,
                     generated_bg_url=generated_bg_url,
                     ref_image_url=ref_url,
                     origin=origin,
                     mode=mode or "",
                     send_sse=send_sse,
-                    ref_descriptions=ref_descriptions if mode != "only_bg_comp" else None,
-                    style_guide=style_guide if mode != "only_bg_comp" else None,
                     layout_thought=layout_thought if mode != "only_bg_comp" else None,
                     flex_boxes=flex_boxes if mode != "only_bg_comp" else None,
                     style_spec=style_spec,
@@ -1553,21 +1526,13 @@ async def create_campaign_integrated(request: Request, body: dict):
             canvas_w, canvas_h = img.size
             origin = f"{request.url.scheme}://{request.headers.get('host', 'localhost:5001')}"
 
-            ref_image_buffers: list[bytes] = []
-            ref_descriptions: list[str] = []
-            style_guide: str = ""
             desc_result: dict = {}
             image_description: str | None = None
             try:
                 desc_result = await vertex_service.describe_and_embed(image_buffer, mime_type)
                 image_description = desc_result.get("description")
-                refs = find_similar_refs(desc_result["embedding"], 3)
-                if refs:
-                    ref_image_buffers = [Path(r["filepath"]).read_bytes() for r in refs]
-                    ref_descriptions = [r["description"] for r in refs]
-                    style_guide = extract_style_guide(refs)
             except Exception as e:
-                print(f"[Integrated] Reference image search failed: {e}")
+                print(f"[Integrated] Image describe failed: {e}")
 
             # Footer text from file if not provided
             if not footer_text:
@@ -1624,14 +1589,11 @@ async def create_campaign_integrated(request: Request, body: dict):
                     target_text=text_brief,
                     visual_components=visual_components,
                     canvas_w=canvas_w, canvas_h=canvas_h,
-                    ref_image_buffers=ref_image_buffers,
                     footer_text=footer_text or None,
                     generated_bg_url=bg_url,
                     ref_image_url=bg_url,
                     origin=origin,
                     send_sse=send_sse,
-                    ref_descriptions=ref_descriptions,
-                    style_guide=style_guide,
                     layout_strategy=layout_hint if layout_hint else None,
                     no_go_zones=None,
                     image_description=image_description,
@@ -1687,7 +1649,6 @@ async def create_campaign_integrated(request: Request, body: dict):
                     component_suggestions=component_suggestions,
                     analysis=analysis,
                     canvas_w=canvas_w, canvas_h=canvas_h,
-                    ref_image_buffers=ref_image_buffers,
                     footer_text=footer_text or None,
                     generated_bg_url=bg_url,
                     ref_image_url=bg_url,
@@ -1695,8 +1656,6 @@ async def create_campaign_integrated(request: Request, body: dict):
                     mode="",
                     send_sse=send_sse,
                     max_iter=1,
-                    ref_descriptions=ref_descriptions,
-                    style_guide=style_guide,
                     layout_thought=layout_thought,
                     flex_boxes=flex_boxes,
                     style_spec=style_spec,

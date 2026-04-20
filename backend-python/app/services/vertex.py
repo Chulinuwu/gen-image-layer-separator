@@ -333,6 +333,7 @@ class VertexService:
         fixed_component_positions: list | None = None,
         text_zone: dict | None = None,
         layout_hint: dict | None = None,
+        style_spec: StyleSpec | None = None,
     ) -> dict:
         proc_buf, proc_mime = _resize_for_processing(image_buffer)
         model = self._text_model()
@@ -379,7 +380,10 @@ class VertexService:
 
         is_comp_only = mode == "only_bg_comp"
 
-        prompt = build_campaign_layout_prompt(target_text, fixed_comp_note, safe_inst, no_go_inst, hint_block, is_comp_only)
+        prompt = build_campaign_layout_prompt(
+            target_text, fixed_comp_note, safe_inst, no_go_inst, hint_block, is_comp_only,
+            style_hint=style_spec.overview if style_spec else "",
+        )
 
         config = {"temperature": 1, "top_p": 0.95, "safety_settings": SAFETY_OFF}
         try:
@@ -490,7 +494,6 @@ class VertexService:
         target_text: str,
         style_only: bool = False,
         has_components: bool = True,
-        style_guide: str | None = None,
         layout_thought: str | None = None,
         contrast_data: str | None = None,
         style_spec: StyleSpec | None = None,
@@ -498,7 +501,6 @@ class VertexService:
         model = self._text_model()
         prompt = build_critique_prompt(
             target_text, style_only, has_components,
-            style_guide=style_guide or "",
             layout_thought=layout_thought or "",
             contrast_data=contrast_data or "",
             style_spec_md=style_spec.spec_markdown if style_spec else None,
@@ -1256,10 +1258,7 @@ class VertexService:
         target_text: str,
         component_labels: list[str],
         canvas_size: dict,
-        ref_images: list[bytes] | None = None,
         footer_text: str | None = None,
-        ref_descriptions: list[str] | None = None,
-        style_guide: str | None = None,
         layout_strategy: dict | None = None,
         no_go_zones: list[dict] | None = None,
         image_description: str | None = None,
@@ -1281,16 +1280,6 @@ class VertexService:
             if component_labels
             else "No die-cut components available. CRITICAL: Do NOT create any component nodes in the flex tree. ALL elements must be type \"text\". Even if the brief mentions logos, phone mockups, or other visual elements — they do not exist as die-cut images so you MUST NOT include them as component leaves."
         )
-        ref_section = ""
-        if ref_images:
-            ref_section = f"REFERENCE IMAGES:\nThe first {len(ref_images)} images are examples of well-designed layouts.\n"
-            ref_section += "Study their composition, colors, typography, and spacing. THE LAST IMAGE is the actual background.\n"
-            if ref_descriptions:
-                ref_section += "\nREFERENCE DESCRIPTIONS:\n"
-                for i, desc in enumerate(ref_descriptions):
-                    truncated = desc[:500] + "..." if len(desc) > 500 else desc
-                    ref_section += f"\n--- Ref {i+1} ---\n{truncated}\n"
-            ref_section += "\n"
         footer_section = (
             f'FOOTER TEXT (MUST be at bottom): "{footer_text}"\n' if footer_text else ""
         )
@@ -1354,8 +1343,8 @@ class VertexService:
 
         # --- Call 1: Layout Thought (analyze image + plan treatments) ---
         thought_prompt = build_flex_thought_prompt(
-            target_text, components_list, ref_section, canvas_size,
-            style_guide=style_guide or "",
+            target_text, components_list,
+            canvas_size=canvas_size,
             layout_strategy_section=layout_strategy_section,
             no_go_zones_section=no_go_zones_section,
             image_description_section=image_description_section,
@@ -1364,9 +1353,6 @@ class VertexService:
         )
 
         thought_parts = []
-        if ref_images:
-            for ref in ref_images:
-                thought_parts.append(_inline_data(ref, "image/jpeg"))
         thought_parts.append(_inline_data(proc_buf, proc_mime))
         thought_parts.extend(anchor_parts)
 

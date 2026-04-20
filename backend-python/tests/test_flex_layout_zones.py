@@ -5,7 +5,6 @@ def _base_prompt(**kwargs):
     defaults = dict(
         target_text="SALE 50% OFF\nLimited time",
         components_list="No die-cut components available.",
-        ref_section="",
         canvas_size={"w": 900, "h": 1200},
     )
     defaults.update(kwargs)

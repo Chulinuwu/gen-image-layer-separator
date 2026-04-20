@@ -21,13 +21,15 @@ def build_campaign_layout_prompt(
     no_go_inst: str,
     hint_block: str,
     is_comp_only: bool,
+    style_hint: str = "",
 ) -> str:
+    style_block = f"\n\nTarget style hint: {style_hint}\n" if style_hint else ""
     return f"""Act as a professional graphic designer.
 Use 0-1000 normalized coordinates.
 
 AD BRIEF:
 \"\"\"{target_text}\"\"\"
-{fixed_comp_note}{safe_inst or no_go_inst}{hint_block}
+{style_block}{fixed_comp_note}{safe_inst or no_go_inst}{hint_block}
 
 TASKS:
 {"1. COMPONENT COMPOSITION: Detect visual components that ACTUALLY EXIST in the provided image. CRITICAL: Only list components you can visually SEE in the image pixels. Do NOT hallucinate components mentioned in the ad brief text that are not visible in the image. If the brief mentions a logo, phone mockup, or other element that is NOT visible in the image, do NOT include it in components. Components array must ONLY contain elements you can point to in the image." if is_comp_only else "1. PLACEMENT STRATEGY + TEXT EXTRACTION + COMPONENT COMPOSITION. CRITICAL: components array must ONLY contain elements visually present in the image, NOT elements mentioned in the brief text."}

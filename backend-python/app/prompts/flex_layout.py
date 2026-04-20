@@ -1,9 +1,7 @@
 def build_flex_thought_prompt(
     target_text: str,
     components_list: str,
-    ref_section: str = "",
     canvas_size: dict = None,
-    style_guide: str = "",
     layout_strategy_section: str = "",
     no_go_zones_section: str = "",
     image_description_section: str = "",
@@ -12,7 +10,6 @@ def build_flex_thought_prompt(
 ) -> str:
     if canvas_size is None:
         canvas_size = {}
-    style_section = f"\n{style_guide}\n" if style_guide else ""
     spec_section = (
         "\n\nTARGET DESIGN SYSTEM (match strictly):\n"
         f"{style_spec_md}\n\n"
@@ -21,16 +18,6 @@ def build_flex_thought_prompt(
         if style_spec_md
         else ""
     )
-
-    style_matching_rules = ""
-    if style_guide:
-        style_matching_rules = """
-STYLE MATCHING: Reference images and their style guide are provided above. Your design MUST match their visual DNA:
-- Use the SAME color palette (dominant colors, gradients, accents).
-- Use SIMILAR typography (font sizes, weights, text colors, stroke effects).
-- Match the MOOD (premium, playful, tech-forward, etc.).
-- Do NOT copy text content from references -- only copy their VISUAL STYLE.
-"""
 
     zone_hints_section = ""
     if zone_hints:
@@ -45,12 +32,12 @@ STYLE MATCHING: Reference images and their style guide are provided above. Your 
 Your job is to ANALYZE the image and PLAN where each text element goes, with specific readability treatments.
 Do NOT output any JSON or flex tree. Only output your analysis and plan.
 
-{ref_section}{style_section}{spec_section}{image_description_section}{layout_strategy_section}{no_go_zones_section}{zone_hints_section}CAMPAIGN TEXT:
+{spec_section}{image_description_section}{layout_strategy_section}{no_go_zones_section}{zone_hints_section}CAMPAIGN TEXT:
 {target_text}
 
 {components_list}
 CANVAS: {canvas_size["w"]}x{canvas_size["h"]}px
-{style_matching_rules}
+
 BRIGHTNESS HEATMAP: The last image before this text is a brightness heatmap of the background.
 Blue/purple = dark areas, Green = mid-tones, Yellow/red/white = bright areas.
 Use this heatmap to accurately classify each text zone as clean-light, clean-dark, or busy.
