@@ -159,9 +159,21 @@ const handleFullCampaignSSE = (event: string, data: any) => {
   switch (event) {
     case "progress":
       progressSteps.value.push(data.message || data.step);
+      if (data.step === "style_planning" || data.step === "style_selection") {
+        currentStyleStatus.value = data.message || "";
+      }
       if (data.imageUrl) {
         result.value = { imageUrl: data.imageUrl };
         emit("generated", data.imageUrl);
+      }
+      break;
+    case "debug":
+      if (data.step === "style_spec") {
+        matchedStyle.value = {
+          id: data.id,
+          overview: data.overview,
+          sourceImageUrl: data.source_image_url,
+        };
       }
       break;
     case "iteration_end":
