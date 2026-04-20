@@ -136,6 +136,16 @@
           <div class="status-message">{{ statusText.toUpperCase() }}</div>
         </div>
 
+        <div v-if="matchedStyle" class="style-chip">
+          <span class="style-chip__label">Style: {{ matchedStyle.id }}</span>
+          <img
+            v-if="matchedStyle.sourceImageUrl"
+            :src="matchedStyle.sourceImageUrl"
+            alt=""
+            class="style-anchor"
+          />
+        </div>
+
         <div class="critique-container" v-if="currentCritique">
           <div class="panel-label">CRITIQUE ANALYSIS</div>
           <div :class="['critique-card', currentCritique.status.toLowerCase()]">
@@ -253,6 +263,8 @@ const currentIteration = ref(0);
 const maxIterations = ref(10);
 const currentPreviewUrl = ref("");
 const currentCritique = ref<any>(null);
+const currentStyleStatus = ref<string>('');
+const matchedStyle = ref<{ id: string; overview: string; sourceImageUrl: string } | null>(null);
 const messages = ref<Array<{ timestamp: string; text: string; type: string }>>(
   [],
 );
@@ -559,6 +571,8 @@ const connectSSE = async (formData: FormData) => {
     currentFlexTree.value = null; // clear previous layout boxes
     currentComputedBoxes.value = null;
     pipelineSteps.value = [];
+    currentStyleStatus.value = '';
+    matchedStyle.value = null;
     statusText.value = "Initializing design suite...";
 
     addMessage("Establishing design connection...", "info");
@@ -628,6 +642,18 @@ const handleSSEEvent = (event: string, data: any) => {
     case "progress":
       statusText.value = data.message;
       addMessage(data.message, "info");
+      if (data.step === 'style_planning' || data.step === 'style_selection') {
+        currentStyleStatus.value = data.message;
+      }
+      break;
+    case "debug":
+      if (data.step === 'style_spec') {
+        matchedStyle.value = {
+          id: data.id,
+          overview: data.overview,
+          sourceImageUrl: data.source_image_url,
+        };
+      }
       break;
     case "iteration_start":
       currentIteration.value = data.iteration;
@@ -1367,5 +1393,27 @@ defineExpose({ connectSSE });
 ::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 2px;
+}
+
+.style-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 8px;
+  font-size: 12px;
+  margin: 6px 0;
+}
+
+.style-chip__label {
+  font-weight: 500;
+}
+
+.style-anchor {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  object-fit: cover;
 }
 </style>
