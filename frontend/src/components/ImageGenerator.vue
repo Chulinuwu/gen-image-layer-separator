@@ -13,6 +13,8 @@ const textBrief = ref("");
 const footerText = ref("");
 const progressSteps = ref<string[]>([]);
 const campaignResult = ref<any>(null);
+const currentStyleStatus = ref<string>("");
+const matchedStyle = ref<{ id: string; overview: string; sourceImageUrl: string } | null>(null);
 const showBbox = ref(false);
 const previewContainer = ref<HTMLElement | null>(null);
 
