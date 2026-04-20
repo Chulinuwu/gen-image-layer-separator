@@ -17,9 +17,8 @@ graph TB
     FE["Vue 3 + Vite SPA<br/>port 5173"]
   end
 
-  subgraph Server["Backend Layer"]
-    PY["FastAPI (Python)<br/>backend-python/<br/>port 5001<br/><b>PRIMARY</b>"]
-    TS["Express + TS<br/>backend/<br/>(legacy)"]
+  subgraph Server["Backend"]
+    PY["FastAPI (Python)<br/>backend-python/<br/>port 5001"]
   end
 
   subgraph External["External Services"]
@@ -35,7 +34,6 @@ graph TB
   end
 
   FE -- "REST + SSE" --> PY
-  FE -. "unused" .-> TS
   PY --> VX
   PY --> RMBG
   PY --> UP
@@ -47,7 +45,6 @@ graph TB
 **Key boundaries**
 - Frontend never calls Vertex directly — every AI call goes through FastAPI.
 - RMBG runs in-process (singleton, warmed up on startup).
-- `backend/` (Express) is legacy; all new work lives in `backend-python/`.
 
 ---
 
@@ -58,7 +55,6 @@ graph TB
   Root["gen-image-layer-separator/"]
   Root --> FE["frontend/"]
   Root --> BP["backend-python/"]
-  Root --> B["backend/ (legacy)"]
 
   FE --> FEApp["src/App.vue<br/>(tab router + shared state)"]
   FE --> FECmp["src/components/"]
