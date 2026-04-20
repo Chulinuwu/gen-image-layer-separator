@@ -18,7 +18,7 @@ def test_load_spec_reads_overview_and_spec(tmp_path: Path):
     assert spec.source_image_path.endswith("source.jpg")
 
 
-def test_styleSpec_is_picklable_dataclass():
+def test_stylespec_constructs_with_all_fields():
     spec = StyleSpec(
         id="x",
         overview="o",
@@ -26,3 +26,15 @@ def test_styleSpec_is_picklable_dataclass():
         source_image_path="/tmp/x.jpg",
     )
     assert spec.id == "x"
+
+
+def test_load_spec_raises_when_source_missing(tmp_path: Path):
+    entry = tmp_path / "abc"
+    entry.mkdir()
+    (entry / "overview.md").write_text("o", encoding="utf-8")
+    (entry / "spec.md").write_text("s", encoding="utf-8")
+    # no source.jpg
+
+    import pytest
+    with pytest.raises(FileNotFoundError):
+        load_spec(entry)

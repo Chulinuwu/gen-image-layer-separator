@@ -17,6 +17,8 @@ def load_spec(entry_dir: Path | str) -> StyleSpec:
     overview = (entry_dir / "overview.md").read_text(encoding="utf-8")
     spec_md = (entry_dir / "spec.md").read_text(encoding="utf-8")
     source = entry_dir / "source.jpg"
+    if not source.exists():
+        raise FileNotFoundError(f"StyleSpec source image missing: {source}")
     return StyleSpec(
         id=entry_dir.name,
         overview=overview,

@@ -18,11 +18,6 @@ DIECUT_MIN_OPAQUE_RATIO = 0.05
 DIECUT_API_SLEEP_S = 3
 WHITE_BG_THRESHOLD = 250
 ALPHA_EROSION_ITERATIONS = 2
-
-# --- StyleSpec library ---
-STYLE_SPEC_DIR = "assets/design_systems"
-STYLE_EMBED_MODEL = "gemini-embedding-001"
-STYLE_SPEC_TOP_K = 1
 CROP_ALPHA_CUTOFF = 25
 QUALITY_ALPHA_CUTOFF = 20
 
@@ -73,3 +68,8 @@ NO_TEXT_PREFIX = (
 
 # ── Promo regex ──
 PROMO_RE_PATTERN = r"^[\d๐-๙%+×\s]{1,6}$|^[\d๐-๙.]+\s*(ต่อ|เท่า|ครั้ง|คืน|%|×)\s*$"
+
+# ── StyleSpec library ──
+STYLE_SPEC_DIR = "assets/design_systems"
+STYLE_EMBED_MODEL = "gemini-embedding-001"
+STYLE_SPEC_TOP_K = 1
