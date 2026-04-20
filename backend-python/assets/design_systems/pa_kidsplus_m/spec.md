@@ -49,7 +49,7 @@ Typography is rounded, navy-on-sky, with yellow used surgically on emotional phr
 ### Text Colors
 - **Headline Navy** (`#1C2858`) — all title and subtitle text on sky
 - **Body Navy** (`#2E4E7E`) — card product descriptions and mid-weight body
-- **Card Title Navy** (`#1C2858`) — "ประกันอุบัติเหตุ PA คิดส์ พลัส"
+- **Card Title Navy** (`#1C2858`) — "[product name line]"
 - **Fine Print Gray** (`#6B6B70`) — bottom disclaimer lines
 - **CTA Text Navy** (`#1C2858`) — text inside the yellow pill CTA
 
@@ -117,7 +117,7 @@ Typography is rounded, navy-on-sky, with yellow used surgically on emotional phr
 - Border: none
 - Shadow: soft `0 3 8 rgba(28, 40, 88, 0.15)` for lift
 - Placement: bottom-right, sits on sand foreground
-- Label: single short Thai word/phrase like "สมัครเลย"
+- Label: single short Thai word/phrase like "[short CTA action label, 1-3 words]"
 
 ### Product Card (White Rounded Rectangle)
 - Background: `#FFFFFF` solid
@@ -131,16 +131,16 @@ Typography is rounded, navy-on-sky, with yellow used surgically on emotional phr
 ### Feature Bullet Row
 - Layout: icon (left, ~28-32px) + stacked text (right) in horizontal flex
 - Icon: green solid-fill circle (`#47B680`) with a white check glyph inside, no stroke
-- Heading line: Thai sans 700 navy, short phrase (e.g. "คุ้มครองค่ารักษาพยาบาล")
-- Body line: Thai sans 500 mid-navy, supporting detail (e.g. "จากอุบัติเหตุ 3,000 บาท/อุบัติเหตุ")
+- Heading line: Thai sans 700 navy, short phrase (e.g. "[bullet heading, short feature descriptor]")
+- Body line: Thai sans 500 mid-navy, supporting detail (e.g. "[bullet body, detailed benefit with numeric amount and unit]")
 - Vertical gap between bullets: 12-16px
 
 ### Price Block (Inside Card)
-- "เบี้ยประกันภัย" small label line, Thai sans 500 mid-navy
-- "เริ่มต้น" left-aligned small text
+- "[price label]" small label line, Thai sans 500 mid-navy
+- "[starting-from prefix label]" left-aligned small text
 - Big yellow promo numeral: Thai sans 900 display, fill `#FFC93C`
-- "บาท/ปี" unit to the right of numeral, smaller, navy
-- Subtle star-rocket flourish or small prefix label ("เบี้ยประกันภัย") that introduces the numeral
+- "[currency + period unit]" unit to the right of numeral, smaller, navy
+- Subtle star-rocket flourish or small prefix label ("[price label]") that introduces the numeral
 - Small asterisk footnote link
 
 ### Yellow Highlight Band (Inline Phrase Emphasis)
@@ -182,7 +182,7 @@ Typography is rounded, navy-on-sky, with yellow used surgically on emotional phr
 - **30-40%**: horizon / ocean transition
 - **40-75%**: main scene — product card on left 45%, family photo on right 50%
 - **75-88%**: sand foreground with sand castle + yellow CTA pill
-- **88-100%**: fine print strip + secondary "สมัครประกันง่ายๆ ผ่านแอป SCB EASY" line
+- **88-100%**: fine print strip + secondary "[channel-attribution tagline]" line
 
 ### Horizontal Strategy
 - Left 40-45%: white product card
@@ -314,13 +314,13 @@ Fine print              Thai sans 400  ~9-10px   normal    gray
 
 - "Position a candid family on the right 50% of the canvas: father kneeling on the sand pointing up, small boy in a bright blue t-shirt mid-pointing-gesture smiling, mother standing on the right in a white top observing. Genuine unscripted expressions. Family occupies ~40% of canvas height. Full body visible for all three."
 
-- "Render a clean white rounded product card on the left 45% of the canvas, vertical range from ~40% to ~75% height. Pure white fill, 18px corner radius, soft shadow 0 6 16 rgba(28,40,88,0.08). Inside the card: card title 'ประกันอุบัติเหตุ PA คิดส์ พลัส' in Thai sans 700 navy, ~26px. Below it, 3 feature-bullet rows — each bullet has a green solid-fill circle (#47B680) with a white check glyph on the left, and 2-line stacked text on the right (bullet heading navy Thai sans 700, body mid-navy Thai sans 500)."
+- "Render a clean white rounded product card on the left 45% of the canvas, vertical range from ~40% to ~75% height. Pure white fill, 18px corner radius, soft shadow 0 6 16 rgba(28,40,88,0.08). Inside the card: card title '[product name line]' in Thai sans 700 navy, ~26px. Below it, 3 feature-bullet rows — each bullet has a green solid-fill circle (#47B680) with a white check glyph on the left, and 2-line stacked text on the right (bullet heading navy Thai sans 700, body mid-navy Thai sans 500)."
 
-- "Render a price block inside the bottom of the card. Small 'เบี้ยประกันภัย' label in Thai sans 500 navy, then 'เริ่มต้น' small label, then a massive yellow display numeral '1,900' in Thai sans 900 (~64px) filled with #FFC93C and a very soft shadow. Unit 'บาท/ปี' in Thai sans 600 navy ~20px right of the numeral."
+- "Render a price block inside the bottom of the card. Small '[small label line above price block]' label in Thai sans 500 navy, then '[starting-from prefix label]' small label, then a massive yellow display numeral '[price display numeral]' in Thai sans 900 (~64px) filled with #FFC93C and a very soft shadow. Unit '[currency + period unit]' in Thai sans 600 navy ~20px right of the numeral."
 
-- "Render a yellow pill CTA at the bottom-right on the sand. Background #FFC93C with a subtle highlight on the top edge #FFE68F. Text 'สมัครเลย' in Thai sans 800 ~16-18px, navy #1C2858. Fully rounded pill, ~52px tall, padding ~14px vertical and 36px horizontal. Soft lift shadow 0 3 8 rgba(28, 40, 88, 0.15)."
+- "Render a yellow pill CTA at the bottom-right on the sand. Background #FFC93C with a subtle highlight on the top edge #FFE68F. Text '[short CTA action label, 1-3 words]' in Thai sans 800 ~16-18px, navy #1C2858. Fully rounded pill, ~52px tall, padding ~14px vertical and 36px horizontal. Soft lift shadow 0 3 8 rgba(28, 40, 88, 0.15)."
 
-- "Render the headline block on the sky above the main scene. Three lines, all Thai sans navy #1C2858 with soft drop shadow rgba(28,40,88,0.15) 0 3 8. Line 1: primary message in Thai sans 800, ~36px. Line 2: an emotional emphasis phrase ('แม้เจ็บป่วยก็ยิ้มได้') with a solid yellow #FFC93C rounded-rectangle highlight band hugging the text, 6-10px horizontal padding around glyphs. Line 3: supporting tagline in Thai sans 600, ~20px."
+- "Render the headline block on the sky above the main scene. Three lines, all Thai sans navy #1C2858 with soft drop shadow rgba(28,40,88,0.15) 0 3 8. Line 1: primary message in Thai sans 800, ~36px. Line 2: an emotional emphasis phrase ('[short emotional emphasis phrase, 2-4 Thai words]') with a solid yellow #FFC93C rounded-rectangle highlight band hugging the text, 6-10px horizontal padding around glyphs. Line 3: supporting tagline in Thai sans 600, ~20px."
 
 ### Iteration Guide
 1. If the sky looks "flat blue" or "grey", it's not turquoise enough — push the saturation toward aqua-green

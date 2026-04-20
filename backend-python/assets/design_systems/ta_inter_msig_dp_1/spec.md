@@ -50,7 +50,7 @@ Typography uses a rounded friendly Thai sans in deep purple-navy on pale sky and
 - **Subtitle Mid Purple** (`#4B3A9C`) — subtitle line beneath headline
 - **Card Title Navy-Purple** (`#2B1F6B`) — product card title
 - **Card Body Mid Purple** (`#4B3A9C`) — feature-bullet body text
-- **Price Label Navy-Purple** (`#2B1F6B`) — "ค่าเบี้ยประกันภัย" label
+- **Price Label Navy-Purple** (`#2B1F6B`) — "[price label, small text above numeral]" label
 - **Fine Print Gray** (`#6B6B70`) — bottom disclaimer
 
 ### Accent & Emphasis
@@ -96,7 +96,7 @@ Typography uses a rounded friendly Thai sans in deep purple-navy on pale sky and
 | Card Bullet Body | 500 | Body (~14-16px) | Normal | 1.5 | None | `#4B3A9C` |
 | Price Label | 500 | Body (~14-16px) | Normal | 1.3 | None (inside purple box) | `#FFFFFF` |
 | Promo Numeral (Price) | 900 | Display L (~56-72px) | Normal | 1.0 | Solid yellow fill + subtle shadow | `#FFC93C` |
-| Promo Unit ("บาท /5 วันเดินทาง*") | 500 | Body-S (~12-14px) | Normal | 1.3 | None | `#FFFFFF` |
+| Promo Unit ("[currency + travel-period unit with asterisk]") | 500 | Body-S (~12-14px) | Normal | 1.3 | None | `#FFFFFF` |
 | CTA Label | 800 | Body-L (~16-18px) | Normal | 1.2 | None | `#2B1F6B` |
 | Fine Print | 400 | Micro (~9-10px) | Normal | 1.4 | None | `#6B6B70` |
 
@@ -119,14 +119,14 @@ Typography uses a rounded friendly Thai sans in deep purple-navy on pale sky and
 - Border: none
 - Shadow: `0 3 8 rgba(43, 31, 107, 0.18)`
 - Position: bottom-right on sand foreground
-- Label: short Thai phrase like "สมัครเลย"
+- Label: short Thai phrase like "[short CTA action label, 1-3 words]"
 
 ### Signature Purple Price Box
 - Background: `#7B5BD1` solid
 - Shape: rounded rectangle with pill-like heavy radius (~16-20px corners)
 - Border: none
 - Shadow: soft `0 4 12 rgba(43, 31, 107, 0.20)` for elevation
-- Internal layout: "ค่าเบี้ยประกันภัย" small white label on top row, then the massive yellow numeral "556" center-dominant, then "บาท /5 วันเดินทาง*" small white unit on the right or bottom row
+- Internal layout: "[price label, small text above numeral]" small white label on top row, then the massive yellow numeral "[price numeral]" center-dominant, then "[currency + travel-period unit with asterisk]" small white unit on the right or bottom row
 - Size: occupies a sub-block inside the product card, roughly 85-95% of card width, ~20% of card height
 - This box is **non-optional** and **unique to this system** — it is the branded visual handle
 
@@ -318,11 +318,11 @@ Fine print         Thai sans 400  ~9-10px   normal  gray
 
 - "Render a clean white rounded product card on the left 45% of the canvas, vertical range ~40-75% height. Pure white fill (#FFFFFF), 18px corner radius, soft shadow 0 6 16 rgba(43, 31, 107, 0.10). Inside: 2 feature-bullet rows at the top, each with a hollow orange ring icon (#F79C42, 2-3px stroke, transparent interior, contains a 2-3px orange check glyph, ~30px diameter) on the left and a 2-line stacked text on the right (bullet heading deep-purple Thai sans 700 ~18px, body mid-purple Thai sans 500 ~14px)."
 
-- "Render the signature purple price box near the bottom of the card. Background solid #7B5BD1, rounded rectangle with ~18px corner radius, soft shadow 0 4 12 rgba(43, 31, 107, 0.20), size ~90% of card width. Inside, top row: small white Thai label 'ค่าเบี้ยประกันภัย' in Thai sans 500 ~14px. Below: massive yellow display numeral '556' in Thai sans 900 ~64px with fill #FFC93C and subtle shadow. To the right of the numeral: '/5 วันเดินทาง*' small white Thai sans 500."
+- "Render the signature purple price box near the bottom of the card. Background solid #7B5BD1, rounded rectangle with ~18px corner radius, soft shadow 0 4 12 rgba(43, 31, 107, 0.20), size ~90% of card width. Inside, top row: small white Thai label '[price label, small text above numeral]' in Thai sans 500 ~14px. Below: massive yellow display numeral '[price numeral]' in Thai sans 900 ~64px with fill #FFC93C and subtle shadow. To the right of the numeral: '[period unit with asterisk, e.g. days travel]' small white Thai sans 500."
 
 - "Render the headline block on the sky. 2-line Thai sans 800 at ~38px in deep-purple #2B1F6B with soft drop shadow rgba(43, 31, 107, 0.20) 0 3 8. Below, subtitle in Thai sans 600 ~20px mid-purple #4B3A9C with the same shadow."
 
-- "Render a yellow pill CTA at the bottom-right of the canvas on the sand. Background #FFC93C with top-edge specular #FFE68F. Text 'สมัครเลย' in Thai sans 800 ~17px, deep-purple #2B1F6B. Fully rounded pill, ~52px tall, ~36px horizontal padding. Soft lift shadow 0 3 8 rgba(43, 31, 107, 0.18)."
+- "Render a yellow pill CTA at the bottom-right of the canvas on the sand. Background #FFC93C with top-edge specular #FFE68F. Text '[short CTA action label, 1-3 words]' in Thai sans 800 ~17px, deep-purple #2B1F6B. Fully rounded pill, ~52px tall, ~36px horizontal padding. Soft lift shadow 0 3 8 rgba(43, 31, 107, 0.18)."
 
 - "Render the top-right logo lockup: MSIG brand mark (#D91A21) on the left and SCB Protect brand mark (#7B4FBA) on the right, separated by a thin vertical gray line (~1-2px, #B4B4B8). Positioned ~16-24px from top and right edges."
 

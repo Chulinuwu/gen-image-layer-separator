@@ -13,8 +13,8 @@ The composition is built on warm diffuse window light, shallow depth of field, a
 - Three translucent floating dream-bubbles (stethoscope for health, house for home, airplane for travel) arranged diagonally on the left
 - Mother-and-child lifestyle photography, right-weighted, intimate candid pose
 - Heavy Thai sans typography in pure white with soft drop shadows
-- Gold vertical-gradient display numerals reserved exclusively for the product term ("85/8")
-- Solid yellow numerals used inline within benefit columns for promo percentages ("12%")
+- Gold vertical-gradient display numerals reserved exclusively for the product term ("[product-term numeric identifier]")
+- Solid yellow numerals used inline within benefit columns for promo percentages ("[promo percentage numeral]")
 - Yellow pill primary CTA and deep-purple pill secondary CTA in a bottom strip
 - Two-brand logo strip (FWD insurance + SCB) on a thin white horizontal band at the top
 - Near-uniform violet light tint; no warm orange or cool cyan contamination of the palette
@@ -42,7 +42,7 @@ The composition is built on warm diffuse window light, shallow depth of field, a
 - **Dark Violet CTA Label (primary)** (`#3B1F66`) — also used as the primary-CTA text color on yellow background for WCAG-safe contrast
 
 ### Accent & Emphasis
-- **Gold Gradient Top** (`#F4C744`) — top of vertical gradient fill on the product term "85/8"
+- **Gold Gradient Top** (`#F4C744`) — top of vertical gradient fill on the product term "[product-term numeric identifier]"
 - **Gold Gradient Bottom** (`#B88A28`) — bottom of the same gradient, darker richer gold
 - **Solid Yellow Emphasis** (`#FFD862`) — promo percentage numerals inline in benefit columns, and primary CTA pill background
 - **Soft Cream Accent** (`#F8E7C4`) — highlight face on gradient numerals where light catches
@@ -78,7 +78,7 @@ The composition is built on warm diffuse window light, shallow depth of field, a
 |------|--------|---------------|----------|-------------|-----------|-------|
 | Main Headline | 800 | Display L (~48-56px) | Tight (-2 to -3%) | 1.15 | Soft drop shadow | `#FFFFFF` |
 | Product Term (Display Numerals) | 800 display | XXL (~90-110px) | Tight | 1.0 | Gold vertical gradient fill + soft drop shadow | Gradient `#F4C744` → `#B88A28` |
-| Product Term Label ("ประกัน คุ้มค่า") | 700 | Medium (~24-28px) | Normal | 1.2 | Soft drop shadow | `#FFFFFF` |
+| Product Term Label ("[product-term label]") | 700 | Medium (~24-28px) | Normal | 1.2 | Soft drop shadow | `#FFFFFF` |
 | Benefit Column Headline | 700 | Body-L (~18-22px) | Normal | 1.3 | None | `#FFFFFF` |
 | Promo Percentage Numeral | 900 | Display M (~44-52px) | Normal | 1.0 | Solid yellow fill + soft shadow | `#FFD862` |
 | Promo Support Line | 700 | Body (~14-16px) | Normal | 1.4 | None | `#FFFFFF` |
@@ -107,7 +107,7 @@ The composition is built on warm diffuse window light, shallow depth of field, a
 - Border: none
 - Shadow: none, or very subtle `0 2 4 rgba(30,10,60,0.15)` if elevation is needed
 - Label: 2-line allowed, centered, wraps softly
-- Used for: primary action ("read details")
+- Used for: primary action ("[primary CTA label, detail-link style]")
 
 ### Secondary CTA — Purple Pill
 - Background: `#7B4FBA` (mid purple, solid)
@@ -146,7 +146,7 @@ The composition is built on warm diffuse window light, shallow depth of field, a
 - Soft highlight face `#F8E7C4` where light catches the top of letterforms
 - Drop shadow behind: soft `0 4 12 rgba(30,10,60,0.35)`
 - No stroke, no outline
-- Placed on its own row inline with a label ("ประกัน คุ้มค่า 85/8") — label is white sans
+- Placed on its own row inline with a label ("[product-term headline with numeric identifier]") — label is white sans
 
 ---
 
@@ -276,7 +276,7 @@ Fine print              Thai sans 400  ~10px     normal    pale lilac / white
 
 - "Generate a vertical ad canvas tinted uniformly in pale lavender (#A98DD9). Warm diffuse window light from upper-right. Shallow depth of field, creamy violet bokeh background. Right-weighted: an intimate candid photograph of a mother and young daughter lying close on a bed, the daughter in a graduation cap, both smiling genuinely. Left-weighted: three translucent dream-bubbles on a loose diagonal, each carrying a thin-line icon (stethoscope, house, airplane), soft warm rim gradient on bubble edges. No text overlays — pure background scene."
 
-- "Render a product-term headline row. Thai sans display, weight 800, compressed tracking. Label text 'ประกัน คุ้มค่า' in white, soft drop shadow. Followed by a massive display numeral '85/8' filled with a vertical gold gradient from #F4C744 at the top to #B88A28 at the bottom, with a soft cream highlight #F8E7C4 on the upper letter faces, and a deep purple drop shadow (0 4 12 rgba(30,10,60,0.35)). Centered horizontally."
+- "Render a product-term headline row. Thai sans display, weight 800, compressed tracking. Label text '[product-term label]' in white, soft drop shadow. Followed by a massive display numeral '[product-term numeric identifier]' filled with a vertical gold gradient from #F4C744 at the top to #B88A28 at the bottom, with a soft cream highlight #F8E7C4 on the upper letter faces, and a deep purple drop shadow (0 4 12 rgba(30,10,60,0.35)). Centered horizontally."
 
 - "Render a two-pill CTA row for the bottom of the ad. Left pill: background #FFD862, text '#3B1F66' Thai sans 700. Right pill: background #7B4FBA, text white Thai sans 700. Both pills are fully rounded, roughly 48px tall, 45% canvas width each, separated by a 16px gap."
 

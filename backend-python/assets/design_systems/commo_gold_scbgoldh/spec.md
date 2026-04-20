@@ -87,9 +87,9 @@ Typography on this canvas is bold Thai sans in pure white for the headline, with
 |------|--------|---------------|----------|-------------|-----------|-------|
 | Main Headline (2-line) | 700 | Display M (~36-44px) | Tight (-1.5%) | 1.15 | Soft drop shadow | `#FFFFFF` |
 | Fund Wordmark ("SCBGOLDH") | 800 condensed caps | Display L (~56-72px) | Wide (+3%) | 1.0 | Gold vertical gradient fill + subtle inner shadow + outer gold glow | Gradient (top `#F5D870` → bot `#9C7418`) |
-| Risk Tag ("ความเสี่ยง 8") | 500 | Body (~14-16px) | Normal | 1.2 | Parentheses + small size, sits inline | `#E9DAF8` |
+| Risk Tag ("[risk level parenthetical]") | 500 | Body (~14-16px) | Normal | 1.2 | Parentheses + small size, sits inline | `#E9DAF8` |
 | Card Product Description | 500 | Body (~14-16px) | Normal | 1.5 | None | `#FFFFFF` |
-| CTA Label ("ลงทุนเลย") | 700 | Body (~14-16px) | Normal | 1.2 | None | `#FFFFFF` |
+| CTA Label ("[short CTA action label, 1-3 words]") | 700 | Body (~14-16px) | Normal | 1.2 | None | `#FFFFFF` |
 | SCB EASY Brand Line | 600 | Caption (~12-13px) | Normal | 1.3 | None | `#E9DAF8` |
 | Fine Print Disclaimer | 400 | Micro (~9-10px) | Normal | 1.4 | None | `#D0BCF0` |
 
@@ -302,11 +302,11 @@ Fine print               Thai sans 400  ~9-10px   normal      pale lilac
 
 - "Generate a vertical ad canvas with a radial deep-purple gradient background (center #5A2D8D, base #3F1F6C, edge #1E0B3C). Render on the right side a 3D polished gold bar (gold IOR ~1.5, high specular, low roughness, warm-yellow hue) stamped 'FINE GOLD 999.9 NET WT 1000g'. Tilt the bar three-quarter to rise from bottom-right toward upper-right. Light with a single dramatic key from upper-right that creates crisp specular highlights on the top edge. Pile 20-30 loose gold coins at the base with some bleeding off the bottom edge. Ground the bar with a soft deep-purple elliptical shadow. No environment, no floor, no real-world context — just flat purple field."
 
-- "Render a frosted glassmorphic product card on the left third of the canvas. Card fill: rgba(255, 255, 255, 0.10) with 10px backdrop blur. Thin 1px border rgba(255, 255, 255, 0.18). Soft outer shadow 0 8 24 rgba(30, 10, 60, 0.35). Rounded corners ~22px. Inside the card, top row: all-caps condensed gold display wordmark 'SCBGOLDH' with vertical gold gradient fill (#F5D870 top → #9C7418 bottom) and a subtle inner shadow. Below the wordmark: small parenthetical risk tag 'ความเสี่ยง 8' in lilac. Below: 3 lines of product description in white Thai sans 500."
+- "Render a frosted glassmorphic product card on the left third of the canvas. Card fill: rgba(255, 255, 255, 0.10) with 10px backdrop blur. Thin 1px border rgba(255, 255, 255, 0.18). Soft outer shadow 0 8 24 rgba(30, 10, 60, 0.35). Rounded corners ~22px. Inside the card, top row: all-caps condensed gold display wordmark '[fund wordmark, short alphanumeric all-caps]' with vertical gold gradient fill (#F5D870 top → #9C7418 bottom) and a subtle inner shadow. Below the wordmark: small parenthetical risk tag '[risk level parenthetical]' in lilac. Below: 3 lines of product description in white Thai sans 500."
 
-- "Generate a 2-line Thai sans 700 white headline positioned top-left: 'ทำงาน ทำงาน เก็บเงิน เก็บเงิน ในกองทุน..'. Apply a soft drop shadow of rgba(30, 10, 60, 0.35) 0 4 12. Tight tracking. Keep the headline inside the left 60% of the canvas so it does not collide with the top-right SCB logo."
+- "Generate a 2-line Thai sans 700 white headline positioned top-left: '[2-line headline tagline]'. Apply a soft drop shadow of rgba(30, 10, 60, 0.35) 0 4 12. Tight tracking. Keep the headline inside the left 60% of the canvas so it does not collide with the top-right SCB logo."
 
-- "Render a solid purple pill CTA at the bottom, aligned roughly below the product card. Background #7B4FBA, text 'ลงทุนเลย' in white Thai sans 700, ~14-16px. Fully rounded pill shape, height ~50px, padding ~14px vertical and 44px horizontal. Subtle lift shadow rgba(30, 10, 60, 0.25) 0 2 6."
+- "Render a solid purple pill CTA at the bottom, aligned roughly below the product card. Background #7B4FBA, text '[short CTA action label, 1-3 words]' in white Thai sans 700, ~14-16px. Fully rounded pill shape, height ~50px, padding ~14px vertical and 44px horizontal. Subtle lift shadow rgba(30, 10, 60, 0.25) 0 2 6."
 
 ### Iteration Guide
 1. If the gold looks "flat" or "yellow", the issue is likely material roughness — push it down toward 0.05-0.1 and increase metallic to 1.0

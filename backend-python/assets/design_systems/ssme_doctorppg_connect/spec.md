@@ -2,18 +2,18 @@
 
 ## 1. Visual Theme & Atmosphere
 
-This is a prestige-credit aesthetic built on **monochromatic deep purple** with **3D chrome metallic numerals** as the signature treatment. Three out-of-focus doctors in white coats stand as an atmospheric backdrop while massive 3D extruded chrome purple letters and numerals — the wordmark "DOCTOR" and the credit amounts "50" and "10" — dominate the composition as the actual hero subjects. Typography is literally the product: the bank is saying "we quantify trust in millions, and this is what it looks like."
+This is a prestige-credit aesthetic built on **monochromatic deep purple** with **3D chrome metallic numerals** as the signature treatment. Three out-of-focus doctors in white coats stand as an atmospheric backdrop while massive 3D extruded chrome purple letters and numerals — the wordmark "[product-category wordmark, all caps, 1 English word]" and the credit amounts "[primary credit amount numeral]" and "[repayment period numeral]" — dominate the composition as the actual hero subjects. Typography is literally the product: the bank is saying "we quantify trust in millions, and this is what it looks like."
 
 The energy is **prestigious, professional-authority, premium-credit, confident-serious**. No lifestyle warmth, no bright daylight, no playful accent colors. Lighting is clinical-pharmaceutical on the blurred professionals behind, and dramatic studio on the chrome numerals creating crisp specular highlights and beveled edges. The CTA is rendered as a thin-line framed graphic rather than a filled pill — pills belong to consumer-facing systems, and this is decidedly not that.
 
 **Key Characteristics:**
 - Monochromatic deep purple background with gradient radial toward center
 - Three out-of-focus doctors in white coats as atmospheric backdrop — not hero subjects
-- Massive 3D chrome purple extruded wordmark "DOCTOR" centered upper-mid
-- Massive 3D chrome purple extruded numerals "50" and "10" for credit amounts
+- Massive 3D chrome purple extruded wordmark "[product-category wordmark, all caps, 1 English word]" centered upper-mid
+- Massive 3D chrome purple extruded numerals "[primary credit amount numeral]" and "[repayment period numeral]" for credit amounts
 - Thai sub-labels in flat white sans for scale and duration units
 - Brand lockup top-left: SCB logo + "BUSINESS Lending" side label
-- Subtitle "สินเชื่อธุรกิจเพื่อผู้ประกอบการ วิชาชีพแพทย์" beneath wordmark
+- Subtitle "[subtitle describing product category and target segment]" beneath wordmark
 - Rate details and disclaimer in mid-lower body in gray/light-lilac
 - **Line-art framed CTA** bottom-right, not a pill button
 - Date validity range top-right area
@@ -46,7 +46,7 @@ The energy is **prestigious, professional-authority, premium-credit, confident-s
 - **Watch Metal Accent** (`#6D5D94`) — wristwatch accent on one doctor
 
 ### Text Colors
-- **Primary White** (`#FFFFFF`) — sub-labels ("วงเงินรวมสูงสุด", "ล้านบาท", "ผ่อนชำระ นานสูงสุด", "ปี*")
+- **Primary White** (`#FFFFFF`) — sub-labels ("[scale label above primary credit amount]", "[million-baht scale unit]", "[scale label above repayment period]", "[year unit with asterisk]")
 - **Supporting Lilac** (`#D0C5E5`) — body paragraphs and rate info
 - **Fine Print Lilac** (`#AA9BCF`) — disclaimer micro text
 - **Date Validity White** (`#FFFFFF`) — validity date range
@@ -72,11 +72,11 @@ The energy is **prestigious, professional-authority, premium-credit, confident-s
 
 | Role | Weight | Size Category | Tracking | Line Height | Treatment | Color |
 |------|--------|---------------|----------|-------------|-----------|-------|
-| 3D Chrome Wordmark ("DOCTOR") | N/A (rendered 3D) | Display XXL (~100-140px visual) | Tight (glyphs kiss) | N/A | 3D extrusion, beveled edges, chrome gradient fill, soft purple outer glow, drop shadow | Gradient (Mid Light → Mid Purple → Deep Face) |
-| 3D Chrome Numerals ("50", "10") | N/A (rendered 3D) | Display XXL (~120-160px visual) | Tight | N/A | Same 3D treatment as wordmark, possibly with sharper specular on top faces | Same gradient |
-| Sub-label (small, scale-units like "ล้านบาท", "ปี*") | 500 | Body (~12-16px) | Normal | 1.3 | None | `#FFFFFF` |
-| "วงเงินรวมสูงสุด" / "ผ่อนชำระ นานสูงสุด" | 500-600 | Body (~14-18px) | Normal | 1.3 | None | `#FFFFFF` |
-| Subtitle ("สินเชื่อธุรกิจเพื่อผู้ประกอบการ วิชาชีพแพทย์") | 700 | Body-L (~20-26px) | Normal | 1.3 | None | `#FFFFFF` |
+| 3D Chrome Wordmark ("[product-category wordmark, all caps, 1 English word]") | N/A (rendered 3D) | Display XXL (~100-140px visual) | Tight (glyphs kiss) | N/A | 3D extrusion, beveled edges, chrome gradient fill, soft purple outer glow, drop shadow | Gradient (Mid Light → Mid Purple → Deep Face) |
+| 3D Chrome Numerals ("[primary credit amount numeral]", "[repayment period numeral]") | N/A (rendered 3D) | Display XXL (~120-160px visual) | Tight | N/A | Same 3D treatment as wordmark, possibly with sharper specular on top faces | Same gradient |
+| Sub-label (small, scale-units like "[million-baht scale unit]", "[year unit with asterisk]") | 500 | Body (~12-16px) | Normal | 1.3 | None | `#FFFFFF` |
+| "[scale label above primary credit amount]" / "[scale label above repayment period]" | 500-600 | Body (~14-18px) | Normal | 1.3 | None | `#FFFFFF` |
+| Subtitle ("[subtitle describing product category and target segment]") | 700 | Body-L (~20-26px) | Normal | 1.3 | None | `#FFFFFF` |
 | Rate Body Paragraph | 500 | Body-S (~12-14px) | Normal | 1.5 | None | `#D0C5E5` |
 | Date Validity | 600 | Body (~14-16px) | Normal | 1.3 | None | `#FFFFFF` |
 | CTA Framed Label | 700 | Body-L (~16-20px) | Normal | 1.3 | None | `#FFFFFF` |
@@ -103,23 +103,23 @@ The energy is **prestigious, professional-authority, premium-credit, confident-s
 - Soft purple outer glow (~8-12px spread, `#A08FC8` at ~20% opacity)
 - Drop shadow: deep purple `0 12 40 rgba(22, 7, 58, 0.50)` to ground the letters against background
 
-### Wordmark Specific — "DOCTOR"
+### Wordmark Specific — "[product-category wordmark, all caps, 1 English word]"
 - The letter D contains or anchors a small integrated stethoscope graphic inside its counter or alongside it (brand detail unique to this system)
 - Treated as a single horizontal unit, all caps, condensed
 - Letters kiss at baselines for compressed weight
 - Approximately 7 letters wide, occupying ~55-65% canvas width
 
-### Credit Numerals — "50" and "10"
+### Credit Numerals — "[primary credit amount numeral]" and "[repayment period numeral]"
 - Each numeral pair (total value + repayment period) gets the same 3D chrome treatment
-- Paired with small white Thai sub-labels ("ล้านบาท" next to 50, "ปี*" next to 10)
+- Paired with small white Thai sub-labels ("[million-baht scale unit]" next to 50, "[year unit with asterisk]" next to 10)
 - Sub-labels sit at the baseline of the numerals, slightly above
 - Numerals are positioned in opposing horizontal halves of the canvas (50 left-of-center, 10 right-of-center) or stacked with separators
 
 ### Sub-Labels Around Numerals
 - Small white Thai sans, vertical-right-aligned next to the numeral
-- Example: "50 ล้านบาท*" — the asterisk footnote marker is inline
-- "วงเงินรวมสูงสุด" label sits above or beside each numeral as a mini caption
-- "ผ่อนชำระ นานสูงสุด" label sits next to the period numeral
+- Example: "[credit amount numeral + scale unit]" — the asterisk footnote marker is inline
+- "[scale label above primary credit amount]" label sits above or beside each numeral as a mini caption
+- "[scale label above repayment period]" label sits next to the period numeral
 
 ### Subtitle Line
 - Single line of Thai sans 700 white, ~22px
@@ -137,7 +137,7 @@ The energy is **prestigious, professional-authority, premium-credit, confident-s
 ### Line-Art Framed CTA (Bottom-Right)
 - Thin 1-2px white line-art rectangle frame with curved/rounded inner corners
 - Frame is rectangular, not pill-shaped
-- Inside the frame: short Thai phrase "กู้เท่าที่จำเป็น และชำระคืนไหว" in 2 lines
+- Inside the frame: short Thai phrase "[2-line framed-CTA value proposition]" in 2 lines
 - Text: Thai sans 700 white
 - No fill color inside the frame — it is outline-only
 - This line-art treatment is the system's distinctive CTA style (not a pill, not a button)
@@ -154,7 +154,7 @@ The energy is **prestigious, professional-authority, premium-credit, confident-s
 
 ### Rate Details Paragraph
 - Multi-line body paragraph in light lilac `#D0C5E5`, Thai sans 500 ~13px
-- Explains rate structure ("เริ่มต้น MRR-1.25% ต่อปี, สูงสุด: MRR+4.00% ต่อปี, กรณีไม่มีหลักประกัน...")
+- Explains rate structure as a multi-line paragraph with starting and maximum rate references (e.g. "MRR-n.n% to MRR+n.n% per year depending on collateral status")
 - Sits in mid-lower canvas area
 - Left-aligned, ~60-75% canvas width
 
@@ -169,7 +169,7 @@ The energy is **prestigious, professional-authority, premium-credit, confident-s
 
 ### Vertical Zone Map (1000px canvas reference)
 - **Top 0-12%**: SCB + BUSINESS Lending lockup top-left; date validity top-right
-- **12-32%**: 3D wordmark "DOCTOR" centered
+- **12-32%**: 3D wordmark "[product-category wordmark, all caps, 1 English word]" centered
 - **32-40%**: subtitle line (single-line Thai sans 700)
 - **40-70%**: 3D chrome numerals + sub-labels (50 left side, 10 right side) with doctor backdrop
 - **70-85%**: rate details paragraph (body) + date range info
@@ -308,17 +308,17 @@ Fine print            Thai sans 400      ~9-10px    normal  muted lilac
 
 - "Composite three adult white-coat doctors as an atmospheric backdrop, horizontally centered, behind the typographic layer. One male, one female, one additional subject. At least one with arms crossed, one with stethoscope visible, one with wristwatch. Faces heavily blurred (extreme shallow DoF, f/1.4 equivalent, or aggressive Gaussian post-blur). Bodies visible as gentle shapes. Soft diffuse cool studio light, then color-graded toward purple — coats shift from #D8CEE5 midtones to #867BA0 fold shadows."
 
-- "Render the 3D chrome wordmark 'DOCTOR' as extruded 3D letters with PBR metallic material (metallic 1.0, roughness 0.15, purple-tinted chrome IOR). All caps, condensed, glyphs kiss at baseline. Occupies ~60% canvas width, centered horizontally, vertical range 12-30% canvas height. Extrusion depth ~15% of letter height. Bevel on front face edges, 1-2% of letter height. Chrome gradient: top face #EADDFF, mid face #9B7FCC, extrusion side #5A3D96. Sharp white specular dots on leading edges. Soft purple outer glow (#A08FC8 at 20% opacity, 10px spread). Deep purple drop shadow #16073A at 50% opacity, 0 12 40. Integrate a small stethoscope graphic inside or alongside the letter D. Key light from upper-right, fill from lower-left at 30%."
+- "Render the 3D chrome wordmark '[product-category wordmark, all caps, 1 English word]' as extruded 3D letters with PBR metallic material (metallic 1.0, roughness 0.15, purple-tinted chrome IOR). All caps, condensed, glyphs kiss at baseline. Occupies ~60% canvas width, centered horizontally, vertical range 12-30% canvas height. Extrusion depth ~15% of letter height. Bevel on front face edges, 1-2% of letter height. Chrome gradient: top face #EADDFF, mid face #9B7FCC, extrusion side #5A3D96. Sharp white specular dots on leading edges. Soft purple outer glow (#A08FC8 at 20% opacity, 10px spread). Deep purple drop shadow #16073A at 50% opacity, 0 12 40. Integrate a small stethoscope graphic inside or alongside the letter D. Key light from upper-right, fill from lower-left at 30%."
 
-- "Render two 3D chrome credit numerals '50' and '10' with the same material and treatment as the DOCTOR wordmark. '50' positioned left-of-center at ~40-70% canvas height vertical range. '10' positioned right-of-center at the same vertical range. Size: each numeral ~150px tall. Attach small white Thai sub-labels: 'ล้านบาท*' next to '50', 'ปี*' next to '10'. Above each pair, a small white 'วงเงินรวมสูงสุด' (above 50) and 'ผ่อนชำระ นานสูงสุด' (above 10) in Thai sans 500 ~14px."
+- "Render two 3D chrome credit numerals '[primary credit amount numeral]' and '[repayment period numeral]' with the same material and treatment as the product-category wordmark. '[primary credit amount numeral]' positioned left-of-center at ~40-70% canvas height vertical range. '[repayment period numeral]' positioned right-of-center at the same vertical range. Size: each numeral ~150px tall. Attach small white Thai sub-labels: '[scale unit for credit amount]' next to '[primary credit amount numeral]', '[time unit for period]' next to '[repayment period numeral]'. Above each pair, a small white '[scale label above primary credit amount]' (above 50) and '[scale label above repayment period]' (above 10) in Thai sans 500 ~14px."
 
-- "Render the subtitle 'สินเชื่อธุรกิจเพื่อผู้ประกอบการ วิชาชีพแพทย์' in Thai sans 700 pure white ~24px, centered horizontally, just below the DOCTOR wordmark. No drop shadow, no stroke."
+- "Render the subtitle '[subtitle describing product category and target segment]' in Thai sans 700 pure white ~24px, centered horizontally, just below the product-category wordmark. No drop shadow, no stroke."
 
-- "Render a line-art framed CTA at bottom-right: thin 1-2px white rectangle with small rounded inner corners (~4-6px radius). Inside: 2-line Thai text 'กู้เท่าที่จำเป็น และชำระคืนไหว' in Thai sans 700 ~18px white. Internal padding 12-16px all sides. No fill inside the frame — outline-only. No shadow."
+- "Render a line-art framed CTA at bottom-right: thin 1-2px white rectangle with small rounded inner corners (~4-6px radius). Inside: 2-line Thai text '[2-line value proposition inside framed CTA]' in Thai sans 700 ~18px white. Internal padding 12-16px all sides. No fill inside the frame — outline-only. No shadow."
 
 - "Render rate body paragraph in mid-lower canvas: Thai sans 500 ~13px in light lilac #D0C5E5. Multi-line paragraph explaining MRR rate structure. Left-aligned, ~70% canvas width. Above a horizontal rule or spacing before the fine print."
 
-- "Render top-left SCB logo lockup: SCB mark (red #D11E2F) with small 'BUSINESS Lending' label next to it in light purple #9B7FCC. Small scale, ~40-48px tall. Top-right: date validity range '1 ม.ค. 68 - 31 ธ.ค. 68' in Thai sans 600 ~15px white. Both positioned ~16-24px from edges."
+- "Render top-left SCB logo lockup: SCB mark (red #D11E2F) with small 'BUSINESS Lending' label next to it in light purple #9B7FCC. Small scale, ~40-48px tall. Top-right: date validity range '[campaign validity date range]' in Thai sans 600 ~15px white. Both positioned ~16-24px from edges."
 
 ### Iteration Guide
 1. If the chrome numerals look "silver" or "neutral", the material IOR is wrong — push it toward purple-tinted chrome specifically
