@@ -35,6 +35,7 @@ from app.prompts.layout_strategy import build_layout_strategy_prompt
 from app.prompts.render_campaign import build_render_prompt
 from app.prompts.separate_layers import build_separate_layers_prompt, build_analyze_components_prompt
 from app.prompts.describe import DESCRIBE_PROMPT
+from app.utils.style_spec import StyleSpec
 
 # ---------------------------------------------------------------------------
 # RMBG-2.0 model singleton
@@ -1236,8 +1237,16 @@ class VertexService:
         image_description: str | None = None,
         zone_hints: list[dict] | None = None,
         output_format: str = "standard",
+        style_spec: StyleSpec | None = None,
     ) -> dict:
         proc_buf, proc_mime = _resize_for_processing(image_buffer)
+        anchor_parts: list = []
+        if style_spec and style_spec.source_image_path:
+            try:
+                anchor_bytes = Path(style_spec.source_image_path).read_bytes()
+                anchor_parts.append(_inline_data(anchor_bytes, "image/jpeg"))
+            except Exception as _anchor_err:
+                print(f"[FlexLayout] Anchor image load failed: {_anchor_err}")
         model = self._text_model_best()
         components_list = (
             "Available die-cut components:\n" + "\n".join(f'  - "{l}"' for l in component_labels)
@@ -1323,6 +1332,7 @@ class VertexService:
             no_go_zones_section=no_go_zones_section,
             image_description_section=image_description_section,
             zone_hints=zone_hints,
+            style_spec_md=style_spec.spec_markdown if style_spec else None,
         )
 
         thought_parts = []
@@ -1330,6 +1340,7 @@ class VertexService:
             for ref in ref_images:
                 thought_parts.append(_inline_data(ref, "image/jpeg"))
         thought_parts.append(_inline_data(proc_buf, proc_mime))
+        thought_parts.extend(anchor_parts)
 
         from app.utils.brightness_map import generate_brightness_heatmap
         try:
@@ -1354,10 +1365,12 @@ class VertexService:
                 target_text, components_list, footer_section, canvas_size,
                 layout_thought=layout_thought,
                 output_format=output_format,
+                style_spec_md=style_spec.spec_markdown if style_spec else None,
             )
 
             tree_parts = []
             tree_parts.append(_inline_data(proc_buf, proc_mime))
+            tree_parts.extend(anchor_parts)
             tree_parts.append({"text": tree_prompt})
 
             print(f"[FlexLayout] Call 2: Flex Tree ({model}, thought: {len(layout_thought)} chars)")

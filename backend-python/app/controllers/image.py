@@ -23,6 +23,7 @@ from app.utils.ref_image_search import find_similar_refs, extract_style_guide
 from app.utils.safe_zones import BBox, compute_safe_zones
 from app.utils.contrast import check_text_contrast
 from app.utils.svg_builder import build_flex_svg, FlexSVGInput
+from app.utils.style_spec import StyleSpec
 
 UPLOAD_DIR = Path(__file__).parent.parent.parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -772,6 +773,7 @@ async def _step_flex_layout(
     image_description: str | None = None,
     zone_hints: list[dict] | None = None,
     output_format: str = "standard",
+    style_spec: StyleSpec | None = None,
 ) -> tuple[str, dict | None, list[dict], list]:
     # Reserve bottom 10% for footer (code-controlled, not AI)
     footer_reserve_ratio = 0.10 if footer_text else 0.0
@@ -790,6 +792,7 @@ async def _step_flex_layout(
             image_description=image_description,
             zone_hints=zone_hints,
             output_format=output_format,
+            style_spec=style_spec,
         )
     except RuntimeError as err:
         send_sse("error", {"error": str(err)})
@@ -1311,6 +1314,7 @@ async def create_campaign(
                         image_description=image_description,
                         zone_hints=text_zone_hints or None,
                         output_format=output_format,
+                        style_spec=style_spec,
                     )
                     analysis["svg_overlay"] = svg_overlay
                     flex_tree = flex_result.get("flexTree")
@@ -1612,6 +1616,7 @@ async def create_campaign_integrated(request: Request, body: dict):
                     image_description=image_description,
                     zone_hints=text_zones or None,
                     output_format=output_format,
+                    style_spec=style_spec,
                 )
                 flex_tree = flex_result.get("flexTree") if flex_result else None
             except Exception as e:
