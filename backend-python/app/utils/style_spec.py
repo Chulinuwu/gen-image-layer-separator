@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -10,6 +10,26 @@ class StyleSpec:
     overview: str
     spec_markdown: str
     source_image_path: str
+    requires_psd_3d: bool = False
+
+
+_PSD3D_KEYWORDS = (
+    "3d chrome",
+    "3d extruded",
+    "chrome extruded",
+    "chrome metallic",
+    "extruded with",
+    "text3dstyle",
+    "text3d",
+    "pbr metallic",
+    "metallic material",
+    "chrome gradient",
+)
+
+
+def detect_requires_psd_3d(spec_markdown: str) -> bool:
+    lower = spec_markdown.lower()
+    return any(kw in lower for kw in _PSD3D_KEYWORDS)
 
 
 def load_spec(entry_dir: Path | str) -> StyleSpec:
@@ -24,4 +44,5 @@ def load_spec(entry_dir: Path | str) -> StyleSpec:
         overview=overview,
         spec_markdown=spec_md,
         source_image_path=str(source),
+        requires_psd_3d=detect_requires_psd_3d(spec_md),
     )

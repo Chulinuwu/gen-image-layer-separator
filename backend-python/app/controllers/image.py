@@ -550,6 +550,13 @@ async def _step_plan_and_match(
         "overview": spec.overview,
         "source_image_url": f"/assets/design_systems/{spec.id}/source.jpg",
     })
+    if spec.requires_psd_3d:
+        send_sse("debug", {
+            "step": "style_format_override",
+            "message": "Matched StyleSpec requires 3D chrome rendering -- output format will be upgraded to psd-3d",
+            "id": spec.id,
+            "forced_output_format": "psd-3d",
+        })
     return spec, overview
 
 
@@ -1165,6 +1172,9 @@ async def create_campaign(
                 aspect_ratio=aspect_ratio_in,
                 footer_text=footer_text_in,
             )
+            effective_output_format = output_format
+            if style_spec is not None and style_spec.requires_psd_3d and output_format != "psd-3d":
+                effective_output_format = "psd-3d"
             for e in events:
                 yield e
             events.clear()
@@ -1304,7 +1314,7 @@ async def create_campaign(
                         no_go_zones=all_no_go or None,
                         image_description=image_description,
                         zone_hints=text_zone_hints or None,
-                        output_format=output_format,
+                        output_format=effective_output_format,
                         style_spec=style_spec,
                     )
                     analysis["svg_overlay"] = svg_overlay
@@ -1414,7 +1424,7 @@ async def create_campaign(
                     "finalCritiqueStatus": analysis.get("final_critique_status"),
                     "finalCritiqueFeedback": analysis.get("final_critique_feedback"),
                     "backgroundEffects": bg_effects_result,
-                    "outputFormat": output_format,
+                    "outputFormat": effective_output_format,
                 },
             })
             for e in events:
@@ -1467,6 +1477,9 @@ async def create_campaign_integrated(request: Request, body: dict):
                 aspect_ratio=aspect_ratio,
                 footer_text=footer_text or None,
             )
+            effective_output_format = output_format
+            if style_spec is not None and style_spec.requires_psd_3d and output_format != "psd-3d":
+                effective_output_format = "psd-3d"
             for e in events:
                 yield e
             events.clear()
@@ -1598,7 +1611,7 @@ async def create_campaign_integrated(request: Request, body: dict):
                     no_go_zones=None,
                     image_description=image_description,
                     zone_hints=text_zones or None,
-                    output_format=output_format,
+                    output_format=effective_output_format,
                     style_spec=style_spec,
                 )
                 flex_tree = flex_result.get("flexTree") if flex_result else None
@@ -1713,7 +1726,7 @@ async def create_campaign_integrated(request: Request, body: dict):
                     "textZones": text_zones,
                     "bgConstraints": bg_constraints,
                     "backgroundEffects": bg_effects_result,
-                    "outputFormat": output_format,
+                    "outputFormat": effective_output_format,
                 },
             })
             for e in events:
