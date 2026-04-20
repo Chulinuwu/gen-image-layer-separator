@@ -33,8 +33,13 @@ If the text is readable, well-contrasted, and properly arranged — PASS it."""
     spec_section = (
         "\n\nTARGET DESIGN SYSTEM:\n"
         f"{style_spec_md}\n\n"
-        "Also check if the output adheres to the design system. "
-        "List any violations concretely."
+        "Also check if the output adheres to the design system's visual TREATMENT "
+        "(typography, color palette, effects, composition, text-image relationship). "
+        "List any violations concretely.\n"
+        "IMPORTANT: Any specific Thai or English text strings in the design system "
+        "above are illustrative examples from the source reference ad. Do NOT flag "
+        "as a violation if the rendered output uses different text content -- the "
+        "content comes from the campaign brief, only the treatment is binding."
         if style_spec_md
         else ""
     )

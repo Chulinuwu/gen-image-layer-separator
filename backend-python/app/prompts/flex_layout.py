@@ -15,6 +15,12 @@ def build_flex_thought_prompt(
         f"{style_spec_md}\n\n"
         "Your flex tree MUST adhere to this design system. Typography, color, "
         "effects, and text-image relationship fields are binding.\n"
+        "IMPORTANT: Any specific Thai or English text strings appearing inside "
+        "the design system above are illustrative examples from the source reference ad. "
+        "The actual text content for this layout comes ONLY from CAMPAIGN TEXT below. "
+        "Use the spec for visual treatment (what gets the highlight band, which role gets "
+        "the gold gradient, where the CTA sits, which icons are used) -- never copy "
+        "literal text strings from the spec into your flex tree output.\n"
         if style_spec_md
         else ""
     )
@@ -111,6 +117,12 @@ def build_flex_tree_prompt(
         f"{style_spec_md}\n\n"
         "Your flex tree MUST adhere to this design system. Typography, color, "
         "effects, and text-image relationship fields are binding.\n"
+        "IMPORTANT: Any specific Thai or English text strings appearing inside "
+        "the design system above are illustrative examples from the source reference ad. "
+        "The actual text content for this layout comes ONLY from CAMPAIGN TEXT below. "
+        "Use the spec for visual treatment (what gets the highlight band, which role gets "
+        "the gold gradient, where the CTA sits, which icons are used) -- never copy "
+        "literal text strings from the spec into your flex tree output.\n"
         if style_spec_md
         else ""
     )

@@ -27,5 +27,11 @@ def build_translate_prompt(*, spec_md: str, brief: str) -> str:
         "(lighting direction, color hex codes allowed, composition, subject pose, "
         "depth of field, texture). Do NOT describe typography or text overlays -- "
         "we will add text separately.\n\n"
+        "IMPORTANT: Any specific subject details in the design system above "
+        "(specific people, exact props, exact poses) are illustrative examples "
+        "from the source reference ad. The actual subject for this scene comes "
+        "from the Brief. Use the spec for visual language (mood, palette, "
+        "lighting direction, composition archetype, texture) -- not for literal "
+        "subject content.\n\n"
         "Return only the prompt text, no preamble."
     )
