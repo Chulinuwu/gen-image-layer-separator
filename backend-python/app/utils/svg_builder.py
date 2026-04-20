@@ -391,6 +391,15 @@ def _render_text_box(box: LayoutBox, clip_id: str) -> tuple[list[str], list[str]
     metrics = measure_text(text, font_size, font_weight)
     baseline_y = box.y + offset_y + metrics.ascent
 
+    fill_value = _escape_xml(color)
+    if style.textGradient:
+        grad_id = f"textgrad-{clip_id}"
+        parsed = _parse_gradient(style.textGradient, grad_id)
+        if parsed:
+            defs_snippet, _ = parsed
+            defs.append(f"    {defs_snippet.lstrip()}")
+            fill_value = f"url(#{grad_id})"
+
     skew_transforms = []
     if style.skewX:
         skew_transforms.append(f"skewX({style.skewX})")
@@ -405,7 +414,7 @@ def _render_text_box(box: LayoutBox, clip_id: str) -> tuple[list[str], list[str]
     elements.append(
         f'{indent}<text id="{_escape_xml(box.id)}" data-role="text" clip-path="url(#{clip_id})" '
         f'font-family="Kanit, sans-serif" font-size="{font_size}" font-weight="{font_weight}" '
-        f'fill="{_escape_xml(color)}"{stroke_attrs}{extra_attrs} text-anchor="{anchor}">'
+        f'fill="{fill_value}"{stroke_attrs}{extra_attrs} text-anchor="{anchor}">'
     )
 
     for i, line in enumerate(wrapped.lines):
@@ -584,23 +593,40 @@ def build_flex_svg(input: FlexSVGInput) -> FlexSVGResult:
     for r in bg_effect_rects:
         svg_lines.append(r)
 
-    # Background rects
+    # Background rects (+ optional border outline)
     CTA_KEYWORDS = {"cta", "button", "btn"}
     for box in boxes:
-        if box.style and box.style.backgroundColor:
-            rx = 0
-            if box.style.borderRadius is not None:
-                rx = box.style.borderRadius
-            elif any(kw in (box.id or "").lower() for kw in CTA_KEYWORDS):
-                rx = min(12, box.h / 2)
-            rx_attr = f' rx="{rx:.0f}" ry="{rx:.0f}"' if rx > 0 else ""
-            opacity_attr = ""
-            if box.style.opacity is not None and box.style.opacity < 1.0:
-                opacity_attr = f' opacity="{box.style.opacity}"'
-            svg_lines.append(
-                f'  <rect x="{box.x}" y="{box.y}" width="{box.w}" height="{box.h}"{rx_attr} '
-                f'fill="{_escape_xml(box.style.backgroundColor)}"{opacity_attr} />'
+        if not box.style:
+            continue
+        has_bg = bool(box.style.backgroundColor)
+        has_border = bool(box.style.borderWidth and box.style.borderColor)
+        if not (has_bg or has_border):
+            continue
+        rx = 0
+        if box.style.borderRadius is not None:
+            rx = box.style.borderRadius
+        elif any(kw in (box.id or "").lower() for kw in CTA_KEYWORDS):
+            rx = min(12, box.h / 2)
+        rx_attr = f' rx="{rx:.0f}" ry="{rx:.0f}"' if rx > 0 else ""
+        opacity_attr = ""
+        if box.style.opacity is not None and box.style.opacity < 1.0:
+            opacity_attr = f' opacity="{box.style.opacity}"'
+        fill_attr = (
+            f'fill="{_escape_xml(box.style.backgroundColor)}"' if has_bg else 'fill="none"'
+        )
+        stroke_attr = ""
+        if has_border:
+            stroke_attr = (
+                f' stroke="{_escape_xml(box.style.borderColor)}" '
+                f'stroke-width="{int(box.style.borderWidth)}"'
             )
+            if (box.style.borderStyle or "").lower() == "dashed":
+                dash = max(4, int(box.style.borderWidth) * 3)
+                stroke_attr += f' stroke-dasharray="{dash},{dash}"'
+        svg_lines.append(
+            f'  <rect x="{box.x}" y="{box.y}" width="{box.w}" height="{box.h}"{rx_attr} '
+            f'{fill_attr}{stroke_attr}{opacity_attr} />'
+        )
 
     # Gradient overlays (between background and content for readability)
     for box, grad_id in gradient_overlays:

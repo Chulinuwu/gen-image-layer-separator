@@ -221,10 +221,29 @@ align: "left|center|right"
 lineHeight: multiplier (1.0-1.2 for headers, 1.4-1.8 for body)
 letterSpacing: px (1-4 for premium headlines)
 opacity, margin, maxLines, borderRadius{_transform_style_props}
+borderWidth + borderColor: px stroke + hex/rgba color for an outline on CONTAINERS (line-art CTAs, thin framed panels). Works with or without backgroundColor -- omit backgroundColor for an outline-only rectangle.
+borderStyle: "solid" (default) or "dashed".
+textGradient: "to-bottom #F4C744 #B88A28" -- gradient fill applied to TEXT leaves only (direction + 2 hex stops). Overrides solid `color` fill. Use for display numerals or wordmarks that need a metallic/gold vertical gradient. Supported directions: to-bottom, to-top, to-right, to-left.
 
 BACKGROUND EFFECTS (canvas-level, in "backgroundEffects" array):
 - Linear fade: {{"type": "linear-fade", "from": "bottom|top|left|right", "color": "rgba(0,0,0,0.7)", "size": "40%"}}
 - Radial fade: {{"type": "radial-fade", "center": "50% 50%", "radius": "70%", "color": "rgba(0,0,0,0.4)"}}
+
+ADVANCED PATTERNS:
+
+Highlight band (yellow rect behind an inline phrase):
+- Express as a nested container wrapping the text. Parent container holds backgroundColor + borderRadius for the band; child is a text leaf with the emphasis words.
+- Use when the design spec calls for "yellow highlight band" or "emphasis phrase with solid backdrop".
+- Keep the band tight: padding ~6-10px horizontal around the phrase; borderRadius ~6-8px.
+
+Frosted glassmorphic card (fallback, no real backdrop blur):
+- Express as a container with backgroundColor "rgba(255, 255, 255, 0.10)" and borderWidth 1 + borderColor "rgba(255, 255, 255, 0.18)" for the subtle edge.
+- Add a soft drop shadow via textShadow on child text (or assume canvas-level lift) -- actual backdrop blur is not supported; we approximate with translucent white + thin edge.
+- Use when the design spec calls for "frosted", "glassmorphic", or "translucent card over busy background".
+
+Line-art framed CTA (outline rectangle without fill):
+- Express as a container with NO backgroundColor, borderWidth 1-2, borderColor (usually #FFFFFF), borderRadius ~4-6px, and a text leaf child for the label.
+- Use when the design spec calls for "line-art framed CTA" or "thin outline CTA" -- this is distinct from pill CTAs.
 
 SIZING RULES:
 - EVERY container and text node MUST have an explicit height% (except children inside a row container, which need width% instead).

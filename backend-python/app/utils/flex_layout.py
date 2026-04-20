@@ -22,6 +22,10 @@ class FlexNodeStyle:
     margin: int | None = None
     maxLines: int | None = None
     gradientOverlay: str | None = None  # "to-bottom rgba(0,0,0,0) rgba(0,0,0,0.7)"
+    borderWidth: int | None = None      # px, container outline stroke width
+    borderColor: str | None = None      # hex or rgba, container outline stroke color
+    borderStyle: str | None = None      # "solid"|"dashed"
+    textGradient: str | None = None     # "to-bottom #F4C744 #B88A28" -- gradient fill on text leaves
     skewX: float | None = None       # degrees
     skewY: float | None = None       # degrees
     perspective: float | None = None  # px distance
@@ -123,7 +127,7 @@ def _dict_to_flex_node(d: dict | FlexNode) -> FlexNode:
     style = None
     if isinstance(style_raw, dict):
         filtered = {k: v for k, v in style_raw.items() if k in FlexNodeStyle.__dataclass_fields__}
-        for int_field in ("strokeWidth", "letterSpacing", "borderRadius", "margin", "maxLines"):
+        for int_field in ("strokeWidth", "letterSpacing", "borderRadius", "margin", "maxLines", "borderWidth"):
             if int_field in filtered:
                 filtered[int_field] = _safe_int(filtered[int_field])
         for float_field in ("lineHeight", "opacity"):
@@ -295,7 +299,7 @@ def _layout_node(node: FlexNode | dict, x: float, y: float, w: float, h: float, 
 
     # Emit a LayoutBox for containers with visual style (backgroundColor, gradientOverlay)
     # so the SVG renderer draws a background rect before children
-    if node.style and (node.style.backgroundColor or node.style.gradientOverlay):
+    if node.style and (node.style.backgroundColor or node.style.gradientOverlay or node.style.borderWidth):
         out.append(LayoutBox(
             id=f"{node.id}-bg",
             type="container",

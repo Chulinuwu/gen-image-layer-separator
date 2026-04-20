@@ -256,6 +256,48 @@ def test_radial_fade_vignette():
     assert 'cy="40%"' in result.svg
 
 
+def test_container_border_outline_only():
+    box = LayoutBox(id="cta-frame", type="container", x=10, y=10, w=200, h=60,
+                    style=FlexNodeStyle(borderWidth=2, borderColor="#FFFFFF",
+                                        borderRadius=6))
+    result = build_flex_svg(FlexSVGInput(boxes=[box], canvas_w=400, canvas_h=200))
+    assert 'stroke="#FFFFFF"' in result.svg
+    assert 'stroke-width="2"' in result.svg
+    assert 'fill="none"' in result.svg
+
+
+def test_container_border_with_background():
+    box = LayoutBox(id="panel", type="container", x=0, y=0, w=200, h=60,
+                    style=FlexNodeStyle(backgroundColor="#222222", borderWidth=1,
+                                        borderColor="rgba(255,255,255,0.18)"))
+    result = build_flex_svg(FlexSVGInput(boxes=[box], canvas_w=400, canvas_h=200))
+    assert 'fill="#222222"' in result.svg
+    assert 'stroke="rgba(255,255,255,0.18)"' in result.svg
+    assert 'stroke-width="1"' in result.svg
+
+
+def test_container_border_dashed():
+    box = LayoutBox(id="dashframe", type="container", x=0, y=0, w=200, h=60,
+                    style=FlexNodeStyle(borderWidth=2, borderColor="#FFFFFF",
+                                        borderStyle="dashed"))
+    result = build_flex_svg(FlexSVGInput(boxes=[box], canvas_w=400, canvas_h=200))
+    assert "stroke-dasharray=" in result.svg
+
+
+def test_text_gradient_fill():
+    box = LayoutBox(id="numeral", type="text", x=0, y=0, w=400, h=120,
+                    text="858",
+                    style=FlexNodeStyle(fontSize="xlarge", fontWeight="900",
+                                        color="#FFFFFF",
+                                        textGradient="to-bottom #F4C744 #B88A28"))
+    result = build_flex_svg(FlexSVGInput(boxes=[box], canvas_w=400, canvas_h=200))
+    svg = result.svg
+    assert "<linearGradient" in svg
+    assert 'stop-color="#F4C744"' in svg
+    assert 'stop-color="#B88A28"' in svg
+    assert 'fill="url(#textgrad-' in svg
+
+
 def test_multiple_background_effects():
     result = build_flex_svg(FlexSVGInput(
         boxes=[], canvas_w=1000, canvas_h=1000,
