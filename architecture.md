@@ -208,7 +208,15 @@ Source: `backend-python/app/controllers/image.py`, lines 1035–1381.
 
 ```mermaid
 graph TB
-  Start(["POST /create-campaign<br/>image + text + noGoZones"]) --> S1A
+  Start(["POST /create-campaign<br/>image + text + noGoZones"]) --> S0
+
+  subgraph Phase0["Phase 0: Style Selection"]
+    S0["Step 0: Plan + Match<br/>_step_plan_and_match<br/>plan target overview + embed + cosine search top-1"]
+    S0L[("assets/design_systems/<br/>overview.md + spec.md + source.jpg<br/>+ embedding.json")]
+    S0 <--> S0L
+  end
+
+  S0 --> S1A
 
   subgraph Phase1["Phase 1: Understand Image"]
     S1A["Step 1A: RMBG Prescan<br/>_step_rmbg_prescan<br/>RMBG-2.0 local model"]
@@ -236,15 +244,13 @@ graph TB
   S2E --> S3
 
   subgraph Phase3["Phase 3: Layout + Render"]
-    S3["Step 3: Flex Layout<br/>_step_flex_layout"]
-    S3R["ref_image_search<br/>find_similar_refs (top-3)"]
-    S3G["extract_style_guide"]
-    S3A["suggest_flex_layout<br/>thought prompt + tree prompt"]
+    S3["Step 3: Flex Layout<br/>_step_flex_layout<br/>(consumes StyleSpec from Step 0)"]
+    S3A["suggest_flex_layout<br/>thought prompt + tree prompt<br/>+ StyleSpec markdown + anchor image"]
     S3C["compute_flex_layout<br/>(tree to boxes)"]
     S3S["Strip guards<br/>_strip_component_nodes<br/>_is_placeholder_text"]
     S3V["build_flex_svg<br/>(Kanit embed + effects)"]
 
-    S3 --> S3R --> S3G --> S3A --> S3C --> S3S --> S3V
+    S3 --> S3A --> S3C --> S3S --> S3V
   end
 
   S3V --> S4
@@ -536,18 +542,27 @@ graph TB
   L4["Layer 4: _is_placeholder_text<br/>drop text nodes with '[...]' or visual descriptions<br/>e.g. 'Phone mockup', 'screenshot', 'app UI'"] --> Safe["Clean output"]
 ```
 
-### 9.5 Reference Style Intelligence
+### 9.5 StyleSpec Pipeline (replaces Reference Style Intelligence)
+
+See `docs/superpowers/specs/2026-04-20-style-spec-pipeline-design.md` for the full design and
+`docs/superpowers/plans/2026-04-20-style-spec-pipeline.md` for the implementation plan.
+
+The old dumb-image reference search has been replaced with a structured StyleSpec library.
+Each entry under `backend-python/assets/design_systems/<id>/` contains `overview.md` (embeddable semantic summary), `spec.md` (full A-I design sections), `source.jpg` (visual anchor), and `embedding.json` (precomputed vector). Library index loads once at FastAPI startup (`services/style_library.load_index`).
 
 ```mermaid
 graph TB
-  Img["Input image"] --> Emb["describe_and_embed<br/>(Gemini embedding)"]
-  Emb --> Search["find_similar_refs<br/>(cosine similarity, top-3)"]
-  Search --> RefDB[("assets/ref_images/<br/>embeddings.json")]
-  Search --> Extract["extract_style_guide<br/>(parse ref descriptions)"]
-  Extract --> Guide["Style guide:<br/>color palette<br/>layout patterns<br/>typography traits"]
-  Guide --> FlexPrompt["build_flex_thought_prompt<br/>+ ref images + descriptions"]
-  FlexPrompt --> AI["Gemini vision<br/>matches visual DNA"]
+  Inputs["User inputs<br/>brief + image? + aspect + footer"] --> Plan["plan_target_overview<br/>(AI plan paragraph from all inputs)"]
+  Plan --> Emb["embed_text<br/>(Gemini embedding-001)"]
+  Emb --> Search["style_library.search_top_k<br/>(cosine, top-1)"]
+  Search --> Lib[("design_systems/&lt;id&gt;/")]
+  Search --> Load["load_spec<br/>(StyleSpec dataclass)"]
+  Load --> Downstream["Flows downstream:<br/>Flow B BG gen (translate_spec_to_imagen + anchor)<br/>suggest_flex_layout (spec_md + anchor)<br/>critique_layout (spec_compliance check)"]
 ```
+
+Step 0 runs before any existing step. The StyleSpec returned from search threads through background generation (Flow B only), flex layout, and critique — binding typography, color, effects, and text-image relationship decisions to a single coherent source of truth.
+
+Out of scope (v1): top-3 blending, human-in-loop extraction, conversion feedback loop.
 
 ### 9.6 Critique Gating
 
