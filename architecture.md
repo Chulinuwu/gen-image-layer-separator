@@ -1,15 +1,15 @@
 # Architecture — gen-image-layer-separator
 
-เอกสารนี้อธิบายภาพรวม, โครงสร้างไฟล์, และ workflow ทั้งหมดของระบบแบบละเอียด
-เพื่อใช้เป็น reference สำหรับการ onboard, debug, และ extend ระบบ
+Detailed reference covering the system overview, file layout, and every workflow.
+Use this as the onboarding / debugging / extension guide.
 
 ---
 
-## 1. ภาพรวมระบบ (High-Level Overview)
+## 1. High-Level Overview
 
-ระบบคือ **AI-powered image layer separator + ad campaign generator**
-ใช้ Google Vertex AI (Gemini 3) เป็น AI core, RMBG-2.0 สำหรับ background removal
-และมี pipeline หลายชั้นที่ stream ผลลัพธ์ผ่าน SSE (Server-Sent Events)
+An **AI-powered image layer separator + ad campaign generator**.
+Google Vertex AI (Gemini 3) is the AI core, RMBG-2.0 handles background removal,
+and the main pipeline streams results over SSE (Server-Sent Events).
 
 ```mermaid
 graph TB
@@ -45,13 +45,13 @@ graph TB
 ```
 
 **Key boundaries**
-- Frontend ไม่เรียก Vertex โดยตรง — ทุก AI call เข้า FastAPI
-- RMBG รันใน process เดียวกับ FastAPI (singleton, warmup ตอน startup)
-- `backend/` (Express) เป็น legacy ไม่ใช้แล้ว โค้ดใหม่ทุกอย่างอยู่ `backend-python/`
+- Frontend never calls Vertex directly — every AI call goes through FastAPI.
+- RMBG runs in-process (singleton, warmed up on startup).
+- `backend/` (Express) is legacy; all new work lives in `backend-python/`.
 
 ---
 
-## 2. โครงสร้างไฟล์ (Module Map)
+## 2. Module Map
 
 ```mermaid
 graph TB
@@ -101,32 +101,32 @@ graph TB
 
 ## 3. API Surface
 
-ทุก endpoint register ที่ `backend-python/app/routes/image.py`
-โดย handler อยู่ที่ `backend-python/app/controllers/image.py`
+Endpoints are registered in `backend-python/app/routes/image.py`
+and implemented in `backend-python/app/controllers/image.py`.
 
 ### 3.1 REST Endpoints
 
 | Method | Path | Purpose | Key Output |
 |---|---|---|---|
-| POST | `/process` | วิเคราะห์ component + แยก text layers จาก image | `{ textLayers, visualComponents, backgroundDescription }` |
-| POST | `/generate` | Text-to-image (Imagen) + optional ref images | `{ imageUrl, text, prompt, layers }` |
-| POST | `/add-text` | Suggest campaign layout (ไม่ render) | `{ suggestions, components, ... }` |
-| POST | `/render-text` | Composite text suggestions ลง image | `{ imageUrl }` |
-| POST | `/generate-integrated` | Plan text zones + gen BG (integrated flow) | `{ imageUrl, textZones, bgConstraints }` |
-| POST | `/warp-preview` | Preview warp effect ของ text | `{ svg, width, height }` |
-| POST | `/export-svg` | Export SVG: embed fonts หรือ convert to paths | SVG file |
+| POST | `/process` | Analyze components + separate text layers from an image | `{ textLayers, visualComponents, backgroundDescription }` |
+| POST | `/generate` | Text-to-image (Imagen), optional reference images | `{ imageUrl, text, prompt, layers }` |
+| POST | `/add-text` | Suggest campaign layout (no render) | `{ suggestions, components, ... }` |
+| POST | `/render-text` | Composite text suggestions onto an image | `{ imageUrl }` |
+| POST | `/generate-integrated` | Plan text zones + generate background (integrated flow) | `{ imageUrl, textZones, bgConstraints }` |
+| POST | `/warp-preview` | Preview a text warp effect | `{ svg, width, height }` |
+| POST | `/export-svg` | Export SVG: embed fonts or convert to paths | SVG file |
 
 ### 3.2 SSE Endpoints (streaming)
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/create-campaign` | Full pipeline จาก user-uploaded image |
-| POST | `/create-campaign-integrated` | Full pipeline แบบ gen BG เองจาก text brief |
+| POST | `/create-campaign` | Full pipeline from a user-uploaded image |
+| POST | `/create-campaign-integrated` | Full pipeline with background generated from a text brief |
 
-SSE events ที่ emit (ดูรายละเอียดใน section 5):
+SSE events emitted (details in section 5):
 `progress`, `inpaint_mask`, `inpaint_iteration`, `background_ready`,
 `debug`, `debug_preview`, `iteration_start`, `iteration_end`,
-`critique_complete`, `refining`, `done`, `error`
+`critique_complete`, `refining`, `done`, `error`.
 
 ---
 
@@ -136,30 +136,30 @@ SSE events ที่ emit (ดูรายละเอียดใน section 5)
 
 | Method | Purpose |
 |---|---|
-| `generate_image()` | Text-to-image via Imagen (+ optional ref images) |
-| `render_campaign_image()` | Composite text suggestions onto image |
+| `generate_image()` | Text-to-image via Imagen (optional ref images) |
+| `render_campaign_image()` | Composite text suggestions onto an image |
 | `plan_layout_strategy()` | Plan layout concept + component positions |
-| `suggest_campaign_layout()` | วิเคราะห์ image + หา components + suggest placement |
+| `suggest_campaign_layout()` | Analyze image, detect components, suggest placement |
 | `critique_layout()` | AI Art Director judge (PASS/FAIL + actionable steps) |
-| `separate_layers()` | Detect text layers in image |
+| `separate_layers()` | Detect text layers in an image |
 | `analyze_components()` | Detect visual components (characters, props) |
-| `generate_diecut_components()` | Generate isolated cutout ของแต่ละ component |
-| `inpaint_background()` | ลบ foreground + inpaint พื้นหลัง (Imagen) |
+| `generate_diecut_components()` | Generate isolated cutout of each component |
+| `inpaint_background()` | Remove foreground + inpaint background (Imagen) |
 | `run_rmbg_and_get_bboxes()` | RMBG-2.0 → alpha mask + foreground bboxes |
-| `extract_component_stroke_bboxes()` | Safe zones รอบ die-cut (text avoidance) |
+| `extract_component_stroke_bboxes()` | Safe zones around die-cuts (for text avoidance) |
 | `export_svg()` | Embed fonts / convert to paths |
-| `suggest_flex_layout()` | Gen flex tree (2-stage: thought → tree) |
-| `describe_and_embed()` | Gen description + embedding (สำหรับ ref search) |
+| `suggest_flex_layout()` | Generate flex tree (two-stage: thought → tree) |
+| `describe_and_embed()` | Generate description + embedding for ref search |
 | `plan_text_zones()` | Plan pre-validated zones (integrated flow) |
 
-ทุก call มี `with_retry()` wrapper (3 retries, exp backoff จาก 2s, รองรับ 429/timeout)
+Every call is wrapped in `with_retry()` (3 retries, exp backoff from 2s, handles 429 + timeout).
 
 ### 4.2 `prompts/` — AI prompt templates
 
-หลักการ (per CLAUDE.md):
-- **Generic เสมอ** — ห้ามใส่ content เฉพาะภาพ (เช่น "port scene", "purple padlock")
-- **Universal rules** — rules ต้องเป็น design principle ที่ใช้ได้กับทุกภาพ
-- **AI ต้องตัดสินเอง** ห้ามใช้ lookup table (เช่น "asphalt is dark")
+Rules (per CLAUDE.md):
+- **Always generic** — never include image-specific content (e.g. "port scene", "purple padlock").
+- **Universal rules** — rules must be design principles applicable to any image.
+- **AI must decide** — no lookup tables (e.g. "asphalt is dark").
 
 | File | Exports |
 |---|---|
@@ -177,36 +177,36 @@ SSE events ที่ emit (ดูรายละเอียดใน section 5)
 
 | File | Key API | Purpose |
 |---|---|---|
-| `flex_layout.py` | `compute_flex_layout(tree, canvas_w, canvas_h)` | แปลง flex tree (AI output) → `LayoutBox[]` with absolute pixel coords |
+| `flex_layout.py` | `compute_flex_layout(tree, canvas_w, canvas_h)` | Convert flex tree (AI output) → `LayoutBox[]` with absolute pixel coords |
 | `svg_builder.py` | `build_flex_svg(FlexSVGInput)` | Render boxes → SVG (Kanit embedded, effects) |
-| `text_measure.py` | `measure_text()`, `wrap_text()`, `auto_fit_font_size()` | Pillow-based font metric |
+| `text_measure.py` | `measure_text()`, `wrap_text()`, `auto_fit_font_size()` | Pillow-based font metrics |
 | `text_warp.py` | `render_warped_text(text, warp_config, ...)` | Arc/wave/bulge/flag warp (glyph path transform) |
 | `safe_zones.py` | `compute_safe_zones(obstacles)` | Text-safe regions (avoid component bboxes) |
 | `ref_image_search.py` | `find_similar_refs()`, `extract_style_guide()` | Cosine similarity + style extraction |
 | `contrast.py` | `check_text_contrast(image, boxes)` | WCAG AA 4.5:1 compliance check |
-| `brightness_map.py` | Generate heatmap (dark→bright) | Guide text placement visual debug |
+| `brightness_map.py` | Brightness heatmap (dark→bright) | Visual debug for text placement |
 | `ai_logger.py` | `log_event()`, `trace_ai()` | Append to `logs/ai-trace.md` |
 
 ### 4.4 `constants/` — Tunable values (no magic numbers in logic)
 
-**`pipeline.py`** รวม threshold ทุกตัวที่ pipeline ใช้:
+**`pipeline.py`** centralises every threshold used by the pipeline:
 - Image sizing: `PROCESSING_MAX_W=1500`, `STRATEGY_RESIZE_W=800`, `FULL_BG_MAX_DIM=1500`
 - RMBG: `RMBG_MODEL_SIZE=1024`
 - Die-cut: `DIECUT_MIN_DIM=40`, `DIECUT_MIN_OPAQUE_RATIO=0.05`, `DIECUT_CHAR_PAD=0.1`
 - Alpha thresholds: `FG_DETECT_ALPHA_THRESH=20`, `FG_DETECT_RATIO_THRESH=0.05`, `INPAINT_FG_ALPHA_THRESH=30`, `BBOX_ALPHA_THRESH=50`
 - Keyword lists: `CHARACTER_KEYWORDS`, `PROP_KEYWORDS`, `GRAPHICAL_KEYWORDS`
-- Regex: `PROMO_RE_PATTERN` (จับ "%", "×", Thai numerals, "ต่อ", ...)
+- Regex: `PROMO_RE_PATTERN` (matches "%", "×", Thai numerals, "ต่อ", ...)
 
 **`models.py`**:
 - `SAFETY_OFF` — Gemini safety (all categories OFF)
-- `get_text_model()`, `get_text_model_best()` — อ่าน endpoint จาก env
+- `get_text_model()`, `get_text_model_best()` — read endpoints from env
 
 ---
 
 ## 5. Create-Campaign Pipeline (Core Workflow)
 
-นี่คือ flow หลักของระบบ รันเป็น SSE stream
-อ่าน code ที่ `backend-python/app/controllers/image.py` บรรทัด 1035–1381
+This is the main workflow of the system, streaming via SSE.
+Source: `backend-python/app/controllers/image.py`, lines 1035–1381.
 
 ### 5.1 Pipeline Graph
 
@@ -276,7 +276,7 @@ graph TB
 - Calls: `vertex.run_rmbg_and_get_bboxes(image_bytes)`
 - Out: `masked_buf` (PNG+alpha), `no_go_zones` (bbox list)
 - SSE: `progress { step: "rmbg_analysis" }`
-- **Gate**: `_has_extractable_foreground()` เช็คว่า alpha opaque ratio ≥ `FG_DETECT_RATIO_THRESH` (0.05) ถ้าต่ำกว่า = เป็น BG-only ข้าม step 1B/2
+- **Gate**: `_has_extractable_foreground()` checks whether the alpha opaque ratio ≥ `FG_DETECT_RATIO_THRESH` (0.05). If below that threshold, the image is treated as BG-only and steps 1B / 2 are skipped.
 
 **Step 1B — `_step_component_placement` (:538)**
 - In: `image_bytes`, `mime`, `text`, `no_go_zones`
@@ -285,34 +285,34 @@ graph TB
 - SSE: `progress { step: "initial_analysis" }`
 
 **Step 2 — `_step_diecut_and_inpaint` (:553)**
-- 2 sub-steps:
-  - **Die-cut**: `vertex.generate_diecut_components(...)` เรียก Imagen แบบ per-component ด้วย `build_diecut_prompt(label, description, is_character)` → ได้ cutout บน white BG
-    - Quality gate: drop ถ้า < 40px หรือ opaque < 5%
-    - SSE: `progress { step: "diecut_generation" | "diecut_complete" }`
-  - **Inpaint**: `vertex.inpaint_background(current_source, full_mask, analysis, callback)` → Imagen clean BG
-    - SSE: `inpaint_mask { imageBase64 }`, `inpaint_iteration { iteration, totalIterations, previewUrl }`, `background_ready { previewUrl }`
+Two sub-steps:
+- **Die-cut**: `vertex.generate_diecut_components(...)` calls Imagen per-component using `build_diecut_prompt(label, description, is_character)` → cutout on a white background.
+  - Quality gate: drop if < 40px or opaque < 5%.
+  - SSE: `progress { step: "diecut_generation" | "diecut_complete" }`
+- **Inpaint**: `vertex.inpaint_background(current_source, full_mask, analysis, callback)` → Imagen cleans the background.
+  - SSE: `inpaint_mask { imageBase64 }`, `inpaint_iteration { iteration, totalIterations, previewUrl }`, `background_ready { previewUrl }`
 - Out: `visual_components[]`, `generated_bg_url`, `stack_urls[]`, `stroke_bboxes`
 
 **Step 3 — `_step_flex_layout` (:713)**
-- Pre-step: `ref_image_search.find_similar_refs(embedding, k=3)` + `extract_style_guide(refs)` → inject style DNA เข้า prompt
-- Calls: `vertex.suggest_flex_layout(image, mime, target_text, component_labels, canvas_size, ref_image_buffers, footer_text, ref_descriptions, style_guide, layout_strategy, no_go_zones, image_description, zone_hints, output_format)`
-  - Internally 2 calls: `build_flex_thought_prompt` (reasoning) → `build_flex_tree_prompt` (structured JSON)
-- Transform: `compute_flex_layout(flex_tree, canvas_w, content_h)` → `LayoutBox[]`
-- Footer: ถ้ามี `footer_text` append footer box พร้อม auto `linear-fade bottom rgba(0,0,0,0.7) 15%`
-- Render: `build_flex_svg(FlexSVGInput(...))` → SVG string
-- Out: `svg_overlay`, `flex_result { layoutThought, flexTree, backgroundEffects, ... }`, `computed_boxes`, `flex_boxes`
-- SSE: `progress { step: "text_layout" }`, `debug { step: "flex_layout", flexTree, boxes }`
+- Pre-step: `ref_image_search.find_similar_refs(embedding, k=3)` + `extract_style_guide(refs)` inject style DNA into the prompt.
+- Calls: `vertex.suggest_flex_layout(image, mime, target_text, component_labels, canvas_size, ref_image_buffers, footer_text, ref_descriptions, style_guide, layout_strategy, no_go_zones, image_description, zone_hints, output_format)`.
+  Internally two AI calls: `build_flex_thought_prompt` (reasoning) → `build_flex_tree_prompt` (structured JSON).
+- Transform: `compute_flex_layout(flex_tree, canvas_w, content_h)` → `LayoutBox[]`.
+- Footer: if `footer_text` is provided, append a footer box + auto `linear-fade bottom rgba(0,0,0,0.7) 15%`.
+- Render: `build_flex_svg(FlexSVGInput(...))` → SVG string.
+- Out: `svg_overlay`, `flex_result { layoutThought, flexTree, backgroundEffects, ... }`, `computed_boxes`, `flex_boxes`.
+- SSE: `progress { step: "text_layout" }`, `debug { step: "flex_layout", flexTree, boxes }`.
 
 **Step 4 — `_step_refinement_loop` (:849)**
-Loop สูงสุด `max_iter` รอบ (default = 1):
-1. Composite SVG ลง original image ด้วย cairosvg → preview bytes
-   - SSE: `iteration_start { iteration, maxIterations }`, `debug_preview { previewUrl }`
-2. `contrast.check_text_contrast(image, text_boxes)` → WCAG AA 4.5:1 check ต่อ box
-3. `vertex.critique_layout(image, preview, mime, target_text, style_only=False, has_components, style_guide, layout_thought, contrast_data)` → `{ status, confidence, feedback, actionable_steps }`
-   - SSE: `critique_complete { iteration, status, confidence, feedback, actionableSteps }`
-4. ถ้า `PASS` หรือ `iter == max_iter` → break
-5. ถ้า `FAIL` → สร้าง refined_text = `target_text + "[REFINEMENT FEEDBACK]\n" + feedback + actionable_steps` → เรียก `suggest_flex_layout` + `compute_flex_layout` + `build_flex_svg` ใหม่
-   - SSE: `refining`, `iteration_end { svg_overlay, flexTree, canvasSize, ... }`
+Loop up to `max_iter` iterations (default 1):
+1. Composite SVG onto the original image via cairosvg → preview bytes.
+   - SSE: `iteration_start { iteration, maxIterations }`, `debug_preview { previewUrl }`.
+2. `contrast.check_text_contrast(image, text_boxes)` → WCAG AA 4.5:1 check per box.
+3. `vertex.critique_layout(image, preview, mime, target_text, style_only=False, has_components, style_guide, layout_thought, contrast_data)` → `{ status, confidence, feedback, actionable_steps }`.
+   - SSE: `critique_complete { iteration, status, confidence, feedback, actionableSteps }`.
+4. If `PASS` or `iter == max_iter` → break.
+5. If `FAIL` → build `refined_text = target_text + "[REFINEMENT FEEDBACK]\n" + feedback + actionable_steps` → call `suggest_flex_layout` + `compute_flex_layout` + `build_flex_svg` again.
+   - SSE: `refining`, `iteration_end { svg_overlay, flexTree, canvasSize, ... }`.
 
 **Final `done` event payload**:
 ```json
@@ -343,20 +343,19 @@ Loop สูงสุด `max_iter` รอบ (default = 1):
 
 ## 6. Flex Layout Engine
 
-โค้ด: `backend-python/app/utils/flex_layout.py:174-349`
+Source: `backend-python/app/utils/flex_layout.py:174-349`.
 
-### 6.1 แนวคิด
+### 6.1 Concept
 
-AI ตัดสินใจว่า layout ควรเป็นยังไง โดย output เป็น **flex tree** (คล้าย CSS flexbox tree)
-จากนั้น code แปลงเป็น **absolute box coordinates**
+The AI decides what the layout should look like and emits a **flex tree** (similar to a CSS flexbox tree).
+Code then converts that tree into **absolute box coordinates**.
 
-**ทำไมใช้ flex tree ไม่ใช้ absolute ตรง ๆ**: AI ถนัด reasoning แบบ relational ("body อยู่ใต้ headline, เต็มความกว้าง") มากกว่าให้ระบุ pixel ตรง ๆ
-และ mirror workflow ของ designer จริง (คิดเป็น section → แบ่งพื้นที่)
+**Why a flex tree instead of absolute coords**: the AI reasons relationally ("body sits under headline, full width") far better than in raw pixels, and this mirrors the way real designers think (split the canvas into sections, then fill each one).
 
-### 6.2 Input/Output Shape
+### 6.2 Input / Output Shape
 
 ```typescript
-// INPUT (จาก AI)
+// INPUT (from AI)
 interface FlexNode {
   id: string
   direction: "row" | "column" | null     // null = leaf
@@ -407,45 +406,44 @@ graph TB
   PP --> Out["LayoutBox[]"]
 ```
 
-**Guards (Hallucination Defense Layer)** — ดูข้อ 9
+**Guards (hallucination defense layer)** — see section 9.
 
 ---
 
 ## 7. SVG Builder
 
-โค้ด: `backend-python/app/utils/svg_builder.py:530-640`
-Entry: `build_flex_svg(FlexSVGInput) -> FlexSVGResult`
+Source: `backend-python/app/utils/svg_builder.py:530-640`.
+Entry: `build_flex_svg(FlexSVGInput) -> FlexSVGResult`.
 
-### 7.1 Node Types ที่รองรับ
+### 7.1 Node Types Handled
 
 | Type | Renders | Features |
 |---|---|---|
-| `text` | `<text>` หรือ warp paths | Kanit font (base64 embed), fill, stroke, textShadow (feDropShadow), skewX/Y, perspective, rotateX/Y, warp (arc/wave/bulge/flag), 3D (handled by frontend), clipPath guard |
+| `text` | `<text>` or warp paths | Kanit font (base64 embed), fill, stroke, textShadow (feDropShadow), skewX/Y, perspective, rotateX/Y, warp (arc/wave/bulge/flag), 3D (handled by frontend), clipPath guard |
 | `component` | `<image>` | Auto drop-shadow filter, `preserveAspectRatio="xMidYMid meet"` |
 | `container` | `<rect>` | backgroundColor + opacity, borderRadius (auto for CTA) |
 
 ### 7.2 Font Embedding
 
-โหลด Kanit TTF จาก `backend-python/assets/fonts/`:
-- `Kanit-Regular.ttf` (400), `Kanit-Bold.ttf` (700), `Kanit-Black.ttf` (900)
+Load Kanit TTF files from `backend-python/assets/fonts/`:
+- `Kanit-Regular.ttf` (400), `Kanit-Bold.ttf` (700), `Kanit-Black.ttf` (900).
 
-แล้ว base64 encode → inline เข้า `<defs><style>` เป็น `@font-face`
-→ ทำให้ cairosvg render Thai text ได้ถูกต้อง (ถ้าไม่ embed จะเป็น `[]` boxes)
+Each font is base64-encoded and inlined into `<defs><style>` as `@font-face` rules.
+This is what lets cairosvg render Thai text correctly — without the embed, Thai characters fall back to `[]` boxes.
 
 ### 7.3 Background Effects (canvas-level)
 
 | Type | Output |
 |---|---|
-| `linear-fade` | `<linearGradient>` + rect, รองรับ direction top/bottom/left/right + size (%) |
+| `linear-fade` | `<linearGradient>` + rect, direction top/bottom/left/right, size (%) |
 | `radial-fade` | `<radialGradient>` + rect |
-| `vignette` | edge darkening |
+| `vignette` | Edge darkening |
 
-Gradient ระดับ box: `style.gradientOverlay` เช่น `"to-bottom rgba(0,0,0,0) rgba(0,0,0,0.7)"`
+Box-level gradients go through `style.gradientOverlay`, e.g. `"to-bottom rgba(0,0,0,0) rgba(0,0,0,0.7)"`.
 
 ### 7.4 3D Text
 
-Props `text3dStyle` (extruded/embossed/floating/neon), `text3dDepth`, `text3dBevel`, `text3dMaterial`, `text3dLightAngle`, `text3dColor`, `text3dSideColor` ไม่ได้ render ใน SVG
-ส่งต่อให้ frontend `Text3DRenderer.vue` (Three.js) render
+Props `text3dStyle` (extruded / embossed / floating / neon), `text3dDepth`, `text3dBevel`, `text3dMaterial`, `text3dLightAngle`, `text3dColor`, `text3dSideColor` are **not** rendered in the SVG itself — they are passed to the frontend `Text3DRenderer.vue` (Three.js).
 
 ---
 
@@ -480,30 +478,30 @@ graph TB
 ### 8.2 Tab Responsibilities
 
 **Tab 1 — ImageGenerator.vue**
-- 3 modes:
+- Three modes:
   - `normal` → `POST /generate`
   - `integrated` → `POST /generate-integrated`
   - `full-campaign` → `POST /create-campaign-integrated` (SSE)
-- Emits: `generated`, `integrated-generated`, `campaign-created`, `proceed`
+- Emits: `generated`, `integrated-generated`, `campaign-created`, `proceed`.
 
 **Tab 2 — CampaignLayout.vue**
-- Upload image + text brief → `POST /create-campaign` (SSE)
-- Listens: `progress`, `iteration_end`, `critique_complete`, `done`
-- State: `analysis` (campaign data), `flexTextNodes` (computed from flexTree)
-- Emits: `created`, `proceed`
+- Upload image + text brief → `POST /create-campaign` (SSE).
+- Listens to: `progress`, `iteration_end`, `critique_complete`, `done`.
+- State: `analysis` (campaign data), `flexTextNodes` (computed from flexTree).
+- Emits: `created`, `proceed`.
 
 **Tab 3 — LayerEditor.vue**
-- Canvas editor + 3D text + warp preview
-- Watch `props.campaignData` → extract layers, bg, svg_overlay
-- `POST /render-text` → simple/AI composite
-- `POST /export-svg` → embed-fonts / paths mode
-- ใช้ DOMPurify sanitize SVG ก่อน render
+- Canvas editor + 3D text + warp preview.
+- Watch `props.campaignData` → extract layers, background, svg_overlay.
+- `POST /render-text` → simple / AI composite.
+- `POST /export-svg` → embed-fonts / paths mode.
+- Sanitize SVG with DOMPurify before rendering.
 
 ### 8.3 Shared State Map
 
 | Key | Writer | Reader | Purpose |
 |---|---|---|---|
-| `sharedBackgroundUrl` | Tab 1 | Tab 2, Tab 3 | Generated/ref image URL |
+| `sharedBackgroundUrl` | Tab 1 | Tab 2, Tab 3 | Generated / reference image URL |
 | `sharedCampaignData` | Tab 2 | Tab 3 | Full campaign (flexTree, svg, components) |
 | `sharedTextBrief` | Tab 1 | Tab 2 | Campaign copy |
 | `sharedTextZones` | Tab 1 (integrated mode) | Tab 2 | Pre-planned text zones |
@@ -515,31 +513,31 @@ graph TB
 
 ### 9.1 No Post-Processing Hotfixes on AI Output
 
-**ห้าม** เขียน code มา "แก้" output AI หลังจากได้มาแล้ว (clamp, normalize, scale, force bounds)
-ถ้า output ไม่ดี → แก้ที่ **INPUT** (prompt, data, canvas dim)
+Do **not** write code that "fixes" AI output after the fact (clamping, normalizing, scaling, forcing bounds).
+If the output is wrong, fix the **input** (prompt, pipeline data, canvas dimensions).
 
-**เหตุผล**: hotfix ทำให้ output ดูแปลก (element ซ้อน, ตัด, โดนบีบ) และ mask bug จริง
+**Why**: hotfixes produce ugly results (clipped / overlapping / squashed elements) and mask real bugs.
 
 ### 9.2 No Image-Specific Hardcoding in Prompts
 
-Examples/rules ต้อง **universal** — ใช้กับภาพไหนก็ได้
-ห้ามใส่ content เฉพาะ (เช่น "purple padlock", "port scene")
-ถ้า AI ต้องการ context เฉพาะภาพ → ส่งผ่าน pipeline data (image_description, layout_strategy, no_go_zones) ไม่ใช่ hardcode
+Examples and rules must be **universal** — valid for any image.
+Never include image-specific content (e.g. "purple padlock", "port scene").
+If the AI needs image-specific context, pass it through pipeline data (image_description, layout_strategy, no_go_zones) — do not hardcode it.
 
 ### 9.3 Rules Must Be Universal Design Principles
 
-✅ "ดู brightness จริงของพื้นที่ก่อนเลือก light vs dark classification" (teaches reasoning)
-❌ "asphalt is always dark" (lookup table — ไม่ scale ไปสู่ beach/forest/ฯลฯ)
+✅ "Observe the actual brightness of the area before classifying light vs dark" (teaches reasoning).
+❌ "Asphalt is always dark" (lookup table — does not generalize to beach, forest, etc.).
 
-### 9.4 Hallucination Defense — 4 ชั้น
+### 9.4 Hallucination Defense — 4 layers
 
 ```mermaid
 graph TB
   Input["User input (image + text brief)"] --> L1
-  L1["Layer 1: RMBG Gate<br/>ถ้า foreground &lt; 5% skip component detection"] --> L2
+  L1["Layer 1: RMBG Gate<br/>if foreground &lt; 5% skip component detection"] --> L2
   L2["Layer 2: Prompt Hardening<br/>'only list visually present components'<br/>'do NOT create text nodes for visual elements in brief'"] --> L3
-  L3["Layer 3: _strip_component_nodes<br/>ลบ component node ใน flex tree ถ้าไม่มี die-cut จริง<br/>redistribute height ไปยัง sibling"] --> L4
-  L4["Layer 4: _is_placeholder_text<br/>ลบ text node ที่มี '[...]' หรือ visual descriptions<br/>เช่น 'Phone mockup', 'screenshot', 'app UI'"] --> Safe["Clean output"]
+  L3["Layer 3: _strip_component_nodes<br/>remove component nodes when no die-cut exists<br/>redistribute height to siblings"] --> L4
+  L4["Layer 4: _is_placeholder_text<br/>drop text nodes with '[...]' or visual descriptions<br/>e.g. 'Phone mockup', 'screenshot', 'app UI'"] --> Safe["Clean output"]
 ```
 
 ### 9.5 Reference Style Intelligence
@@ -557,19 +555,19 @@ graph TB
 
 ### 9.6 Critique Gating
 
-`critique.py` มี conditional: ถ้า **ไม่มี** die-cut components, critique prompt จะสั่ง AI **ห้าม** FAIL เพราะขาด visual elements (logo, phone mockup) — judge เฉพาะ **text readability, contrast, hierarchy**
+`critique.py` is conditional: when there are **no** die-cut components, the critique prompt instructs the AI **not** to FAIL for missing visual elements (logo, phone mockup, etc.) and to judge **only** text readability, contrast, and hierarchy.
 
 ### 9.7 Thai Text Rendering
 
-Kanit fonts base64-embedded ใน **2 ที่** (ซ้ำกันโดยตั้งใจ):
+Kanit fonts are base64-embedded in **two places** (intentional duplication):
 1. `vertex.generate_layout_preview()`
 2. `svg_builder.build_flex_svg()`
 
-ถ้าลืม embed → cairosvg render Thai เป็น `[]` boxes → AI critique อ่านไม่ออก → pipeline พัง
+Forgetting the embed means cairosvg renders Thai as `[]` boxes, which breaks the AI critique loop.
 
 ### 9.8 Error Handling
 
-`vertex.with_retry()` ล้อม call AI ทุกตัว: 3 retries, exp backoff (start 2s), รองรับ 429 + timeout
+`vertex.with_retry()` wraps every AI call: 3 retries, exponential backoff (starting at 2s), handles 429 + timeout.
 
 ---
 
@@ -577,29 +575,29 @@ Kanit fonts base64-embedded ใน **2 ที่** (ซ้ำกันโดย�
 
 ### 10.1 AI Trace Log
 
-ทุก AI call (layout reasoning, critique, diecut, ฯลฯ) log ไป `backend-python/logs/ai-trace.md`
-ประกอบด้วย full prompt + raw response + timestamp
+Every AI call (layout reasoning, critique, diecut, etc.) is logged to `backend-python/logs/ai-trace.md`
+with the full prompt + raw response + timestamp.
 
-**หา "Flex Layout Thought" entries** เพื่อดู reasoning ของ AI ก่อน gen tree
+Search for **"Flex Layout Thought"** entries to see the AI's reasoning before it generates the tree.
 
 ### 10.2 SSE Event Stream
 
-Frontend event listener สามารถ debug pipeline ได้ real-time ผ่าน events:
+Frontend listeners can debug the pipeline in real time via events:
 - `progress` — step markers
 - `debug`, `debug_preview` — intermediate data
-- `critique_complete` — AI judgement per iteration
+- `critique_complete` — AI judgment per iteration
 - `done` / `error` — terminal
 
 ### 10.3 Pipeline Breakpoints
 
-| ปัญหา | ดูที่ |
+| Symptom | Where to look |
 |---|---|
-| Component หายไป / เกินมา | Step 1B `suggest_campaign_layout` + Step 2 die-cut quality gate |
-| Text ซ้อน / overflow | Step 3 `compute_flex_layout` guards, ai-trace Flex Layout Thought |
-| Thai เป็น `[]` | `svg_builder.py` font embedding |
-| Contrast fail | `utils/contrast.py` + refinement loop iteration 2 |
-| BG ไม่สะอาด | Step 2 `inpaint_background` + `inpaint_iteration` SSE events |
-| Ref style ไม่ match | `ref_image_search.extract_style_guide` + flex prompt |
+| Components missing / extra | Step 1B `suggest_campaign_layout` + Step 2 die-cut quality gate |
+| Overlapping / overflowing text | Step 3 `compute_flex_layout` guards, ai-trace Flex Layout Thought |
+| Thai renders as `[]` | `svg_builder.py` font embedding |
+| Contrast failures | `utils/contrast.py` + refinement loop iteration 2 |
+| Dirty background | Step 2 `inpaint_background` + `inpaint_iteration` SSE events |
+| Style not matching refs | `ref_image_search.extract_style_guide` + flex prompt |
 
 ---
 
@@ -616,7 +614,7 @@ cd ../frontend
 npm run dev  # port 5173
 ```
 
-### 11.2 Test
+### 11.2 Tests
 
 ```bash
 cd backend-python
@@ -642,27 +640,27 @@ GEMINI_TEXT_ENDPOINT=gemini-2.5-pro
 IMAGEN_EDIT_ENDPOINT=imagen-3.0-capability-001
 ```
 
-**สำคัญ**: `GOOGLE_CLOUD_LOCATION=global` จำเป็นสำหรับ Gemini 3 preview — region อื่นจะ 404
+**Important**: `GOOGLE_CLOUD_LOCATION=global` is required for Gemini 3 preview — any other region returns 404.
 
 ---
 
 ## 12. Technical Notes
 
 ### Gemini Model Fallback
-`generate_image()` fallback chain: `GEMINI_IMAGE_ENDPOINT` (3.1-flash) → `GEMINI_IMAGE_ENDPOINT_2` (3-pro) → `GEMINI_IMAGE_ENDPOINT_3` (2.5-flash)
+`generate_image()` fallback chain: `GEMINI_IMAGE_ENDPOINT` (3.1-flash) → `GEMINI_IMAGE_ENDPOINT_2` (3-pro) → `GEMINI_IMAGE_ENDPOINT_3` (2.5-flash).
 
 ### RMBG-2.0
-- โหลด model ครั้งเดียว ตอน FastAPI startup (lifespan hook)
-- รัน CPU หรือ MPS/CUDA ขึ้นกับ availability
-- Input resize ไป `RMBG_MODEL_SIZE=1024` ก่อน inference
+- Model is loaded once at FastAPI startup (lifespan hook).
+- Runs on CPU or MPS/CUDA depending on availability.
+- Input is resized to `RMBG_MODEL_SIZE=1024` before inference.
 
 ### Flex Tree Robustness
-AI บางครั้งส่ง `gap`/`padding` เป็น string/dict/int — `_safe_int()` ใน flex_layout.py handle ทุก case
+The AI sometimes returns `gap` / `padding` as strings, dicts, or ints — `_safe_int()` in `flex_layout.py` handles every case.
 
 ### Footer Text
-- **Code-controlled, NOT AI** — reserve bottom 10% ของ canvas
-- AI เห็นแค่ content area (canvas_h - footer_height)
-- Auto append `linear-fade bottom rgba(0,0,0,0.7) 15%` เพื่อให้ footer อ่านออก
+- **Code-controlled, not AI** — reserves the bottom 10% of the canvas.
+- The AI only sees the content area (`canvas_h - footer_height`).
+- Auto-appends `linear-fade bottom rgba(0,0,0,0.7) 15%` so the footer stays readable.
 
 ---
 
