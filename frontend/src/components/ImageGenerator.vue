@@ -3,7 +3,7 @@ import { ref, computed } from "vue";
 import CustomDropdown from "./CustomDropdown.vue";
 import CustomInput from "./CustomInput.vue";
 
-const prompt = ref("An office group photo of people looking stressed");
+const prompt = ref("");
 const aspectRatio = ref("3:4");
 const loading = ref(false);
 const result = ref<any>(null);
@@ -15,6 +15,7 @@ const progressSteps = ref<string[]>([]);
 const campaignResult = ref<any>(null);
 const currentStyleStatus = ref<string>("");
 const matchedStyle = ref<{ id: string; overview: string; sourceImageUrl: string } | null>(null);
+const draftedSpec = ref<{ id: string; inspiredBy: string | null; content: string } | null>(null);
 const showBbox = ref(false);
 const previewContainer = ref<HTMLElement | null>(null);
 
@@ -35,12 +36,26 @@ const buttonLabel = computed(() => {
   return "Generate Image";
 });
 
+const promptLabel = computed(() =>
+  generationMode.value === "full-campaign"
+    ? "Visual Scene Hint (optional)"
+    : "Prompt"
+);
+
+const promptPlaceholder = computed(() =>
+  generationMode.value === "full-campaign"
+    ? "Optional - subject/scene direction. Style and composition come from the AI-drafted spec."
+    : "Describe the scene..."
+);
+
 const generateImage = async () => {
   loading.value = true;
   error.value = "";
   result.value = null;
   campaignResult.value = null;
   progressSteps.value = [];
+  matchedStyle.value = null;
+  draftedSpec.value = null;
 
   try {
     if (generationMode.value === "full-campaign" && textBrief.value.trim()) {
@@ -164,6 +179,9 @@ const handleFullCampaignSSE = (event: string, data: any) => {
       if (data.step === "style_planning" || data.step === "style_selection") {
         currentStyleStatus.value = data.message || "";
       }
+      if (data.step === "spec_drafting") {
+        currentStyleStatus.value = data.message || "Drafting campaign spec...";
+      }
       if (data.imageUrl) {
         result.value = { imageUrl: data.imageUrl };
         emit("generated", data.imageUrl);
@@ -175,6 +193,13 @@ const handleFullCampaignSSE = (event: string, data: any) => {
           id: data.id,
           overview: data.overview,
           sourceImageUrl: data.source_image_url,
+        };
+      }
+      if (data.step === "drafted_spec") {
+        draftedSpec.value = {
+          id: data.id,
+          inspiredBy: data.inspired_by,
+          content: data.content,
         };
       }
       break;
@@ -224,13 +249,13 @@ const goToCampaign = () => {
   <div class="card">
     <h2>Generate Background</h2>
     <div class="mb-4">
-      <label class="label">Prompt</label>
+      <label class="label">{{ promptLabel }}</label>
       <CustomInput
         v-model="prompt"
         :multiline="true"
         :rows="3"
         :maxRows="6"
-        placeholder="Describe the scene..."
+        :placeholder="promptPlaceholder"
       />
     </div>
 
