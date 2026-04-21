@@ -593,6 +593,48 @@ graph TB
 
 ## 9. Design Principles & Guardrails
 
+### 9.0 Why This Architecture
+
+Two load-bearing decisions shape this pipeline: the drafted StyleSpec is the single editable source of truth, and layout is produced as a flex tree rather than absolute coordinates. Both exist to make the system steerable, debuggable, and amenable to analytics-driven iteration — the everyday work of running an ad product at scale.
+
+#### StyleSpec as single source of truth
+
+Traditional ad pipelines tend to fall into two traps. The first is hard-coded templates: every style variant requires an engineering change, and design intent lives scattered across prompts, constants, and rendering code. The second is pure LLM freestyle: send a brief, take whatever comes back, accept that no two outputs share a coherent visual language. Neither scales across campaigns, test variants, or analytics feedback loops.
+
+This system takes a third path. Every campaign's entire visual style is captured in a **drafted StyleSpec markdown file**, generated fresh per-campaign by `draft_campaign_spec` in Step 0.5 (see `app/prompts/draft_campaign_spec.py`, `app/utils/style_spec.py`). The draft is inspired by a curated library entry (`assets/design_systems/<id>/spec.md`) but customized to the brief, and it is structured as a human-readable document: palette with hex codes, typography hierarchy, composition archetype, photography direction, component patterns, do's and don'ts.
+
+The key properties:
+
+- **Inspectable**: a designer or analyst can open the drafted spec in any markdown viewer and understand exactly what visual rules govern the campaign.
+- **Field-level editable**: change `## 2. Color Palette` and re-run. No prompt edits, no code changes, no redeploy.
+- **Single sink**: the same spec flows into `generate_image(style_spec=...)` (Flow B BG), `suggest_flex_layout(style_spec_md=...)`, `plan_text_zones(style_spec=...)`, `plan_layout_strategy(style_spec=...)`, and `critique_layout(...)` via `spec_compliance`. One document, one set of rules, zero fragmentation.
+
+What this buys a dynamic, agentic product:
+
+- **Analytics feeds back into design**: when conversion data shows "persona A disengages from dark palettes", the fix is editing the palette section of the spec. No prompt engineering, no code diff review.
+- **Per-audience customization**: running the same brief with "draft the spec but pull palette toward a younger demographic" is one AI call away — the drafting step already supports that kind of instruction without a new code path.
+- **Explainability by construction**: every downstream output decision traces back to a numbered spec section. Debugging becomes "the spec says X; did the output respect that?" rather than "the AI decided something, somehow".
+
+Contrast the alternative. If palette lived hard-coded in one prompt, tone in another, and effects in a third, changing anything means hunting across files and reasoning about their interactions. The spec centralizes the decisions.
+
+#### Flex layout instead of absolute coordinates
+
+LLMs are notoriously unreliable at pixel coordinates. Ask "where does the headline go" and expect `{"x": 48, "y": 72, "width": 640}` and you get hallucinated numbers, off-canvas elements, and spacing that drifts between otherwise-identical variants.
+
+The same LLM reasons very well about layout relationships. "Headline occupies the top band, left-aligned; card spans the left 45% below the headline; CTA pill sits bottom-right" is the same mental model a web designer uses — flex containers, direction, proportional widths, alignment.
+
+This pipeline exploits that asymmetry. The AI emits a **flex tree** (`suggest_flex_layout` in `services/vertex.py`, prompt in `app/prompts/flex_layout.py`) with nodes carrying `direction`, `height: "30%"`, `width: "45%"`, `padding`, `gap`, `alignItems`, `justifyContent` — CSS flexbox vocabulary. Then `compute_flex_layout()` in `app/utils/flex_layout.py` deterministically converts that tree into absolute `LayoutBox[]` pixel coordinates.
+
+What this avoids:
+
+- **Misplaced elements**: the ZONE MAP enforcement block in the flex prompt draws numeric percentages straight from the drafted spec, and the tree's math refuses to produce a headline inside a logo strip.
+- **Inconsistent spacing**: padding and gap are explicit node properties, not guessed per-element.
+- **Aspect-ratio fragility**: converting a 3:4 layout to 16:9 means re-running `compute_flex_layout` on the same tree with a different canvas — no coordinate rescaling, no drift.
+
+#### Why both together
+
+StyleSpec tells the AI **what style** to apply. Flex layout tells the AI **how to structure** the scene. Separating these concerns means style mutations never touch code, layout logic stays deterministic in the flex engine, and defects become isolable: either the spec is wrong (edit spec) or the tree misbehaved (narrow prompt tuning on a single surface). This factorization is what makes future work tractable — analytics-driven spec edits, per-persona variants, A/B testing at the spec field level, even autonomous agents that mutate spec sections in response to performance signals. The architecture is a bet that steering a design system beats steering an LLM.
+
 ### 9.1 No Post-Processing Hotfixes on AI Output
 
 Do **not** write code that "fixes" AI output after the fact (clamping, normalizing, scaling, forcing bounds). If the output is wrong, fix the **input** (prompt, pipeline data, canvas dimensions). Hotfixes produce ugly clipped / squashed elements and mask real bugs.
