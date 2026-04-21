@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-AI-powered image layer separator and campaign generator using Google Vertex AI (Gemini). Allows users to generate backgrounds, create advertising campaigns with AI-driven layout, and separate/edit image layers.
+AI-powered image layer separator and campaign generator built on a **StyleSpec pipeline**: a curated library of design-system specs provides inspiration, an AI drafts a **campaign-specific master spec** from that inspiration in Step 0.5, and the drafted spec becomes the single source of truth that drives background generation, flex layout, critique, and text-zone planning.
 
 ## Architecture
 
@@ -21,35 +21,48 @@ AI-powered image layer separator and campaign generator using Google Vertex AI (
 ```
 backend-python/
   app/
-    main.py                       # FastAPI app entry, CORS, lifespan, static files
-    config.py                     # Pydantic settings (env vars)
-    constants/                    # Centralized config values
-      pipeline.py                 # All thresholds, magic numbers, keyword lists
-      models.py                   # SAFETY_OFF, model selection (get_text_model, get_text_model_best)
-    prompts/                      # AI prompt templates (one file per domain)
-      campaign_layout.py          # suggest_campaign_layout prompt + JSON schema
-      flex_layout.py              # Flex tree prompt + rules
-      critique.py                 # Art director critique prompt
+    main.py                       # FastAPI entry, CORS, lifespan (loads style library), static files
+    config.py                     # Pydantic settings (env vars, incl. gemini_pro_endpoint)
+    constants/
+      pipeline.py                 # Thresholds, keyword lists, STYLE_SPEC_DIR, STYLE_EMBED_MODEL, STYLE_SPEC_TOP_K
+      models.py                   # SAFETY_OFF, get_text_model(), get_text_model_best(), get_text_model_pro()
+    prompts/
+      campaign_layout.py          # suggest_campaign_layout prompt
+      flex_layout.py              # Flex tree prompt (consumes style_spec_md + ZONE MAP / COMPONENT enforcement)
+      critique.py                 # Art director critique (emits spec_compliance)
       diecut.py                   # Die-cut generation prompt
-      layout_strategy.py          # Layout planning prompt
+      layout_strategy.py          # Layout planning (accepts drafted spec)
       render_campaign.py          # Render campaign image prompt
-      separate_layers.py          # Layer separation + component analysis prompts
+      separate_layers.py          # Layer separation + component analysis
       describe.py                 # Image description prompt
+      text_zone_planner.py        # Text zone planning (accepts drafted spec)
+      plan_target_overview.py     # Step 0 target-overview prompt (CoT)
+      draft_campaign_spec.py      # Step 0.5 drafting prompt (CoT)
+      translate_spec_to_imagen.py # BG prompt translator (CoT)
+      extract_style_spec.py       # Offline extraction rubric
     controllers/
-      image.py                    # SSE pipeline, request handlers, orchestration
+      image.py                    # SSE pipeline, _step_plan_and_match, orchestration
     services/
-      vertex.py                   # GenAI client, all AI methods (generate, layout, diecut, inpaint, RMBG)
+      vertex.py                   # GenAI client, all AI methods
+      style_library.py            # In-memory style-spec index + cosine top-k
     utils/
-      flex_layout.py              # Flex tree → absolute box computation
-      svg_builder.py              # SVG generation with Kanit font embedding
-      text_measure.py             # Font measurement (Pillow-based)
+      flex_layout.py              # Flex tree -> absolute box computation
+      svg_builder.py              # SVG generation with Kanit font embedding, borders, text gradients
+      text_measure.py             # Font measurement (Pillow)
+      text_warp.py                # Glyph-path warp
       safe_zones.py               # Bbox-based safe zone computation
-      ai_logger.py                # AI trace logging to logs/ai-trace.md
-      ref_image_search.py         # Reference image similarity (cosine) + style guide extraction
+      style_spec.py               # StyleSpec dataclass, load_spec, build_drafted_spec, detect_requires_psd_3d
+      contrast.py                 # WCAG SC 1.4.3 per-box contrast (on composited preview)
+      brightness_map.py           # Brightness heatmap
+      ai_logger.py                # trace_ai + extract_output_block
   assets/
-    fonts/                        # Kanit TTF files (Regular, Bold, Black)
+    fonts/                        # Kanit TTF files
+    design_systems/               # StyleSpec library (<id>/overview.md + spec.md + source.jpg + embedding.json)
+      index.json                  # Cosine-search index (loaded at startup)
     Ref_Footer/                   # Footer text templates
-  uploads/                        # Multer-style file storage
+  scripts/
+    rebuild_index.py              # Rebuild design_systems/index.json
+  uploads/                        # Generated image storage
   logs/                           # AI trace logs
   tests/                          # pytest test suite
   pyproject.toml                  # Dependencies + project config
@@ -57,39 +70,47 @@ backend-python/
 
 ### Key Concepts
 
-**Campaign render pipeline** (`create-campaign` SSE endpoint):
-1. **RMBG prescan** — Background removal to detect foreground subjects
-2. **Foreground gate** — If <5% opaque pixels → skip component extraction (background-only image)
-3. **Component placement** — AI identifies visual components in image (NOT from brief text)
-4. **Die-cut** — Extract components with quality gate (min 40px, >5% opaque)
-5. **Flex layout** — AI generates a flex tree → `compute_flex_layout()` converts to absolute boxes
-6. **SVG render** — `build_flex_svg()` generates SVG with embedded Kanit fonts
-7. **Critique loop** — AI Art Director reviews preview, optionally refines
+**Campaign pipeline** (`/create-campaign` + `/create-campaign-integrated` SSE endpoints):
+1. **Step 0 — Plan + Match**: `plan_target_overview` (CoT) -> `embed_text` -> `style_library.search_top_k` (cosine, top-1 against `design_systems/index.json`).
+2. **Step 0.5 — Draft Campaign Spec**: `draft_campaign_spec` (CoT) converts the library spec into a campaign-specific master spec; `build_drafted_spec` sets `inspired_by_library_id` and runs `detect_requires_psd_3d` on the drafted text.
+3. **Step 1 — BG Generation**:
+   - Flow A (user image): RMBG prescan + component placement.
+   - Flow B (text brief): `generate_image(style_spec=drafted_spec)` -> internally calls `translate_spec_to_imagen_prompt` (CoT) -> Imagen. **No RMBG in Flow B.**
+4. **Step 2 — Die-cut + Inpaint** (Flow A only): quality gate (min 40px, >5% opaque).
+5. **Step 3 — Flex Layout**: `suggest_flex_layout` consumes drafted spec, enforces ZONE MAP + COMPONENT PATTERN; `compute_flex_layout` -> absolute boxes; `build_flex_svg` -> SVG.
+6. **Step 4 — Critique + Refinement loop**: AI Art Director emits `spec_compliance: {pass, violations}`; contrast check runs against composited preview.
 
-**Prompt editing:** All prompts are in `app/prompts/`. Each file exports a builder function. Change prompts there, NOT in vertex.py.
+**Prompt editing:** All prompts live in `app/prompts/`. Change prompts there, NOT in `vertex.py`.
 
-**Config/thresholds:** All magic numbers are in `app/constants/pipeline.py`. Keywords shared between services and controllers are defined once there.
+**Config/thresholds:** All magic numbers are in `app/constants/pipeline.py`. StyleSpec constants: `STYLE_SPEC_DIR`, `STYLE_EMBED_MODEL`, `STYLE_SPEC_TOP_K`.
 
 **Flex layout engine** (`app/utils/flex_layout.py`):
-- Converts flex tree (from AI) → `LayoutBox` list with absolute pixel positions
-- Handles AI returning gap/padding as string, dict, or int (hardened `_safe_int`)
-- Enforces min 40px height for text nodes
-- `_strip_component_nodes()` removes hallucinated component nodes and redistributes their height
+- Converts flex tree -> `LayoutBox[]` with absolute pixel positions.
+- `_safe_int` handles gap/padding as string, dict, or int.
+- `_strip_component_nodes` removes hallucinated components and redistributes height.
+- Supports `borderWidth` / `borderColor` / `textGradient` style props.
 
 **SVG builder** (`app/utils/svg_builder.py`):
-- `build_flex_svg()` generates SVG with Kanit font base64-embedded via `@font-face`
-- Required for cairosvg to render Thai text correctly
+- `build_flex_svg()` with Kanit font base64-embedded via `@font-face` — required for Thai text.
+- Renders borders, text gradients, background fades.
 
 ### Key Service Methods (`vertex.py`)
 
-- `generate_image()` — Image generation via Gemini (3.1-flash → 3-pro → 2.5-flash fallback)
+- `plan_target_overview()` — Step 0 plan paragraph (CoT, uses `get_text_model_pro()`)
+- `draft_campaign_spec()` — Step 0.5 campaign-specific spec (CoT, uses `get_text_model_pro()`)
+- `translate_spec_to_imagen_prompt()` — CoT translator used inside `generate_image`
+- `embed_text()` — Gemini `embedding-001` for cosine search
+- `generate_image()` — Gemini fallback chain (3.1-flash -> 3-pro -> 2.5-flash). Accepts `style_spec`; **does NOT pass library `source.jpg` as an Imagen reference**.
 - `suggest_campaign_layout()` — AI component/text placement (0-1000 coords)
-- `suggest_flex_layout()` — AI generates flex tree for SVG rendering
-- `critique_layout()` — AI Art Director critique with PASS/FAIL
-- `generate_diecut_components()` — Extract/generate die-cut components with quality gate
-- `inpaint_background()` — AI background cleanup via Imagen
-- `run_rmbg_and_get_bboxes()` — RMBG-2.0 background removal + bbox detection
-- `with_retry()` — Exponential backoff for 429/timeout (3 retries)
+- `suggest_flex_layout()` — Flex tree generation; consumes `style_spec_md` + ZONE MAP / COMPONENT enforcement
+- `critique_layout()` — AI Art Director; emits `spec_compliance: {pass, violations}`
+- `plan_text_zones()` / `plan_layout_strategy()` — accept drafted spec as source of truth
+- `generate_diecut_components()` — Imagen per-component (Flow A)
+- `inpaint_background()` — Imagen BG cleanup (Flow A)
+- `run_rmbg_and_get_bboxes()` — RMBG-2.0 (Flow A only)
+- `with_retry()` — 3 retries, exp backoff from 2s, handles 429/timeout
+
+The three CoT methods log the **full** `## THINK` + `## OUTPUT` via `trace_ai`; downstream consumers receive only `## OUTPUT` via `extract_output_block()` in `ai_logger.py`.
 
 ### Development Commands
 
@@ -98,6 +119,7 @@ cd backend-python
 source venv/bin/activate
 python -m uvicorn app.main:app --reload --port 5001   # dev server
 python -m pytest tests/ -v                              # run tests
+python -m scripts.rebuild_index                         # rebuild StyleSpec index after editing library entries
 ```
 
 ### Environment Variables (`backend-python/.env`)
@@ -117,8 +139,11 @@ GEMINI_IMAGE_ENDPOINT=gemini-3.1-flash-image-preview
 GEMINI_IMAGE_ENDPOINT_2=gemini-3-pro-image-preview
 GEMINI_IMAGE_ENDPOINT_3=gemini-2.5-flash-image
 GEMINI_TEXT_ENDPOINT=gemini-2.5-pro
+GEMINI_PRO_ENDPOINT=gemini-3.1-pro-preview   # heavy-thinking for Step 0 + Step 0.5
 IMAGEN_EDIT_ENDPOINT=imagen-3.0-capability-001
 ```
+
+Note: if `python-dotenv` chokes on the multi-line private-key block, drop the service account JSON into `backend-python/credentials.json` instead. The config layer falls back to that file. Both `.env` and `credentials.json` are gitignored.
 
 ## Frontend (`frontend/`)
 
@@ -126,76 +151,96 @@ IMAGEN_EDIT_ENDPOINT=imagen-3.0-capability-001
 
 ```
 frontend/src/
-  App.vue                    # Tab router: generate → campaign → editor
+  App.vue                    # Tab router: generate -> campaign -> editor
   components/
-    ImageGenerator.vue       # Tab 1: Background generation
-    CampaignLayout.vue       # Tab 2: Campaign creation (calls /create-campaign)
-    LayerEditor.vue          # Tab 3: Canvas-based layer editor
-    AIRefinementPreview.vue  # AI preview overlay within editor
+    ImageGenerator.vue       # Tab 1: Background generation (handles style_planning / spec_drafting / style_selection / style_spec SSE events)
+    CampaignLayout.vue       # Tab 2: Campaign creation (/create-campaign)
+    LayerEditor.vue          # Tab 3: Canvas editor (sends target_width / target_height to /render-text)
+    AIRefinementPreview.vue  # Shows matched style chip + anchor image
+    Text3DRenderer.vue       # Three.js 3D text (triggered when outputFormat = psd-3d)
 ```
 
-**State flow:** `App.vue` owns `sharedBackgroundUrl` and `sharedCampaignData`, passing them down as props.
+**State flow:** `App.vue` owns `sharedBackgroundUrl`, `sharedCampaignData`, `sharedTextBrief`, `sharedTextZones`, `sharedOutputFormat`.
 
 ## Design Principles
 
 ### No post-processing hotfixes on AI layout output
-Do NOT use code to "fix" AI-generated layout after the fact (clamping positions, normalizing height%, scaling boxes, forcing elements into bounds). These hotfixes produce ugly results. If the AI output is wrong, fix the INPUT (prompt, data sent to AI, canvas dimensions) so the AI generates correct output in the first place. The flex layout engine should faithfully render what the AI decides -- it should not second-guess or modify the AI's decisions.
+Do NOT write code that "fixes" AI-generated layout after the fact (clamping, normalizing, scaling, forcing bounds). If the output is wrong, fix the INPUT (prompt, pipeline data, canvas dimensions). Hotfixes produce ugly clipped / squashed elements and mask real bugs.
 
 ### No image-specific hardcoding in prompts
-Prompt examples and instructions in `app/prompts/` must be GENERIC -- they should work for any input image, not just one specific test case. Do NOT put image-specific content (e.g. "port/logistics scene", "purple padlock", specific Thai text) in prompt examples. If the AI needs context about the current image, that comes from the pipeline data (image_description, layout_strategy, no_go_zones), not from hardcoded examples. Examples should illustrate the FORMAT and STRUCTURE of expected output, using placeholder descriptions like "body text section" or "a busy scene with objects".
+Prompt examples must be GENERIC. Image-specific context flows through pipeline data (image_description, layout_strategy, no_go_zones, drafted spec) — never hardcoded. Placeholder descriptions like "body text section" illustrate FORMAT, not content.
 
-### Prompt rules must be universal design principles, not image-specific
-Rules in prompts (e.g. background classification, font size minimums, color guidelines) must apply to ALL images universally. They are graphic design best practices, not fixes for one test case. Valid rules teach the AI HOW to decide, not WHAT to decide. Example: "look at the actual brightness of the area to classify light vs dark" (teaches reasoning) is good. "Asphalt is always dark" (hardcodes a surface type) is bad -- it doesn't scale to beaches, forests, or other scenes. The AI should observe the image and decide, not follow a lookup table of surface types.
+### Prompt rules must be universal design principles
+Rules must apply to ALL images universally. Teach the AI HOW to decide, not WHAT to decide. "Observe actual brightness before classifying light vs dark" is valid; "asphalt is always dark" is a lookup table that does not generalise.
+
+### Drafted spec is the single source of truth
+The library under `assets/design_systems/` is inspiration only. In Step 0.5 the AI drafts a campaign-specific master spec; from that point on, all downstream (BG gen, flex layout, critique, text-zone planner, layout strategy) consumes the drafted spec. No downstream step re-reads the library.
+
+### Chain-of-thought for creative AI output
+`plan_target_overview`, `draft_campaign_spec`, and `translate_spec_to_imagen_prompt` require `## THINK` reasoning before `## OUTPUT`. Full reasoning is preserved in `ai-trace.md` for debugging; downstream methods use `extract_output_block()` to get the clean OUTPUT only.
+
+### No source-image copy via Imagen
+The library's `source.jpg` is a style anchor for humans (frontend chip) and the flex-layout prompt. It is NEVER passed as an Imagen input — Imagen would copy the reference ad (composition, palette, subjects). Style transfer happens through the drafted spec's textual rules.
+
+### Measure contrast on composited preview
+`check_text_contrast` must receive the cairosvg-composited preview, not the raw BG image — otherwise container backgrounds (rects, gradients) are invisible to the check. WCAG SC 1.4.3 per-box thresholds: 3.0 for large text (>= 24px, or >= 18.66px bold); 4.5 otherwise.
 
 ## Debugging & Inspection
 
 ### AI Trace Logs
-All AI calls (layout reasoning, critique, diecut, etc.) are logged to `backend-python/logs/ai-trace.md`. Check here to inspect what the AI decided and why -- includes full prompts and raw responses. Look for "Flex Layout Thought" entries to see the AI's placement reasoning vs the actual flex tree it generated.
+All AI calls are logged to `backend-python/logs/ai-trace.md` (full prompt + raw response + timestamp). The three CoT stages preserve the complete `## THINK` + `## OUTPUT` block:
+- `Plan Target Overview` (Step 0)
+- `Draft Campaign Spec` (Step 0.5)
+- `Translate Spec to Imagen Prompt` (Flow B BG generation)
+
+Other stages: `Step 0 Match`, `Step 0 Drafted Spec`, `Layout Strategy`, `Flex Layout Thought`, `Flex Layout Tree`, `Campaign Layout`, `Die-cut`, `Inpaint`, `Critique`, `Text Zone Planner`.
 
 ### Campaign Pipeline Flow
-The campaign creation SSE endpoint (`create_campaign` in `controllers/image.py`) runs this pipeline:
-1. RMBG prescan -> foreground detection + bounding boxes
-2. Component placement -> AI identifies visual components
-3. Die-cut & inpaint -> extract components + clean background
-4. Layout strategy -> AI plans layout concept
-5. **Flex layout** -> AI generates flex tree (`prompts/flex_layout.py`) -> `compute_flex_layout()` converts to absolute positions -> `build_flex_svg()` renders SVG
-6. Refinement loop (optional) -> AI critique + re-layout
+`_step_plan_and_match` in `controllers/image.py` runs before both `/create-campaign` and `/create-campaign-integrated`:
+1. **Step 0** — plan + embed + cosine match (top-1 library entry)
+2. **Step 0.5** — draft campaign-specific spec + `detect_requires_psd_3d`
+3. **Step 1** — BG: Flow A (RMBG + component placement) OR Flow B (spec-driven Imagen, no RMBG)
+4. **Step 2** — (Flow A only) die-cut + inpaint
+5. **Step 3** — flex layout (consumes drafted spec, ZONE MAP enforcement)
+6. **Step 4** — critique + refinement loop (spec_compliance + WCAG SC 1.4.3 per-box contrast on composited preview)
 
-To debug layout issues, check step 5 in the trace logs.
+To debug layout issues, check step 5 trace entries. To debug wrong library match, check `Plan Target Overview` + `Step 0 Match`. To debug BG not matching spec, check `Translate Spec to Imagen Prompt`.
 
 ## Important Technical Notes
 
 ### Gemini Model Location
 Gemini 3 preview models **require** `location="global"`. Other regions cause 404 errors.
 
+### StyleSpec Library
+`backend-python/assets/design_systems/<id>/` holds `overview.md` (embeddable summary), `spec.md` (full A-I design sections), `source.jpg` (visual anchor), `embedding.json` (precomputed vector). The index (`design_systems/index.json`) is loaded once at startup via `style_library.load_index()` in `main.py` lifespan. Rebuild with `python -m scripts.rebuild_index` after editing library entries. If the library is missing, the pipeline continues without a StyleSpec (graceful degradation).
+
+For full design rationale see `docs/superpowers/specs/2026-04-20-style-spec-pipeline-design.md`.
+
 ### Background Removal
-Python backend uses **RMBG-2.0** (transformers + PyTorch) locally. Model loaded once, reused as singleton.
+Python backend uses **RMBG-2.0** (transformers + PyTorch) locally. Model loaded once, singleton. **Flow B no longer runs RMBG prescan** — drafted spec drives zone planning.
 
 ### Component & Placeholder Hallucination Prevention
-Four-layer defense against AI inventing components or placeholder text:
-1. **RMBG gate** — If foreground <5% → skip component detection entirely
-2. **Prompt hardening** — Prompts explicitly say "only list visually present components" and "do NOT create text nodes for visual elements described in the brief"
-3. **Code strip (components)** — `_strip_component_nodes()` removes any component nodes from flex tree when no die-cuts available, redistributes height to siblings
-4. **Code strip (placeholder text)** — `_is_placeholder_text()` removes text nodes containing `[...]` bracket patterns or visual element descriptions (e.g. "Phone mockup", "screenshot", "app UI")
+Four-layer defense:
+1. **RMBG gate** (Flow A) — foreground <5% -> skip component detection
+2. **Prompt hardening** — "only list visually present components"; "do NOT create text nodes for visual elements in brief"
+3. **`_strip_component_nodes`** — removes component nodes when no die-cuts exist
+4. **`_is_placeholder_text`** — drops text nodes with `[...]` brackets or visual descriptions
 
-### Reference Style Intelligence
-The pipeline enriches AI layout generation with structured style information from reference images:
-1. **Embedding search** — `find_similar_refs()` finds top-3 similar reference ads via cosine similarity
-2. **Style guide extraction** — `extract_style_guide()` parses ref descriptions to extract color palette, layout patterns, typography traits
-3. **Prompt enrichment** — `suggest_flex_layout()` sends ref images + their text descriptions + extracted style guide to AI
-4. **Style matching rules** — Prompt instructs AI to match the visual DNA (colors, typography, layout patterns, mood) of references
+### psd-3d Auto-Elevation
+When drafted spec mentions chrome/3D keywords (`3d chrome`, `chrome extruded`, `pbr metallic`, `text3dstyle`, ...), `detect_requires_psd_3d()` flags the spec; controller overrides user's `outputFormat` to `psd-3d` and emits SSE `style_format_override`. The frontend then renders 3D via `Text3DRenderer.vue`.
 
-Key files: `app/utils/ref_image_search.py` (search + style extraction), `app/prompts/flex_layout.py` (style-aware prompt), `app/services/vertex.py` (wiring)
+### Aspect Ratio Preservation on Render
+Tab 3 Save & Render sends `target_width` + `target_height` from `campaignData.canvasSize`. The `/render-text` controller's `_enforce_target_dims()` helper center-crops + resizes the final composite so the deliverable matches the original campaign canvas exactly.
 
 ### Critique Prompt
-`app/prompts/critique.py` — When no die-cut components exist, critique prompt explicitly instructs AI to NOT fail for missing visual elements (logos, phone mockups, etc.) and to judge ONLY text readability, contrast, and hierarchy.
+`app/prompts/critique.py` — When no die-cut components exist, critique instructs AI to NOT FAIL for missing visual elements and to judge only text readability, contrast, and hierarchy. `spec_compliance` is evaluated regardless.
 
 ### Thai Text Rendering
-SVG preview embeds Kanit fonts as base64 `@font-face` in both:
-- `generate_layout_preview()` in vertex.py
-- `build_flex_svg()` in svg_builder.py
+SVG embeds Kanit fonts as base64 `@font-face` in two places:
+- `generate_layout_preview()` in `vertex.py`
+- `build_flex_svg()` in `svg_builder.py`
 
-Without this, cairosvg renders Thai as `[]` boxes, breaking the AI critique loop.
+Without the embed, cairosvg renders Thai as `[]` boxes and breaks the AI critique loop.
 
 ### Error Handling Pattern
-`with_retry()` handles 429 (rate limit) and timeout errors with exponential backoff (3 retries, starts at 2s).
+`with_retry()` handles 429 + timeout with exponential backoff (3 retries, starts at 2s).
