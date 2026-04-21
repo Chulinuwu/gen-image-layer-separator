@@ -1602,6 +1602,7 @@ class VertexService:
         footer_text: str | None,
     ) -> str:
         from app.prompts.plan_target_overview import build_plan_overview_prompt
+        from app.utils.ai_logger import extract_output_block
 
         prompt = build_plan_overview_prompt(
             brief=brief,
@@ -1621,6 +1622,7 @@ class VertexService:
             )
         )
         result = (response.text or "").strip()
+        output = extract_output_block(result)
         trace_ai(
             "Plan Target Overview",
             prompt,
@@ -1630,11 +1632,12 @@ class VertexService:
                 "has_user_image": user_image is not None,
                 "aspect_ratio": aspect_ratio,
                 "has_footer": bool(footer_text),
-                "overview_len": len(result),
+                "overview_len": len(output),
+                "raw_len": len(result),
                 "model": get_text_model_pro(),
             },
         )
-        return result
+        return output
 
     async def draft_campaign_spec(
         self,
@@ -1647,6 +1650,7 @@ class VertexService:
         library_id: str,
     ) -> str:
         from app.prompts.draft_campaign_spec import build_draft_spec_prompt
+        from app.utils.ai_logger import extract_output_block
 
         prompt = build_draft_spec_prompt(
             brief=brief,
@@ -1664,6 +1668,7 @@ class VertexService:
             )
         )
         result = (response.text or "").strip()
+        output = extract_output_block(result)
         trace_ai(
             "Draft Campaign Spec",
             prompt,
@@ -1674,11 +1679,12 @@ class VertexService:
                 "brief_len": len(brief),
                 "visual_hint": visual_hint or "<empty>",
                 "aspect_ratio": aspect_ratio,
-                "drafted_spec_len": len(result),
+                "drafted_spec_len": len(output),
+                "raw_len": len(result),
                 "model": get_text_model_pro(),
             },
         )
-        return result
+        return output
 
     async def embed_text(self, text: str) -> list[float]:
         response = await with_retry(
@@ -1694,6 +1700,7 @@ class VertexService:
         self, *, spec_md: str, brief: str
     ) -> str:
         from app.prompts.translate_spec_to_imagen import build_translate_prompt
+        from app.utils.ai_logger import extract_output_block
 
         prompt = build_translate_prompt(spec_md=spec_md, brief=brief)
         response = await with_retry(
@@ -1704,6 +1711,7 @@ class VertexService:
             )
         )
         result = (response.text or "").strip()
+        output = extract_output_block(result)
         trace_ai(
             "Translate Spec to Imagen Prompt",
             prompt,
@@ -1711,11 +1719,12 @@ class VertexService:
             details={
                 "spec_md_len": len(spec_md),
                 "brief_len": len(brief),
-                "imagen_prompt_len": len(result),
+                "imagen_prompt_len": len(output),
+                "raw_len": len(result),
                 "model": get_text_model_best(),
             },
         )
-        return result
+        return output
 
 
 vertex_service = VertexService()

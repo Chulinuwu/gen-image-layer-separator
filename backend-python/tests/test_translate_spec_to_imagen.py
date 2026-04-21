@@ -87,6 +87,14 @@ def test_prompt_includes_scene_relevant_sections_numeric_format():
     assert "Agent Prompt Guide" not in p
 
 
+def test_prompt_asks_for_think_then_output_blocks():
+    p = build_translate_prompt(spec_md=SAMPLE_SPEC_NUMERIC, brief="x")
+    assert "## THINK" in p
+    assert "## OUTPUT" in p
+    assert "Before" in p or "before" in p
+    assert p.index("## THINK") < p.index("## OUTPUT")
+
+
 def test_prompt_requests_single_imagen_prompt_output():
     p = build_translate_prompt(spec_md=SAMPLE_SPEC_NUMERIC, brief="x")
     assert "single" in p.lower() or "one " in p.lower()

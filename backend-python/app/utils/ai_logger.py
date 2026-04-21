@@ -36,6 +36,21 @@ def trace_ai(stage: str, prompt: str, response: str | None = None, details: dict
         print(f"[AI-TRACE] Failed to write to log file: {err}")
 
 
+def extract_output_block(response_text: str) -> str:
+    """Extract the content after `## OUTPUT` marker from a chain-of-thought response.
+
+    If the marker is absent (older AI responses that didn't comply), return the full
+    response stripped of any leading `## THINK` section and whitespace -- graceful degradation.
+    """
+    if "## OUTPUT" in response_text:
+        return response_text.split("## OUTPUT", 1)[1].lstrip("\n :").strip()
+    if response_text.strip().startswith("## THINK"):
+        parts = response_text.split("\n\n", 1)
+        if len(parts) == 2:
+            return parts[1].strip()
+    return response_text.strip()
+
+
 def log_event(event: str, message: str, data: dict | None = None) -> None:
     _ensure_log_dir()
 

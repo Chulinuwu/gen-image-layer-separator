@@ -54,6 +54,17 @@ def test_prompt_instructs_to_resolve_placeholders():
     assert "placeholder" in p.lower() or "[..." in p
 
 
+def test_prompt_asks_for_think_then_output_blocks():
+    p = build_draft_spec_prompt(
+        brief="x", visual_hint="", aspect_ratio="1:1", footer_text=None,
+        library_spec_md=LIBRARY_SPEC, library_id="x",
+    )
+    assert "## THINK" in p
+    assert "## OUTPUT" in p
+    assert "Before" in p or "before" in p
+    assert p.index("## THINK") < p.index("## OUTPUT")
+
+
 def test_prompt_handles_optional_visual_hint():
     p_without = build_draft_spec_prompt(
         brief="x", visual_hint="", aspect_ratio="1:1", footer_text=None,
