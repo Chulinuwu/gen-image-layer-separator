@@ -1566,6 +1566,16 @@ async def create_campaign_integrated(request: Request, body: dict):
                 yield e
             events.clear()
 
+            # RMBG prescan on generated BG so flex layout avoids the subject
+            try:
+                _masked_buf, no_go_zones = await _step_rmbg_prescan(image_buffer, send_sse)
+            except Exception as rmbg_err:
+                print(f"[Flow B RMBG] prescan failed: {rmbg_err}")
+                no_go_zones = []
+            for e in events:
+                yield e
+            events.clear()
+
             # Step 3: Describe image + reference lookup
             img = Image.open(BytesIO(image_buffer))
             canvas_w, canvas_h = img.size
@@ -1640,7 +1650,7 @@ async def create_campaign_integrated(request: Request, body: dict):
                     origin=origin,
                     send_sse=send_sse,
                     layout_strategy=layout_hint if layout_hint else None,
-                    no_go_zones=None,
+                    no_go_zones=no_go_zones or None,
                     image_description=image_description,
                     zone_hints=text_zones or None,
                     output_format=effective_output_format,
