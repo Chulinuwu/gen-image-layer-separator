@@ -1592,7 +1592,7 @@ class VertexService:
             lambda: self.client.aio.models.generate_content(
                 model=get_text_model_pro(),
                 contents=parts,
-                config=SAFETY_OFF,
+                config=genai_types.GenerateContentConfig(safety_settings=SAFETY_OFF),
             )
         )
         result = (response.text or "").strip()
@@ -1635,7 +1635,7 @@ class VertexService:
             lambda: self.client.aio.models.generate_content(
                 model=get_text_model_pro(),
                 contents=[prompt],
-                config=SAFETY_OFF,
+                config=genai_types.GenerateContentConfig(safety_settings=SAFETY_OFF),
             )
         )
         result = (response.text or "").strip()
@@ -1675,7 +1675,7 @@ class VertexService:
             lambda: self.client.aio.models.generate_content(
                 model=get_text_model_best(),
                 contents=[prompt],
-                config=SAFETY_OFF,
+                config=genai_types.GenerateContentConfig(safety_settings=SAFETY_OFF),
             )
         )
         result = (response.text or "").strip()
