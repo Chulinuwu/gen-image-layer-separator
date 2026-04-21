@@ -54,10 +54,43 @@ def _sample_avg_color(img: Image.Image, x: int, y: int, w: int, h: int) -> tuple
     return (r, g, b)
 
 
+# WCAG 2.1 SC 1.4.3 thresholds. Large text: >= 24px regular OR >= 18.66px bold (weight >= 700).
+# Reference: https://www.w3.org/TR/WCAG21/#contrast-minimum
+_WCAG_AA_NORMAL = 4.5
+_WCAG_AA_LARGE = 3.0
+_WCAG_AAA_NORMAL = 7.0
+_WCAG_AAA_LARGE = 4.5
+_LARGE_TEXT_PX = 24.0
+_LARGE_BOLD_PX = 18.66
+
+
+def _is_large_text(font_size_px: float | None, font_weight: int | str | None) -> bool:
+    if not font_size_px:
+        return False
+    if font_size_px >= _LARGE_TEXT_PX:
+        return True
+    try:
+        w = int(font_weight) if font_weight is not None else 400
+    except (TypeError, ValueError):
+        w = 400
+    return w >= 700 and font_size_px >= _LARGE_BOLD_PX
+
+
 def check_text_contrast(
     image_bytes: bytes,
     text_boxes: list[dict],
 ) -> list[dict]:
+    """Measure text-vs-background contrast from the rendered image.
+
+    `image_bytes` must be the composited preview (BG with SVG overlay) so sampled
+    background includes container fills, gradient overlays, and drop shadows —
+    i.e. the pixels the viewer actually sees. Passing the raw BG before overlay
+    compositing produces false positives when containers (cards, pills, price
+    boxes) provide the real contrast.
+
+    Each text_box may include optional "font_size" (px) and "font_weight"
+    (100-900) so the WCAG threshold is chosen per text per SC 1.4.3.
+    """
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     results = []
     for box in text_boxes:
@@ -70,11 +103,16 @@ def check_text_contrast(
             int(box["w"]), int(box["h"]),
         )
         ratio = contrast_ratio(fg, bg)
+        large = _is_large_text(box.get("font_size"), box.get("font_weight"))
+        aa_threshold = _WCAG_AA_LARGE if large else _WCAG_AA_NORMAL
+        aaa_threshold = _WCAG_AAA_LARGE if large else _WCAG_AAA_NORMAL
         results.append({
             "id": box["id"],
             "ratio": round(ratio, 2),
-            "pass_aa": ratio >= 4.5,
-            "pass_aaa": ratio >= 7.0,
+            "pass_aa": ratio >= aa_threshold,
+            "pass_aaa": ratio >= aaa_threshold,
+            "aa_threshold": aa_threshold,
+            "large_text": large,
             "fg": f"rgb{fg}",
             "bg": f"rgb{bg}",
         })

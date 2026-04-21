@@ -1030,27 +1030,45 @@ async def _step_refinement_loop(
             "message": "Preview generated, checking for overlaps...",
         })
 
-        # Measure text contrast against the base image.
-        # NOTE: Intentionally conservative -- measures against original image WITHOUT
-        # gradient overlays. If a gradient overlay fixes contrast, the checker may still
-        # report a failure. Acceptable for v1.
+        # Measure text contrast against the composited preview (BG + SVG overlay).
+        # Sampling the rendered pixels captures container fills and gradient overlays
+        # -- i.e. what the viewer actually sees. WCAG SC 1.4.3 thresholds are applied
+        # per-box: 3:1 for large text (>=24px regular or >=18.66px bold), 4.5:1 otherwise.
         contrast_summary = ""
         current_boxes = flex_boxes or []
         text_boxes_for_contrast = []
         for b in current_boxes:
             if b.type == "text" and b.style and b.style.color:
+                font_size = None
+                font_weight = None
+                if b.style:
+                    raw_size = getattr(b.style, "fontSize", None)
+                    try:
+                        font_size = float(raw_size) if raw_size is not None else None
+                    except (TypeError, ValueError):
+                        font_size = None
+                    font_weight = getattr(b.style, "fontWeight", None)
                 text_boxes_for_contrast.append({
                     "id": b.id,
                     "x": round(b.x), "y": round(b.y),
                     "w": round(b.w), "h": round(b.h),
                     "color": b.style.color,
+                    "font_size": font_size,
+                    "font_weight": font_weight,
                 })
         if text_boxes_for_contrast:
-            contrast_results = check_text_contrast(image_bytes, text_boxes_for_contrast)
+            contrast_results = check_text_contrast(preview_bytes, text_boxes_for_contrast)
             failing = [r for r in contrast_results if not r["pass_aa"]]
             if failing:
-                lines = [f"  - {r['id']}: ratio {r['ratio']}:1 (fg={r['fg']}, bg={r['bg']}) FAIL AA" for r in failing]
-                contrast_summary = "CONTRAST FAILURES (WCAG AA < 4.5:1):\n" + "\n".join(lines)
+                lines = [
+                    f"  - {r['id']}: ratio {r['ratio']}:1 (fg={r['fg']}, bg={r['bg']}, "
+                    f"threshold={r['aa_threshold']}, large_text={r['large_text']}) FAIL AA"
+                    for r in failing
+                ]
+                contrast_summary = (
+                    "CONTRAST FAILURES (WCAG AA per SC 1.4.3, measured on composited preview):\n"
+                    + "\n".join(lines)
+                )
 
         # AI critique
         critique = await vertex_service.critique_layout(
