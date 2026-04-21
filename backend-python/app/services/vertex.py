@@ -206,12 +206,15 @@ class VertexService:
         effective_input_images: list[dict] = list(input_images or [])
 
         if style_spec is not None:
+            # StyleSpec drives BG generation via TEXT prompt only. The drafted spec
+            # contains hex codes, composition, lighting, subject direction -- enough
+            # for Imagen to compose a fresh scene. Passing the library source image
+            # as an Imagen reference causes Imagen to copy its subject/composition,
+            # which defeats the point of generating a unique campaign from the brief.
             effective_prompt = await self.translate_spec_to_imagen_prompt(
                 spec_md=style_spec.spec_markdown,
                 brief=brief_for_translation or prompt,
             )
-            source_bytes = Path(style_spec.source_image_path).read_bytes()
-            effective_input_images.append({"buffer": source_bytes, "mime_type": "image/jpeg"})
 
         s = get_settings()
         primary = model or s.gemini_image_endpoint_2 or s.gemini_image_endpoint or "gemini-2.5-flash-image"
