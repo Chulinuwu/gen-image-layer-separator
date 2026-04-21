@@ -613,11 +613,26 @@ class VertexService:
                 async with _rmbg2_loading:
                     if _rmbg2_model is None:
                         print("[RMBG-2.0] Initializing model & processor...")
+                        import os
                         import torch
                         from transformers import AutoModelForImageSegmentation, AutoProcessor
-                        _rmbg2_processor = AutoProcessor.from_pretrained("briaai/RMBG-2.0", trust_remote_code=True)
+                        hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+                        if not hf_token:
+                            from pathlib import Path
+                            env_file = Path(__file__).parent.parent.parent / ".env"
+                            if env_file.exists():
+                                for raw in env_file.read_text(encoding="utf-8").splitlines():
+                                    if raw.startswith("HF_TOKEN="):
+                                        hf_token = raw.partition("=")[2].strip().strip('"')
+                                        break
+                        if hf_token:
+                            os.environ["HF_TOKEN"] = hf_token
+                            os.environ["HUGGING_FACE_HUB_TOKEN"] = hf_token
+                        _rmbg2_processor = AutoProcessor.from_pretrained(
+                            "briaai/RMBG-2.0", trust_remote_code=True, token=hf_token,
+                        )
                         _rmbg2_model = AutoModelForImageSegmentation.from_pretrained(
-                            "briaai/RMBG-2.0", trust_remote_code=True
+                            "briaai/RMBG-2.0", trust_remote_code=True, token=hf_token,
                         )
                         _rmbg2_model.eval()
                         print("[RMBG-2.0] Model ready ✅")
