@@ -142,3 +142,51 @@ def test_flex_thought_works_without_style_spec():
         style_spec_md=None,
     )
     assert "Headline" in p
+
+
+def test_flex_tree_prompt_includes_zone_map_enforcement_when_spec_present():
+    from app.prompts.flex_layout import build_flex_tree_prompt
+    spec_md = "## 5. Layout Principles\n\nTop 0-25%: headline band. 25-70%: hero zone."
+    p = build_flex_tree_prompt(
+        target_text="Head",
+        components_list="",
+        footer_section="",
+        canvas_size={"w": 1000, "h": 1000},
+        layout_thought="test thought",
+        style_spec_md=spec_md,
+    )
+    assert "ZONE MAP ENFORCEMENT" in p
+    assert "HARD CONSTRAINT" in p
+    assert "headline band" in p or "hero zone" in p
+
+
+def test_flex_tree_prompt_includes_component_emission_rules_when_spec_present():
+    from app.prompts.flex_layout import build_flex_tree_prompt
+    spec_md = "## 4. Components\nFrosted glassmorphic card for product details. Pill CTA centered."
+    p = build_flex_tree_prompt(
+        target_text="Head",
+        components_list="",
+        footer_section="",
+        canvas_size={"w": 1000, "h": 1000},
+        layout_thought="",
+        style_spec_md=spec_md,
+    )
+    assert "COMPONENT PATTERN EMISSION" in p
+    assert "Frosted glassmorphic card" in p
+    assert "Pill CTA" in p
+    assert "rgba(255, 255, 255, 0.10)" in p
+    assert "borderRadius 9999" in p
+
+
+def test_flex_tree_prompt_skips_new_sections_when_no_spec():
+    from app.prompts.flex_layout import build_flex_tree_prompt
+    p = build_flex_tree_prompt(
+        target_text="Head",
+        components_list="",
+        footer_section="",
+        canvas_size={"w": 1000, "h": 1000},
+        layout_thought="",
+        style_spec_md=None,
+    )
+    assert "ZONE MAP ENFORCEMENT" not in p
+    assert "COMPONENT PATTERN EMISSION" not in p

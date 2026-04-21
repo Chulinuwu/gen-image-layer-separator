@@ -127,6 +127,60 @@ def build_flex_tree_prompt(
         else ""
     )
 
+    zone_enforcement_section = (
+        "\n\nZONE MAP ENFORCEMENT (HARD CONSTRAINT):\n"
+        "If the TARGET DESIGN SYSTEM above contains a '## 5. Layout Principles' section "
+        "with a vertical zone map (e.g. 'Top 0-25%: headline band', '25-70%: hero zone'), "
+        "that zone map is the law. You MUST compose your flex tree so each piece of "
+        "content lands in its assigned vertical band. Do NOT deviate. Do NOT stack "
+        "everything top-down. If the spec says the hero occupies 25-70% height on the "
+        "right and the product card occupies the left at the same band, you MUST emit "
+        "a row container at that vertical zone with left and right children. If the spec "
+        "says the CTA is centered-lower at 70-82%, place the CTA in a dedicated container "
+        "at that band, not merged into the body text stack.\n"
+        "If the spec's Layout Principles conflict with the subject mask (no_go_zones), "
+        "the subject wins: shift the text container to avoid the subject, but keep the "
+        "spec's proportional band ratios intact.\n"
+        if style_spec_md
+        else ""
+    )
+
+    component_emission_section = (
+        "\n\nCOMPONENT PATTERN EMISSION (HARD CONSTRAINT):\n"
+        "If the TARGET DESIGN SYSTEM calls out specific UI components by name, you MUST "
+        "emit them as container nodes with the correct style props (NOT as flat text).\n"
+        "\n"
+        "Frosted glassmorphic card:\n"
+        "  Emit a column container wrapping the product-detail text leaves.\n"
+        "  Style: backgroundColor 'rgba(255, 255, 255, 0.10)', borderWidth 1, "
+        "borderColor 'rgba(255, 255, 255, 0.18)', borderRadius 20, padding 24.\n"
+        "  Use when the spec says 'frosted card', 'glassmorphic', or 'translucent card'.\n"
+        "\n"
+        "Pill CTA (filled):\n"
+        "  Emit a container with a single text-leaf child for the label.\n"
+        "  Style: backgroundColor taken from the spec's CTA color (e.g. '#7B4FBA'), "
+        "borderRadius 9999, padding 16 horizontal and 12 vertical, "
+        "text leaf color matching the spec's CTA text color.\n"
+        "  Use when the spec says 'pill CTA', 'filled pill button', or 'primary CTA'.\n"
+        "\n"
+        "Line-art framed CTA (outline only):\n"
+        "  Emit a container with text-leaf child.\n"
+        "  Style: NO backgroundColor, borderWidth 1-2, borderColor white, borderRadius 6, "
+        "padding 12-16.\n"
+        "  Use when the spec says 'line-art framed CTA', 'outline CTA', or 'thin outline'.\n"
+        "\n"
+        "Highlight band behind inline phrase:\n"
+        "  Emit a container wrapping ONLY the emphasis phrase (single text leaf).\n"
+        "  Style: backgroundColor from spec accent, borderRadius 6-8, padding 6-10 horizontal.\n"
+        "  Use when the spec says 'yellow highlight band', 'emphasis phrase with solid backdrop'.\n"
+        "\n"
+        "If you emit a flat text leaf for something the spec called a 'card' or 'pill', "
+        "that is a hard failure. Re-check every section 4 (Component & Element Stylings) "
+        "entry in the spec and make sure your flex tree has a corresponding container.\n"
+        if style_spec_md
+        else ""
+    )
+
     _transform_style_props = (
         "\nskewX, skewY, perspective, rotateX, rotateY, warpType, warpIntensity, warpHDistortion, warpVDistortion"
         "\ntext3dStyle, text3dDepth, text3dBevel, text3dMaterial, text3dLightAngle, text3dColor, text3dSideColor"
@@ -177,7 +231,7 @@ def build_flex_tree_prompt(
     return f"""You are a graphic designer. Convert the design plan below into a flex tree JSON.
 
 DESIGN PLAN (from Art Director -- follow this exactly):
-{layout_thought}{spec_section}
+{layout_thought}{spec_section}{zone_enforcement_section}{component_emission_section}
 
 CAMPAIGN TEXT:
 {target_text}
@@ -228,22 +282,6 @@ textGradient: "to-bottom #F4C744 #B88A28" -- gradient fill applied to TEXT leave
 BACKGROUND EFFECTS (canvas-level, in "backgroundEffects" array):
 - Linear fade: {{"type": "linear-fade", "from": "bottom|top|left|right", "color": "rgba(0,0,0,0.7)", "size": "40%"}}
 - Radial fade: {{"type": "radial-fade", "center": "50% 50%", "radius": "70%", "color": "rgba(0,0,0,0.4)"}}
-
-ADVANCED PATTERNS:
-
-Highlight band (yellow rect behind an inline phrase):
-- Express as a nested container wrapping the text. Parent container holds backgroundColor + borderRadius for the band; child is a text leaf with the emphasis words.
-- Use when the design spec calls for "yellow highlight band" or "emphasis phrase with solid backdrop".
-- Keep the band tight: padding ~6-10px horizontal around the phrase; borderRadius ~6-8px.
-
-Frosted glassmorphic card (fallback, no real backdrop blur):
-- Express as a container with backgroundColor "rgba(255, 255, 255, 0.10)" and borderWidth 1 + borderColor "rgba(255, 255, 255, 0.18)" for the subtle edge.
-- Add a soft drop shadow via textShadow on child text (or assume canvas-level lift) -- actual backdrop blur is not supported; we approximate with translucent white + thin edge.
-- Use when the design spec calls for "frosted", "glassmorphic", or "translucent card over busy background".
-
-Line-art framed CTA (outline rectangle without fill):
-- Express as a container with NO backgroundColor, borderWidth 1-2, borderColor (usually #FFFFFF), borderRadius ~4-6px, and a text leaf child for the label.
-- Use when the design spec calls for "line-art framed CTA" or "thin outline CTA" -- this is distinct from pill CTAs.
 
 SIZING RULES:
 - EVERY container and text node MUST have an explicit height% (except children inside a row container, which need width% instead).
