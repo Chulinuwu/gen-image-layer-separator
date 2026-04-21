@@ -61,3 +61,14 @@ def test_load_spec_sets_flag_when_spec_mentions_chrome_extrusion(tmp_path: Path)
     spec = load_spec(entry)
 
     assert spec.requires_psd_3d is True
+
+
+def test_build_drafted_spec_keeps_library_source_and_applies_3d_detection():
+    from app.utils.style_spec import StyleSpec, build_drafted_spec
+    lib = StyleSpec(id="foo", overview="o", spec_markdown="lib", source_image_path="/tmp/s.jpg")
+    drafted = build_drafted_spec(lib, "## Typography\nMassive 3D chrome extruded numerals.")
+    assert drafted.id == "foo"
+    assert drafted.source_image_path == "/tmp/s.jpg"
+    assert "3D chrome" in drafted.spec_markdown
+    assert drafted.requires_psd_3d is True
+    assert drafted.inspired_by_library_id == "foo"

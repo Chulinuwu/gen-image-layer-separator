@@ -515,13 +515,14 @@ async def _step_plan_and_match(
     *,
     send_sse,
     brief: str,
+    visual_hint: str,
     user_image: bytes | None,
     mime: str | None,
     aspect_ratio: str,
     footer_text: str | None,
 ):
     from app.services import style_library
-    from app.utils.style_spec import load_spec
+    from app.utils.style_spec import load_spec, build_drafted_spec
 
     send_sse("progress", {"step": "style_planning", "message": "Planning target style..."})
     overview = await vertex_service.plan_target_overview(
@@ -540,24 +541,44 @@ async def _step_plan_and_match(
 
     top = hits[0]
     spec = load_spec(top["path"])
+
+    # Draft campaign-specific spec using library as inspiration
+    send_sse("progress", {"step": "spec_drafting", "message": f"Drafting campaign spec (inspired by {spec.id})..."})
+    drafted_md = await vertex_service.draft_campaign_spec(
+        brief=brief,
+        visual_hint=visual_hint,
+        aspect_ratio=aspect_ratio,
+        footer_text=footer_text,
+        library_spec_md=spec.spec_markdown,
+        library_id=spec.id,
+    )
+    drafted_spec = build_drafted_spec(spec, drafted_md)
+
+    send_sse("debug", {
+        "step": "drafted_spec",
+        "id": drafted_spec.id,
+        "inspired_by": drafted_spec.inspired_by_library_id,
+        "content": drafted_spec.spec_markdown,
+    })
+
     send_sse("progress", {
         "step": "style_selection",
-        "message": f"Matched style: {spec.id} (score {top['score']:.3f})",
+        "message": f"Matched style: {spec.id} (score {top['score']:.3f}) -- drafted campaign spec applied",
     })
     send_sse("debug", {
         "step": "style_spec",
-        "id": spec.id,
-        "overview": spec.overview,
-        "source_image_url": f"/assets/design_systems/{spec.id}/source.jpg",
+        "id": drafted_spec.id,
+        "overview": drafted_spec.overview,
+        "source_image_url": f"/assets/design_systems/{drafted_spec.id}/source.jpg",
     })
-    if spec.requires_psd_3d:
+    if drafted_spec.requires_psd_3d:
         send_sse("debug", {
             "step": "style_format_override",
-            "message": "Matched StyleSpec requires 3D chrome rendering -- output format will be upgraded to psd-3d",
-            "id": spec.id,
+            "message": "Drafted StyleSpec requires 3D chrome rendering -- output format will be upgraded to psd-3d",
+            "id": drafted_spec.id,
             "forced_output_format": "psd-3d",
         })
-    return spec, overview
+    return drafted_spec, overview
 
 
 async def _step_rmbg_prescan(
@@ -1167,6 +1188,7 @@ async def create_campaign(
             style_spec, planned_overview = await _step_plan_and_match(
                 send_sse=send_sse,
                 brief=target_text,
+                visual_hint="",
                 user_image=image_buffer,
                 mime=mime_type,
                 aspect_ratio=aspect_ratio_in,
@@ -1472,6 +1494,7 @@ async def create_campaign_integrated(request: Request, body: dict):
             style_spec, planned_overview = await _step_plan_and_match(
                 send_sse=send_sse,
                 brief=text_brief,
+                visual_hint=visual_concept or "",
                 user_image=None,
                 mime=None,
                 aspect_ratio=aspect_ratio,

@@ -1597,6 +1597,35 @@ class VertexService:
         )
         return (response.text or "").strip()
 
+    async def draft_campaign_spec(
+        self,
+        *,
+        brief: str,
+        visual_hint: str,
+        aspect_ratio: str,
+        footer_text: str | None,
+        library_spec_md: str,
+        library_id: str,
+    ) -> str:
+        from app.prompts.draft_campaign_spec import build_draft_spec_prompt
+
+        prompt = build_draft_spec_prompt(
+            brief=brief,
+            visual_hint=visual_hint,
+            aspect_ratio=aspect_ratio,
+            footer_text=footer_text,
+            library_spec_md=library_spec_md,
+            library_id=library_id,
+        )
+        response = await with_retry(
+            lambda: self.client.aio.models.generate_content(
+                model=get_text_model_best(),
+                contents=[prompt],
+                config=SAFETY_OFF,
+            )
+        )
+        return (response.text or "").strip()
+
     async def embed_text(self, text: str) -> list[float]:
         response = await with_retry(
             lambda: self.client.aio.models.embed_content(

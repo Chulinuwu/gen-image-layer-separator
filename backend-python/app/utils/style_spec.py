@@ -11,6 +11,7 @@ class StyleSpec:
     spec_markdown: str
     source_image_path: str
     requires_psd_3d: bool = False
+    inspired_by_library_id: str | None = None
 
 
 _PSD3D_KEYWORDS = (
@@ -45,4 +46,15 @@ def load_spec(entry_dir: Path | str) -> StyleSpec:
         spec_markdown=spec_md,
         source_image_path=str(source),
         requires_psd_3d=detect_requires_psd_3d(spec_md),
+    )
+
+
+def build_drafted_spec(library_spec: StyleSpec, drafted_markdown: str) -> StyleSpec:
+    return StyleSpec(
+        id=library_spec.id,
+        overview=library_spec.overview,
+        spec_markdown=drafted_markdown,
+        source_image_path=library_spec.source_image_path,
+        requires_psd_3d=detect_requires_psd_3d(drafted_markdown),
+        inspired_by_library_id=library_spec.id,
     )
