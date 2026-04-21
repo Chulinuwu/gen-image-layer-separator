@@ -29,20 +29,24 @@ graph TB
   Typo --> Layout
   Comp --> Layout
 
-  Palette --> Critique["Critique &<br/>Refinement"]
-  Rules --> Critique
+  BG --> Preview["Rendered Preview"]
+  Layout --> Preview
 
-  BG --> Final["Final Campaign"]
-  Layout --> Final
-  Critique --> Final
+  Preview --> Critique["Critique &<br/>Refinement"]
+  Palette -.-> Critique
+  Rules -.-> Critique
+
+  Critique --> Final["Final Campaign"]
 
   classDef source fill:#7B4FBA,stroke:#3B1F66,color:#fff,stroke-width:2px
   classDef field fill:#E7DFF5,stroke:#7B4FBA,color:#3B1F66
   classDef stage fill:#FFD862,stroke:#3B1F66,color:#3B1F66,stroke-width:2px
+  classDef preview fill:#FFFFFF,stroke:#3B1F66,color:#3B1F66,stroke-width:2px
 
   class Spec source
   class Mood,Palette,Typo,Comp,Photo,Rules field
   class BG,Layout,Critique stage
+  class Preview preview
 ```
 
 > **Edit the spec → rerun. No prompt edits. No code changes.**
