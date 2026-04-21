@@ -287,6 +287,8 @@ class VertexService:
         component_labels: list[str],
         component_positions: list[dict] | None = None,
         text_zone_hints: list[dict] | None = None,
+        *,
+        style_spec: "StyleSpec | None" = None,
     ) -> dict:
         proc_buf, proc_mime = _resize_for_processing(image_buffer, STRATEGY_RESIZE_W, STRATEGY_RESIZE_QUALITY)
         model = self._text_model()
@@ -310,6 +312,7 @@ class VertexService:
             target_text, comp_pos_block, components_available,
             len(text_lines), has_promo, est_text_h, comp_pct,
             text_zone_hints=text_zone_hints,
+            style_spec_md=style_spec.spec_markdown if style_spec else None,
         )
 
         try:
@@ -1523,10 +1526,17 @@ class VertexService:
         text_brief: str,
         visual_concept: str,
         aspect_ratio: str,
+        *,
+        style_spec: "StyleSpec | None" = None,
     ) -> dict:
         from app.prompts.text_zone_planner import build_text_zone_prompt
         model = self._text_model()
-        prompt = build_text_zone_prompt(text_brief, visual_concept, aspect_ratio)
+        prompt = build_text_zone_prompt(
+            text_brief,
+            visual_concept,
+            aspect_ratio,
+            style_spec_md=style_spec.spec_markdown if style_spec else None,
+        )
         print(f"[TextZonePlanner] Calling {model}")
         response = await self._generate_content(model, [{"text": prompt}], {"temperature": 0.5})
         raw = (response.text or "").strip()

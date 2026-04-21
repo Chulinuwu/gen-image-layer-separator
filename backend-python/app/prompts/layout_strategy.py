@@ -7,7 +7,20 @@ def build_layout_strategy_prompt(
     est_text_h: int,
     comp_pct: int,
     text_zone_hints: list[dict] | None = None,
+    *,
+    style_spec_md: str | None = None,
 ) -> str:
+    spec_block = ""
+    if style_spec_md:
+        spec_block = (
+            "\n\nTARGET DESIGN SYSTEM (source of truth):\n"
+            f"{style_spec_md}\n\n"
+            "Your layout strategy MUST align with the spec's composition archetype, "
+            "zone map (section 5), and component placements (section 4). "
+            "Do not propose a strategy that contradicts the spec. "
+            "If the spec says 'diagonal hero right / card left', output 'layout_concept' "
+            "accordingly. Use section 5 band ratios to derive `component_layout` positions.\n"
+        )
     zone_hints_section = ""
     if text_zone_hints:
         lines = ["PRE-PLANNED TEXT ZONES (from background generation):"]
@@ -27,7 +40,7 @@ FIRST: Analyze the image.
 - Where are BUSY areas to avoid? (people, objects, details?)
 
 THEN: Plan the layout based on what you see AND the text brief.
-
+{spec_block}
 {zone_hints_section}IMPORTANT RULES:
 - Text zones should be SPREAD across the canvas, not crammed into one small area.
 - Main content (headlines, body copy, section labels) should occupy the TOP 60% of the canvas. Do NOT push main content below 70%.

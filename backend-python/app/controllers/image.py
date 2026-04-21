@@ -1278,6 +1278,7 @@ async def create_campaign(
                         [c["label"] for c in visual_components],
                         current_positions,
                         text_zone_hints=text_zone_hints or None,
+                        style_spec=style_spec,
                     )
                     # Apply plan's component positions
                     if layout_hint.get("component_layout"):
@@ -1521,7 +1522,10 @@ async def create_campaign_integrated(request: Request, body: dict):
                 yield e
             events.clear()
 
-            plan = await vertex_service.plan_text_zones(text_brief, visual_concept or text_brief, aspect_ratio)
+            plan = await vertex_service.plan_text_zones(
+                text_brief, visual_concept or text_brief, aspect_ratio,
+                style_spec=style_spec,
+            )
             bg_constraints = plan.get("bg_constraints", "")
             text_zones = plan.get("text_zones", [])
 
@@ -1604,6 +1608,7 @@ async def create_campaign_integrated(request: Request, body: dict):
                     [],  # no component labels
                     [],  # no current positions
                     text_zone_hints=text_zones or None,
+                    style_spec=style_spec,
                 )
                 send_sse("progress", {
                     "step": "strategy_planned",

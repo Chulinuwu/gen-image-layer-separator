@@ -37,3 +37,15 @@ def test_layout_strategy_zone_prioritizes():
     hints = [{"role": "headline", "region": "top-center", "height_pct": 30, "description": "sky"}]
     prompt = _base_prompt(text_zone_hints=hints)
     assert "PRIORITIZE" in prompt
+
+
+def test_layout_strategy_prompt_includes_spec_authority_when_provided():
+    spec_md = "## 1. Visual Theme\nDiagonal hero right, card left."
+    prompt = _base_prompt(style_spec_md=spec_md)
+    assert "TARGET DESIGN SYSTEM" in prompt
+    assert "Diagonal" in prompt or "composition archetype" in prompt
+
+
+def test_layout_strategy_prompt_no_spec_block_when_none():
+    prompt = _base_prompt(style_spec_md=None)
+    assert "TARGET DESIGN SYSTEM" not in prompt

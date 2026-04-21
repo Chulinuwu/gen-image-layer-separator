@@ -74,3 +74,21 @@ async def test_plan_text_zones_strips_markdown_fences(mock_gen):
         aspect_ratio="1:1",
     )
     assert result["bg_constraints"] == "none"
+
+
+def test_text_zone_prompt_includes_spec_authority_when_provided():
+    spec_md = "## 5. Layout Principles\n\nTop 0-25%: headline. 25-70%: hero."
+    p = build_text_zone_prompt(
+        "brief text",
+        "visual concept",
+        "3:4",
+        style_spec_md=spec_md,
+    )
+    assert "TARGET DESIGN SYSTEM" in p
+    assert "headline" in p or "hero" in p
+    assert "5. Layout Principles" in p or "zone map" in p
+
+
+def test_text_zone_prompt_no_spec_block_when_none():
+    p = build_text_zone_prompt("brief", "visual", "3:4", style_spec_md=None)
+    assert "TARGET DESIGN SYSTEM" not in p

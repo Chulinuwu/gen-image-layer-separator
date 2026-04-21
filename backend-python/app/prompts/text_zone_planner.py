@@ -2,14 +2,27 @@ def build_text_zone_prompt(
     text_brief: str,
     visual_concept: str,
     aspect_ratio: str,
+    *,
+    style_spec_md: str | None = None,
 ) -> str:
+    spec_block = ""
+    if style_spec_md:
+        spec_block = (
+            "\n\nTARGET DESIGN SYSTEM (source of truth):\n"
+            f"{style_spec_md}\n\n"
+            "Your zone planning MUST align with the '## 5. Layout Principles' section "
+            "and '## 1. Visual Theme' section of this spec. Do not invent zones that "
+            "conflict with the spec's vertical zone map, band ratios, or composition archetype. "
+            "Use the spec's zone map as your primary structure; only adjust when the brief's "
+            "text volume requires proportional resizing within the spec's band ratios.\n"
+        )
     return f"""You are a senior advertising art director planning a background image composition.
 Your job is to analyze the TEXT BRIEF and VISUAL CONCEPT, then decide WHERE in the frame text elements need clean, readable space.
 The background image has NOT been generated yet -- your output will shape how it is generated.
 
 ASPECT RATIO: {aspect_ratio}
 VISUAL CONCEPT: {visual_concept}
-
+{spec_block}
 TEXT BRIEF:
 \"\"\"{text_brief}\"\"\"
 
