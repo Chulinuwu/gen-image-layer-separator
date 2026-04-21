@@ -1486,18 +1486,13 @@ async def create_campaign_integrated(request: Request, body: dict):
 
         try:
             text_brief = body.get("text_brief")
-            visual_concept = body.get("visual_concept")
+            visual_concept = body.get("visual_concept") or ""
             aspect_ratio = body.get("aspect_ratio", "3:4")
             footer_text = body.get("footer_text", "")
             output_format = body.get("outputFormat", "standard")
 
             if not text_brief:
                 send_sse("error", {"error": "text_brief is required"})
-                for e in events:
-                    yield e
-                return
-            if not visual_concept:
-                send_sse("error", {"error": "visual_concept is required"})
                 for e in events:
                     yield e
                 return
@@ -1526,7 +1521,7 @@ async def create_campaign_integrated(request: Request, body: dict):
                 yield e
             events.clear()
 
-            plan = await vertex_service.plan_text_zones(text_brief, visual_concept, aspect_ratio)
+            plan = await vertex_service.plan_text_zones(text_brief, visual_concept or text_brief, aspect_ratio)
             bg_constraints = plan.get("bg_constraints", "")
             text_zones = plan.get("text_zones", [])
 
@@ -1547,7 +1542,8 @@ async def create_campaign_integrated(request: Request, body: dict):
             events.clear()
 
             cohesion = "The entire image must look like ONE cohesive photograph with smooth, natural transitions between all elements. No hard edges, no collage effect, no pasted-on sections."
-            enriched_prompt = f"{visual_concept}. {cohesion} {bg_constraints}" if bg_constraints else visual_concept
+            base_prompt = visual_concept or text_brief
+            enriched_prompt = f"{base_prompt}. {cohesion} {bg_constraints}" if bg_constraints else base_prompt
 
             result = await vertex_service.generate_image(
                 prompt=enriched_prompt,
