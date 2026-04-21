@@ -1595,7 +1595,21 @@ class VertexService:
                 config=SAFETY_OFF,
             )
         )
-        return (response.text or "").strip()
+        result = (response.text or "").strip()
+        trace_ai(
+            "Plan Target Overview",
+            prompt,
+            result,
+            details={
+                "brief_len": len(brief),
+                "has_user_image": user_image is not None,
+                "aspect_ratio": aspect_ratio,
+                "has_footer": bool(footer_text),
+                "overview_len": len(result),
+                "model": get_text_model_pro(),
+            },
+        )
+        return result
 
     async def draft_campaign_spec(
         self,
@@ -1624,7 +1638,22 @@ class VertexService:
                 config=SAFETY_OFF,
             )
         )
-        return (response.text or "").strip()
+        result = (response.text or "").strip()
+        trace_ai(
+            "Draft Campaign Spec",
+            prompt,
+            result,
+            details={
+                "library_id": library_id,
+                "library_spec_len": len(library_spec_md),
+                "brief_len": len(brief),
+                "visual_hint": visual_hint or "<empty>",
+                "aspect_ratio": aspect_ratio,
+                "drafted_spec_len": len(result),
+                "model": get_text_model_pro(),
+            },
+        )
+        return result
 
     async def embed_text(self, text: str) -> list[float]:
         response = await with_retry(
@@ -1649,7 +1678,19 @@ class VertexService:
                 config=SAFETY_OFF,
             )
         )
-        return (response.text or "").strip()
+        result = (response.text or "").strip()
+        trace_ai(
+            "Translate Spec to Imagen Prompt",
+            prompt,
+            result,
+            details={
+                "spec_md_len": len(spec_md),
+                "brief_len": len(brief),
+                "imagen_prompt_len": len(result),
+                "model": get_text_model_best(),
+            },
+        )
+        return result
 
 
 vertex_service = VertexService()

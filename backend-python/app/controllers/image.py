@@ -525,6 +525,7 @@ async def _step_plan_and_match(
     from app.utils.style_spec import load_spec, build_drafted_spec
 
     send_sse("progress", {"step": "style_planning", "message": "Planning target style..."})
+    log_event("Step 0 Start", "plan + match + draft", {"brief_preview": brief[:200], "visual_hint": visual_hint or "<empty>", "aspect_ratio": aspect_ratio, "has_user_image": user_image is not None})
     overview = await vertex_service.plan_target_overview(
         brief=brief,
         user_image=user_image,
@@ -537,10 +538,12 @@ async def _step_plan_and_match(
     hits = style_library.search_top_k(vector, k=1)
     if not hits:
         send_sse("progress", {"step": "style_selection", "message": "No style library -- running without StyleSpec"})
+        log_event("Step 0 Match", "no library hits", {"overview_len": len(overview)})
         return None, overview
 
     top = hits[0]
     spec = load_spec(top["path"])
+    log_event("Step 0 Match", f"top-1 match: {spec.id}", {"matched_id": spec.id, "score": top["score"], "embedding_dim": len(vector)})
 
     # Draft campaign-specific spec using library as inspiration
     send_sse("progress", {"step": "spec_drafting", "message": f"Drafting campaign spec (inspired by {spec.id})..."})
@@ -553,6 +556,16 @@ async def _step_plan_and_match(
         library_id=spec.id,
     )
     drafted_spec = build_drafted_spec(spec, drafted_md)
+    log_event(
+        "Step 0 Drafted Spec",
+        f"drafted {drafted_spec.id} (inspired by {drafted_spec.inspired_by_library_id})",
+        {
+            "drafted_len": len(drafted_spec.spec_markdown),
+            "library_len": len(spec.spec_markdown),
+            "requires_psd_3d": drafted_spec.requires_psd_3d,
+            "drafted_preview": drafted_spec.spec_markdown[:600],
+        },
+    )
 
     send_sse("debug", {
         "step": "drafted_spec",
