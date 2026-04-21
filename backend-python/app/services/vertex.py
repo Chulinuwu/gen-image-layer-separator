@@ -126,6 +126,9 @@ class VertexService:
         return self._client
 
     def _create_client(self) -> genai.Client:
+        import json
+        from pathlib import Path
+
         s = get_settings()
         creds_info = {
             "type": s.google_service_account_type,
@@ -140,14 +143,24 @@ class VertexService:
             "universe_domain": "googleapis.com",
         }
         if not creds_info["client_email"] or not creds_info["private_key"]:
-            raise ValueError("Missing required Google Cloud credentials for Vertex AI.")
+            fallback = Path(__file__).parent.parent.parent / "credentials.json"
+            if fallback.exists():
+                creds_info = json.loads(fallback.read_text(encoding="utf-8"))
+                print(f"[vertex] loaded credentials from {fallback} (env parse failed or incomplete)")
+            else:
+                raise ValueError(
+                    "Missing required Google Cloud credentials for Vertex AI. "
+                    f"Populate env GOOGLE_SERVICE_ACCOUNT_* values or place a "
+                    f"service-account JSON at {fallback}."
+                )
+        project_id = creds_info.get("project_id") or s.google_service_account_project_id
         creds = service_account.Credentials.from_service_account_info(
             creds_info,
             scopes=["https://www.googleapis.com/auth/cloud-platform"],
         )
         client = genai.Client(
             vertexai=True,
-            project=s.google_service_account_project_id,
+            project=project_id,
             location=s.google_cloud_location,
             credentials=creds,
         )
