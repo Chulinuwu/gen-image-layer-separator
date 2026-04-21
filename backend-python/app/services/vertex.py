@@ -26,7 +26,7 @@ from app.constants.pipeline import (
     BBOX_ALPHA_THRESH, STROKE_BBOX_ALPHA_THRESH, CHARACTER_KEYWORDS, NO_TEXT_PREFIX,
     STYLE_EMBED_MODEL,
 )
-from app.constants.models import SAFETY_OFF, get_text_model, get_text_model_best
+from app.constants.models import SAFETY_OFF, get_text_model, get_text_model_best, get_text_model_pro
 from app.prompts.campaign_layout import build_campaign_layout_prompt
 from app.prompts.flex_layout import build_flex_thought_prompt, build_flex_tree_prompt
 from app.prompts.critique import build_critique_prompt
@@ -1590,7 +1590,7 @@ class VertexService:
             parts.append(types.Part.from_bytes(data=user_image, mime_type=mime))
         response = await with_retry(
             lambda: self.client.aio.models.generate_content(
-                model=get_text_model_best(),
+                model=get_text_model_pro(),
                 contents=parts,
                 config=SAFETY_OFF,
             )
@@ -1619,7 +1619,7 @@ class VertexService:
         )
         response = await with_retry(
             lambda: self.client.aio.models.generate_content(
-                model=get_text_model_best(),
+                model=get_text_model_pro(),
                 contents=[prompt],
                 config=SAFETY_OFF,
             )

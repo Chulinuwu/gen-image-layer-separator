@@ -20,3 +20,8 @@ def get_text_model() -> str:
 def get_text_model_best() -> str:
     s = _get_app_settings()
     return s.gemini_text_endpoint or s.gemini_model_endpoint or "gemini-2.5-flash"
+
+
+def get_text_model_pro() -> str:
+    s = _get_app_settings()
+    return s.gemini_pro_endpoint or s.gemini_text_endpoint or "gemini-2.5-pro"

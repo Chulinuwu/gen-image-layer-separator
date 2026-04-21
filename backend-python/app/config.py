@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     gemini_image_endpoint_2: str = "gemini-3-pro-image-preview"
     gemini_image_endpoint_3: str = "gemini-2.5-flash-image"
     gemini_text_endpoint: str = "gemini-2.5-pro"
+    gemini_pro_endpoint: str = "gemini-3.1-pro-preview"
     gemini_model_endpoint: str = "gemini-3-flash-preview"
     gemini_model_endpoint_2: str = ""
     imagen_edit_endpoint: str = "imagen-3.0-capability-001"
