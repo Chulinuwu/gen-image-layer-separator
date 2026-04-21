@@ -2,15 +2,30 @@ from __future__ import annotations
 
 import re
 
-_BG_SECTIONS = {"A", "B", "D", "E", "F"}
+# BG-relevant sections from the drafted/library spec structure (numeric 1-8).
+# 1: Visual Theme & Atmosphere, 2: Color Palette, 5: Layout Principles,
+# 6: Photography / Rendering Rules, 7: Do's and Don'ts.
+# Excluded (non-BG): 3 Typography, 4 Components, 8 Agent Prompt Guide.
+_BG_SECTIONS_NUMERIC = {"1", "2", "5", "6", "7"}
+
+# Legacy letter format (old library specs used A-I headers).
+_BG_SECTIONS_LETTER = {"A", "B", "D", "E", "F"}
 
 
 def _extract_bg_sections(spec_md: str) -> str:
-    pattern = re.compile(r"(## ([A-I])\. [^\n]+\n)(.*?)(?=\n## [A-I]\.|\Z)", re.DOTALL)
+    # Match both `## 1. Title` and `## A. Title` to support legacy + drafted specs.
+    pattern = re.compile(
+        r"(## ([A-I]|\d+)\. [^\n]+\n)(.*?)(?=\n## (?:[A-I]|\d+)\.|\Z)",
+        re.DOTALL,
+    )
     out_parts: list[str] = []
     for match in pattern.finditer(spec_md):
-        header, letter, body = match.group(1), match.group(2), match.group(3)
-        if letter in _BG_SECTIONS:
+        header, marker, body = match.group(1), match.group(2), match.group(3)
+        is_bg = (
+            marker in _BG_SECTIONS_NUMERIC
+            or marker in _BG_SECTIONS_LETTER
+        )
+        if is_bg:
             out_parts.append(header + body.rstrip())
     return "\n\n".join(out_parts).strip()
 
