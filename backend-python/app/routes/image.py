@@ -67,6 +67,8 @@ async def route_render_text(
     rendered_image: UploadFile | None = File(None),
     suggestions: str | None = Form(None),
     mode: str = Form("ai"),
+    target_width: int | None = Form(None),
+    target_height: int | None = Form(None),
 ):
     body = None
     if not image and not rendered_image:
@@ -74,7 +76,10 @@ async def route_render_text(
             body = await request.json()
         except Exception:
             pass
-    return await render_campaign(request, image, background, rendered_image, suggestions, mode, body)
+    return await render_campaign(
+        request, image, background, rendered_image, suggestions, mode, body,
+        target_width=target_width, target_height=target_height,
+    )
 
 
 @router.post("/create-campaign")

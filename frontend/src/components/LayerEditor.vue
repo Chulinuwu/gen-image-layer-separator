@@ -660,6 +660,13 @@ const renderImage = async () => {
 
     formData.append("suggestions", JSON.stringify(suggestions));
 
+    const targetW = props.campaignData?.canvasSize?.w;
+    const targetH = props.campaignData?.canvasSize?.h;
+    if (targetW && targetH) {
+      formData.append("target_width", String(Math.round(targetW)));
+      formData.append("target_height", String(Math.round(targetH)));
+    }
+
     const response = await fetch("http://localhost:5001/api/image/render-text", {
       method: "POST",
       body: formData,

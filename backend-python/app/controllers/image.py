@@ -395,6 +395,9 @@ async def render_campaign(
     suggestions_raw: str | None,
     mode: str,
     body: dict | None,
+    *,
+    target_width: int | None = None,
+    target_height: int | None = None,
 ):
     # Parse suggestions
     if not suggestions_raw and body:
@@ -454,12 +457,45 @@ async def render_campaign(
         )
 
     if result.get("buffer"):
-        url = _save_upload(result["buffer"], "rendered")
+        final_buf = result["buffer"]
+        if target_width and target_height and target_width > 0 and target_height > 0:
+            final_buf = _enforce_target_dims(final_buf, target_width, target_height)
+        url = _save_upload(final_buf, "rendered")
         return JSONResponse({
             "success": True,
             "data": {"imageUrl": url, "text": result.get("text"), "prompt": result.get("prompt")},
         })
     return JSONResponse({"error": "Failed to render image"}, status_code=500)
+
+
+def _enforce_target_dims(buf: bytes, target_w: int, target_h: int) -> bytes:
+    """Center-crop then resize final render to match the campaign's canvas dimensions.
+    Guarantees the exported image has the same aspect ratio as the original BG generation."""
+    try:
+        img = Image.open(BytesIO(buf)).convert("RGB")
+        cur_w, cur_h = img.size
+        target_ratio = target_w / target_h
+        cur_ratio = cur_w / cur_h
+        tolerance = 0.01
+        if abs(cur_ratio - target_ratio) > tolerance:
+            if cur_ratio > target_ratio:
+                # too wide -- crop sides
+                new_w = round(cur_h * target_ratio)
+                x0 = (cur_w - new_w) // 2
+                img = img.crop((x0, 0, x0 + new_w, cur_h))
+            else:
+                # too tall -- crop top/bottom
+                new_h = round(cur_w / target_ratio)
+                y0 = (cur_h - new_h) // 2
+                img = img.crop((0, y0, cur_w, y0 + new_h))
+        if img.size != (target_w, target_h):
+            img = img.resize((target_w, target_h), Image.LANCZOS)
+        out = BytesIO()
+        img.save(out, format="PNG")
+        return out.getvalue()
+    except Exception as err:
+        print(f"[render] dims enforcement failed: {err} -- returning original buffer")
+        return buf
 
 
 async def export_svg_handler(
